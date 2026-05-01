@@ -1,0 +1,7 @@
+A_Core/build/
+A_Core/dvr
+A_Core/*.o
+A_Core/*.d
+*.o
+*.d
+build/
