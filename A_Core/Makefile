@@ -11,6 +11,7 @@ SRCS += $(SRCDIR)/common/ring_buffer.c
 SRCS += $(SRCDIR)/camera/camera_v4l2.c
 SRCS += $(SRCDIR)/display/display_lcd.c
 SRCS += $(SRCDIR)/ipc/trigger_receiver.c
+SRCS += $(SRCDIR)/ipc/rpmsg_channel.c
 SRCS += $(SRCDIR)/recorder/dvr_engine.c
 
 OBJS  = $(patsubst $(SRCDIR)/%.c, $(OBJDIR)/%.o, $(SRCS))

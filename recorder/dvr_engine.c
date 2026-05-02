@@ -1,4 +1,5 @@
 #include "dvr_engine.h"
+#include "rpmsg_channel.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@ struct dvr_engine {
     display_ctx_t   *display;
     ring_buffer_t   *ring_buf;
     trigger_ctx_t   *trigger;
+    rpmsg_ctx_t     *rpmsg;
     int              target_present;
     time_t           buffer_start_time;
     time_t           save_trigger_time;
@@ -66,6 +68,11 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
         printf("[DVR] Trigger pipe not available, manual mode only\n");
     }
 
+    eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG0");
+    if (!eng->rpmsg) {
+        printf("[DVR] RPMSG channel not available (M-core may not be running)\n");
+    }
+
     printf("[DVR] Engine created, state=IDLE\n");
     return eng;
 }
@@ -75,6 +82,7 @@ void dvr_engine_destroy(dvr_engine_t *eng)
     if (!eng) return;
     dvr_engine_stop(eng);
     if (eng->trigger) trigger_receiver_destroy(eng->trigger);
+    if (eng->rpmsg) rpmsg_channel_close(eng->rpmsg);
     if (eng->display) display_close(eng->display);
     if (eng->ring_buf) ring_buffer_destroy(eng->ring_buf);
     if (eng->camera) camera_close(eng->camera);
@@ -238,6 +246,13 @@ int dvr_engine_run(dvr_engine_t *eng)
             if (trig_fd > max_fd) max_fd = trig_fd;
         }
 
+        int rpmsg_fd = -1;
+        if (eng->rpmsg) {
+            rpmsg_fd = rpmsg_channel_get_fd(eng->rpmsg);
+            FD_SET(rpmsg_fd, &fds);
+            if (rpmsg_fd > max_fd) max_fd = rpmsg_fd;
+        }
+
         struct timeval tv = {0, 100000};
         int ret = select(max_fd + 1, &fds, NULL, NULL, &tv);
 
@@ -266,6 +281,10 @@ int dvr_engine_run(dvr_engine_t *eng)
 
         if (trig_fd >= 0 && FD_ISSET(trig_fd, &fds)) {
             trigger_receiver_process(eng->trigger, on_trigger, eng);
+        }
+
+        if (rpmsg_fd >= 0 && FD_ISSET(rpmsg_fd, &fds)) {
+            rpmsg_channel_process(eng->rpmsg, on_trigger, eng);
         }
 
         if (eng->save_pending) {
