@@ -19,6 +19,7 @@ struct dvr_engine {
     ring_buffer_t   *ring_buf;
     trigger_ctx_t   *trigger;
     int              target_present;
+    time_t           buffer_start_time;
     time_t           save_trigger_time;
     int              save_pending;
     int              save_event;
@@ -178,6 +179,7 @@ static void on_trigger(const trigger_data_t *data, void *user_data)
         if (eng->state == DVR_STATE_IDLE) {
             eng->state = DVR_STATE_BUFFERING;
             eng->target_present = 1;
+            eng->buffer_start_time = time(NULL);
             printf("[DVR] >>> STATE: IDLE -> BUFFERING (target detected)\n");
         }
         break;
@@ -268,16 +270,26 @@ int dvr_engine_run(dvr_engine_t *eng)
 
         if (eng->save_pending) {
             time_t now = time(NULL);
+
+            int available_before = (int)(eng->save_trigger_time - eng->buffer_start_time);
+            if (available_before < 0) available_before = 0;
+            if (available_before > eng->config.save_before_seconds)
+                available_before = eng->config.save_before_seconds;
+
+            int needed_after = eng->config.save_before_seconds + eng->config.save_after_seconds - available_before;
+            if (needed_after < eng->config.save_after_seconds)
+                needed_after = eng->config.save_after_seconds;
+
             time_t elapsed = now - eng->save_trigger_time;
 
-            if (elapsed >= eng->config.save_after_seconds) {
+            if (elapsed >= needed_after) {
                 eng->save_pending = 0;
 
                 const char *evt_name = eng->save_event == TRIGGER_WARNING ? "WARNING" :
                                        eng->save_event == TRIGGER_FALL ? "FALL" : "COLLISION";
 
-                time_t start = eng->save_trigger_time - eng->config.save_before_seconds;
-                time_t end   = eng->save_trigger_time + eng->config.save_after_seconds;
+                time_t start = eng->save_trigger_time - available_before;
+                time_t end   = eng->save_trigger_time + needed_after;
 
                 char filename[DVR_MAX_PATH + 64];
                 snprintf(filename, sizeof(filename),
