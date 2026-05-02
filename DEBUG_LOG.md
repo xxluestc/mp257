@@ -75,3 +75,146 @@ WARNING   → 紧急保存触发，等待15秒缓冲
 - common/ring_buffer.c    - SD卡环形缓冲区
 - recorder/dvr_engine.c   - DVR状态机 + 异步编码
 - ipc/trigger_receiver.c  - 命名管道触发接收
+- ipc/rpmsg_channel.c     - RPMSG通道(M核↔A核通信)
+
+---
+
+## 测试日期: 2026-05-03
+
+## 异构通信集成 (M核 ↔ A核)
+
+### 架构概述
+```
+M核 (Cortex-M33, FreeRTOS)          A核 (Cortex-A35, Linux)
+┌─────────────────────────┐         ┌──────────────────────────┐
+│ M_Send_Task (5s周期)     │         │ DVR Engine               │
+│   TARGET_ON / WARNING   │         │   rpmsg_channel (fd=7)   │
+│   / TARGET_OFF          │         │   trigger_receiver (pipe)│
+│         ↓               │         │         ↑                │
+│   SendQueue             │  RPMsg  │   select() 监听          │
+│         ↓               │ ════════│         ↑                │
+│   OpenAMP_Task          │  TTY    │   命令解析 → 状态机      │
+│   VIRT_UART_TransmitNB  │         │                          │
+└─────────────────────────┘         └──────────────────────────┘
+```
+
+### M核固件修改
+- 文件: app_freertos.c (M_Send_Task)
+- 原功能: echo demo (发送11-20)
+- 新功能: DVR触发命令循环发送
+  - Cycle 1: TARGET_ON (开始缓冲)
+  - Cycle 2: WARNING (紧急保存)
+  - Cycle 3: TARGET_OFF (停止缓冲)
+- 关键修复: 命令末尾添加换行符 `\n`，防止粘包
+
+### M核编译
+- 工具链: STM32CubeIDE内置 GCC 12.3.1
+  - 路径: `/home/alientek/download/makeself_dir_RBGMxz/y/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.linux64_1.1.0.202410170702/tools`
+- 编译命令:
+  ```bash
+  export PATH="$GCC_TOOLS/bin:$PATH"
+  cd STM32CubeIDE/CM33/NonSecure/CA35TDCID_m33_ns_sign
+  make main-build
+  ```
+- 编译脚本: /tmp/build_m33_2.sh
+- 输出: OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf
+- 注意: 需先移除所有.mk文件中的 `-fcyclomatic-complexity` 选项(GCC 11.3不支持)
+
+### M核固件部署
+```bash
+# 停止M核
+echo stop > /sys/class/remoteproc/remoteproc0/state
+
+# 拷贝固件
+scp OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf root@192.168.88.10:/lib/firmware/
+
+# 加载固件
+echo OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf > /sys/class/remoteproc/remoteproc0/firmware
+echo start > /sys/class/remoteproc/remoteproc0/state
+```
+
+### A核DVR修改
+- 新增文件: ipc/rpmsg_channel.c / ipc/rpmsg_channel.h
+- 功能: 打开/dev/ttyRPMSG0(或1)，非阻塞读取M核命令
+- 支持命令: TARGET_ON, TARGET_OFF, WARNING, FALL, COLLISION
+- RPMSG设备自动探测: 先尝试ttyRPMSG0，失败则尝试ttyRPMSG1
+- dvr_engine.c: 主循环select()同时监听camera fd、trigger pipe fd、rpmsg fd
+
+### 当前状态 (2026-05-03)
+
+#### 已完成
+- ✅ M核固件编译成功 (MD5: ee4c99c65e448e5789f2ad4ae424d893)
+- ✅ M核固件部署到开发板 /lib/firmware/
+- ✅ M核启动成功，remoteproc状态: running
+- ✅ RPMSG通道创建: /dev/ttyRPMSG0
+- ✅ DVR启动成功，RPMSG通道打开 (fd=7)
+- ✅ DVR主循环运行，摄像头采集正常，LCD显示正常
+- ✅ 命名管道触发正常
+
+#### 待解决: M核RPMSG无数据流通
+- 现象: M核启动后，/dev/ttyRPMSG0 无任何数据输出
+- 测试: `timeout 10 cat /dev/ttyRPMSG0` 无输出
+- 测试: `echo 'TEST' > /dev/ttyRPMSG0` 后读取也无回应
+- 原始固件(OpenAMP_TTY_echo_CM33_NonSecure.elf)同样无数据
+- 可能原因:
+  1. M核固件签名问题(目录名含_sign，可能需要签名后的.bin文件)
+  2. M核任务初始化失败(需查看M核串口调试输出)
+  3. OpenAMP端点未就绪
+  4. 内存区域配置不匹配
+- 下一步: 需通过M核调试串口查看M核启动日志，确认任务是否正常运行
+
+### 调试命令速查
+```bash
+# 查看M核状态
+cat /sys/class/remoteproc/remoteproc0/state
+
+# 查看RPMSG设备
+ls -la /dev/ttyRPMSG*
+
+# 查看内核日志
+dmesg | grep -i 'rpmsg\|remoteproc'
+
+# 启动DVR(含RPMSG)
+killall dvr 2>/dev/null
+rm -f /run/media/mmcblk0p1/dvr_buffer.bin
+nohup /usr/bin/dvr -W 640 -H 480 -f 30 -b 30 -s /run/media/mmcblk0p1 -d /dev/video-camera0 -D 1 > /tmp/dvr.log 2>&1 &
+
+# 查看DVR日志
+cat /tmp/dvr.log
+
+# 手动触发测试(命名管道)
+echo "TARGET_ON" > /tmp/dvr_trigger_pipe
+echo "WARNING" > /tmp/dvr_trigger_pipe
+echo "TARGET_OFF" > /tmp/dvr_trigger_pipe
+```
+
+### 项目文件结构
+```
+dvr_project/
+├── A_Core/
+│   ├── Makefile
+│   ├── dvr_main.c
+│   └── dvr              # 编译产物
+├── camera/
+│   ├── camera_v4l2.c
+│   └── camera_v4l2.h
+├── display/
+│   ├── display_lcd.c
+│   └── display_lcd.h
+├── common/
+│   ├── ring_buffer.c
+│   └── ring_buffer.h
+├── recorder/
+│   ├── dvr_engine.c
+│   └── dvr_engine.h
+├── ipc/
+│   ├── trigger_receiver.c
+│   ├── trigger_receiver.h
+│   ├── rpmsg_channel.c
+│   └── rpmsg_channel.h
+├── M_Core/                    # M核固件备份
+│   └── FREERTOS/App/
+│       └── app_freertos.c     # 原始echo demo备份
+├── README.md
+└── DEBUG_LOG.md
+```

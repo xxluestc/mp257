@@ -70,6 +70,9 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
 
     eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG0");
     if (!eng->rpmsg) {
+        eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG1");
+    }
+    if (!eng->rpmsg) {
         printf("[DVR] RPMSG channel not available (M-core may not be running)\n");
     }
 
