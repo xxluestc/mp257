@@ -224,18 +224,47 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         return 0;
     }
 
+    uint8_t **frame_data = malloc((size_t)frame_count * sizeof(uint8_t *));
+    if (!frame_data) { free(offsets); free(timestamps); return -1; }
+    int actual_count = 0;
+
+    int fd = open(filepath, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "[DVR] Cannot open buffer file: %s\n", strerror(errno));
+        free(offsets); free(timestamps); free(frame_data);
+        return -1;
+    }
+
+    for (int i = 0; i < frame_count; i++) {
+        frame_data[i] = malloc((size_t)frame_size);
+        if (!frame_data[i]) continue;
+        ssize_t n = pread(fd, frame_data[i], (size_t)frame_size, offsets[i]);
+        if (n == frame_size) actual_count++;
+        else { free(frame_data[i]); frame_data[i] = NULL; }
+    }
+    close(fd);
+    free(offsets);
+    free(timestamps);
+
+    if (actual_count == 0) {
+        printf("[DVR] No valid frames read from buffer\n");
+        for (int i = 0; i < frame_count; i++) free(frame_data[i]);
+        free(frame_data);
+        return 0;
+    }
+
+    printf("[DVR] Pre-loaded %d/%d frames into memory (%.1f MB)\n",
+           actual_count, frame_count, (double)(actual_count * frame_size) / (1024*1024));
+
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "[DVR] fork failed: %s\n", strerror(errno));
-        free(offsets);
-        free(timestamps);
+        for (int i = 0; i < frame_count; i++) free(frame_data[i]);
+        free(frame_data);
         return -1;
     }
 
     if (pid == 0) {
-        int fd = open(filepath, O_RDONLY);
-        if (fd < 0) _exit(1);
-
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
                  "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -r %d -i pipe:0 "
@@ -243,23 +272,20 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
                  eng->config.width, eng->config.height, eng->config.fps, filename);
 
         FILE *ffmpeg = popen(cmd, "w");
-        if (!ffmpeg) { close(fd); _exit(1); }
-
-        uint8_t *buf = malloc((size_t)frame_size);
-        if (!buf) { close(fd); pclose(ffmpeg); _exit(1); }
+        if (!ffmpeg) { _exit(1); }
 
         int sent = 0;
         for (int i = 0; i < frame_count; i++) {
-            ssize_t n = pread(fd, buf, (size_t)frame_size, offsets[i]);
-            if (n <= 0) continue;
-            size_t written = fwrite(buf, 1, (size_t)n, ffmpeg);
-            if (written != (size_t)n) break;
+            if (!frame_data[i]) continue;
+            size_t written = fwrite(frame_data[i], 1, (size_t)frame_size, ffmpeg);
+            if (written != (size_t)frame_size) break;
             sent++;
         }
 
-        free(buf);
-        close(fd);
         int ret = pclose(ffmpeg);
+
+        for (int i = 0; i < frame_count; i++) free(frame_data[i]);
+        free(frame_data);
 
         if (ret != 0) {
             fprintf(stderr, "[DVR] ffmpeg failed with code %d\n", ret);
@@ -269,12 +295,13 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         _exit(0);
     }
 
+    for (int i = 0; i < frame_count; i++) free(frame_data[i]);
+    free(frame_data);
+
     clip_manager_add(&eng->clips, filename, ctype);
 
-    free(offsets);
-    free(timestamps);
     printf("[DVR] Async encoding started (pid=%d): %s, %d frames, type=%s%s\n",
-           pid, filename, frame_count, clip_type_name(ctype),
+           pid, filename, actual_count, clip_type_name(ctype),
            clip_is_protected(ctype) ? " [PROTECTED]" : "");
     return 0;
 }
@@ -464,11 +491,14 @@ int dvr_engine_run(dvr_engine_t *eng)
                 time_t start = eng->save_trigger_time - available_before;
                 time_t end   = eng->save_trigger_time + needed_after;
 
+                struct tm *bt = localtime(&eng->save_trigger_time);
                 char filename[DVR_MAX_PATH + 64];
                 snprintf(filename, sizeof(filename),
-                         "%s/emergency_%ld_%s.mp4",
+                         "%s/emergency_%04d%02d%02d_%02d%02d%02d_%s.mp4",
                          eng->config.sd_card_path,
-                         (long)eng->save_trigger_time, evt_name);
+                         bt->tm_year + 1900, bt->tm_mon + 1, bt->tm_mday,
+                         bt->tm_hour, bt->tm_min, bt->tm_sec,
+                         evt_name);
 
                 printf("[DVR] Saving clip: [%ld, %ld] -> %s (type=%s, protected=%d)\n",
                        (long)start, (long)end, filename, evt_name, clip_is_protected(ctype));
