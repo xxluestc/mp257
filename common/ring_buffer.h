@@ -36,6 +36,7 @@ typedef struct {
     pthread_cond_t  write_cond;
     pthread_t       write_thread;
     volatile int    write_thread_running;
+    volatile int    paused;
 } ring_buffer_t;
 
 ring_buffer_t *ring_buffer_create(int capacity_seconds, int fps,
@@ -52,5 +53,7 @@ int            ring_buffer_stream_range(ring_buffer_t *rb, time_t start,
 int            ring_buffer_count(const ring_buffer_t *rb);
 void           ring_buffer_clear(ring_buffer_t *rb);
 void           ring_buffer_flush(ring_buffer_t *rb);
+void           ring_buffer_pause_writing(ring_buffer_t *rb);
+void           ring_buffer_resume_writing(ring_buffer_t *rb);
 
 #endif

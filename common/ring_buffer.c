@@ -104,7 +104,7 @@ static void *write_thread_func(void *arg)
     while (rb->write_thread_running) {
         pthread_mutex_lock(&rb->lock);
 
-        while (rb->pending_count == 0 && rb->write_thread_running) {
+        while ((rb->pending_count == 0 || rb->paused) && rb->write_thread_running) {
             pthread_cond_wait(&rb->write_cond, &rb->lock);
         }
 
@@ -261,5 +261,29 @@ void ring_buffer_set_frame_size(ring_buffer_t *rb, int frame_size)
         rb->pending[i].data = malloc((size_t)frame_size);
     }
     printf("[RINGBUF] Frame size updated to %d bytes\n", frame_size);
+    pthread_mutex_unlock(&rb->lock);
+}
+
+void ring_buffer_pause_writing(ring_buffer_t *rb)
+{
+    if (!rb) return;
+    pthread_mutex_lock(&rb->lock);
+    while (rb->pending_count > 0) {
+        pthread_cond_signal(&rb->write_cond);
+        pthread_mutex_unlock(&rb->lock);
+        usleep(2000);
+        pthread_mutex_lock(&rb->lock);
+    }
+    rb->paused = 1;
+    fsync(rb->fd);
+    pthread_mutex_unlock(&rb->lock);
+}
+
+void ring_buffer_resume_writing(ring_buffer_t *rb)
+{
+    if (!rb) return;
+    pthread_mutex_lock(&rb->lock);
+    rb->paused = 0;
+    pthread_cond_signal(&rb->write_cond);
     pthread_mutex_unlock(&rb->lock);
 }

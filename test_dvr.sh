@@ -81,9 +81,10 @@ echo WARNING > "$PIPE" 2>/dev/null     # 发送预警信号
 BUF_BEFORE=10
 AFTER_NEEDED=$(( 30 - BUF_BEFORE ))    # 补足后段: 30-10=20秒
 if [ $AFTER_NEEDED -lt 15 ]; then AFTER_NEEDED=15; fi  # 至少后录15秒
-ENCODE_EXTRA=15                        # ffmpeg编码额外时间
-TOTAL_WAIT=$(( AFTER_NEEDED + ENCODE_EXTRA ))
-echo "      Buffered ${BUF_BEFORE}s before trigger, waiting ${TOTAL_WAIT}s for save..."
+ENCODE_TIME=$(( (AFTER_NEEDED * 3) / 2 ))  # 编码约需1.5倍时间(SD卡~15MB/s)
+if [ $ENCODE_TIME -lt 30 ]; then ENCODE_TIME=30; fi
+TOTAL_WAIT=$(( AFTER_NEEDED + ENCODE_TIME ))
+echo "      Buffered ${BUF_BEFORE}s before trigger, waiting ${TOTAL_WAIT}s for save+encode..."
 sleep $TOTAL_WAIT
 
 # ---- [5/6] 输出测试结果 ----
