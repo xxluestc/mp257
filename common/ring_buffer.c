@@ -237,6 +237,20 @@ void ring_buffer_clear(ring_buffer_t *rb)
     pthread_mutex_unlock(&rb->lock);
 }
 
+void ring_buffer_flush(ring_buffer_t *rb)
+{
+    if (!rb) return;
+    pthread_mutex_lock(&rb->lock);
+    while (rb->pending_count > 0) {
+        pthread_cond_signal(&rb->write_cond);
+        pthread_mutex_unlock(&rb->lock);
+        usleep(5000);
+        pthread_mutex_lock(&rb->lock);
+    }
+    fsync(rb->fd);
+    pthread_mutex_unlock(&rb->lock);
+}
+
 void ring_buffer_set_frame_size(ring_buffer_t *rb, int frame_size)
 {
     if (!rb || frame_size <= 0) return;

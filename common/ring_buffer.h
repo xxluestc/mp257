@@ -16,7 +16,7 @@ typedef struct {
     time_t   timestamp;
 } pending_frame_t;
 
-#define PENDING_QUEUE_SIZE 4
+#define PENDING_QUEUE_SIZE 16
 
 typedef struct {
     frame_index_t *index;
@@ -51,5 +51,6 @@ int            ring_buffer_stream_range(ring_buffer_t *rb, time_t start,
                                         void *user);
 int            ring_buffer_count(const ring_buffer_t *rb);
 void           ring_buffer_clear(ring_buffer_t *rb);
+void           ring_buffer_flush(ring_buffer_t *rb);
 
 #endif

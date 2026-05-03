@@ -198,6 +198,8 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         return -1;
     }
 
+    ring_buffer_flush(rb);
+
     int frame_count = 0;
     pthread_mutex_lock(&rb->lock);
     for (int i = 0; i < rb->count; i++) {
