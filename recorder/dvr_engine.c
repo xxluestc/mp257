@@ -134,7 +134,7 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
                                        camera_get_width(eng->camera),
                                        camera_get_height(eng->camera),
                                        config->sd_card_path,
-                                       config->width * config->height * 3);
+                                       config->width * config->height * 2);
     if (!eng->ring_buf) {
         fprintf(stderr, "[DVR] Ring buffer init failed\n");
         camera_close(eng->camera);
@@ -233,7 +233,7 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
 
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
-                 "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -r %d -i pipe:0 "
+                 "ffmpeg -y -f rawvideo -pix_fmt rgb565 -s %dx%d -r %d -i pipe:0 "
                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p %s 2>/dev/null",
                  eng->config.width, eng->config.height, eng->config.fps, filename);
 
@@ -334,11 +334,9 @@ int dvr_engine_run(dvr_engine_t *eng)
     if (!eng) return -1;
 
     int frame_size = camera_get_frame_size(eng->camera);
-    if (frame_size <= 0) frame_size = eng->config.width * eng->config.height * 3;
+    if (frame_size <= 0) frame_size = eng->config.width * eng->config.height * 2;
     uint8_t *frame_buf = malloc((size_t)frame_size);
-    int rgb24_size = eng->config.width * eng->config.height * 3;
-    uint8_t *rgb24_buf = malloc((size_t)rgb24_size);
-    if (!frame_buf || !rgb24_buf) { free(frame_buf); free(rgb24_buf); return -1; }
+    if (!frame_buf) { return -1; }
 
     printf("[DVR] Main loop started\n");
     printf("[DVR] Rules:\n");
@@ -391,8 +389,7 @@ int dvr_engine_run(dvr_engine_t *eng)
 
                 if (eng->state == DVR_STATE_BUFFERING) {
                     if (eng->sd_card_ok) {
-                        camera_convert_to_rgb24(eng->camera, frame_buf, rgb24_buf);
-                        ring_buffer_push(eng->ring_buf, rgb24_buf, rgb24_size, ts);
+                        ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
                     }
                 }
             }
