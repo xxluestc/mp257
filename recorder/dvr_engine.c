@@ -1,5 +1,6 @@
 #include "dvr_engine.h"
 #include "rpmsg_channel.h"
+#include "camera_v4l2.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,7 +134,7 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
                                        camera_get_width(eng->camera),
                                        camera_get_height(eng->camera),
                                        config->sd_card_path,
-                                       camera_get_frame_size(eng->camera));
+                                       config->width * config->height * 3);
     if (!eng->ring_buf) {
         fprintf(stderr, "[DVR] Ring buffer init failed\n");
         camera_close(eng->camera);
@@ -335,7 +336,9 @@ int dvr_engine_run(dvr_engine_t *eng)
     int frame_size = camera_get_frame_size(eng->camera);
     if (frame_size <= 0) frame_size = eng->config.width * eng->config.height * 3;
     uint8_t *frame_buf = malloc((size_t)frame_size);
-    if (!frame_buf) return -1;
+    int rgb24_size = eng->config.width * eng->config.height * 3;
+    uint8_t *rgb24_buf = malloc((size_t)rgb24_size);
+    if (!frame_buf || !rgb24_buf) { free(frame_buf); free(rgb24_buf); return -1; }
 
     printf("[DVR] Main loop started\n");
     printf("[DVR] Rules:\n");
@@ -388,7 +391,8 @@ int dvr_engine_run(dvr_engine_t *eng)
 
                 if (eng->state == DVR_STATE_BUFFERING) {
                     if (eng->sd_card_ok) {
-                        ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
+                        camera_convert_to_rgb24(eng->camera, frame_buf, rgb24_buf);
+                        ring_buffer_push(eng->ring_buf, rgb24_buf, rgb24_size, ts);
                     }
                 }
             }

@@ -159,6 +159,75 @@ if (!eng->rpmsg && (now - last_rpmsg_retry >= 5)) {
 - **推荐操作**: `pkill dvr; sync` 后再拔卡
 - 重新插入后自动恢复，RPMSG每5s自动重连
 
+## 视频灰色/异常修复 (2026-05-03) ✅
+
+### 问题现象
+SD卡上保存的所有mp4视频播放时显示**灰色波动画面**，完全无法辨认内容。
+
+### 根本原因
+**像素格式不匹配**：摄像头输出RGB565(2字节/像素)，但ffmpeg编码时按RGB24(3字节/像素)解析。
+
+```
+数据流（修复前）:
+  摄像头(RGB565, 640×480×2=614400字节)
+    → camera_grab_frame() → frame_buf[原始RGB565]
+    → ring_buffer_push()  → 直接存入缓冲区（未转换！）
+    → ffmpeg -pix_fmt rgb24 → 把614400字节当921600解析
+    → 像素完全错位 → 灰色波动 ❌
+```
+
+### 修复方案
+在存入环形缓冲区前，将RGB565转换为RGB24；LCD显示仍直接用RGB565（保持高性能）：
+
+```
+数据流（修复后）:
+  摄像头(RGB565, 614400字节/帧)
+    ├──→ display_show_frame()  → LCD直接用RGB565 memcpy (~1ms) ✅
+    └──→ camera_convert_to_rgb24() → 转为RGB24(921600字节/帧)
+         → ring_buffer_push()     → 存入缓冲区
+         → ffmpeg -pix_fmt rgb24  → 正确解析 → 正常MP4视频 ✅
+```
+
+### 代码修改
+**文件: recorder/dvr_engine.c**
+```c
+// 1. 主循环中新增RGB24缓冲区
+int rgb24_size = eng->config.width * eng->config.height * 3;  // 921600
+uint8_t *rgb24_buf = malloc((size_t)rgb24_size);
+
+// 2. 存入缓冲区前转换格式
+if (eng->state == DVR_STATE_BUFFERING) {
+    if (eng->sd_card_ok) {
+        camera_convert_to_rgb24(eng->camera, frame_buf, rgb24_buf);
+        ring_buffer_push(eng->ring_buf, rgb24_buf, rgb24_size, ts);
+    }
+}
+
+// 3. 环形缓冲区使用RGB24帧大小（而非camera原生frame_size）
+eng->ring_buf = ring_buffer_create(...,
+    config->width * config->height * 3);  // RGB24: 921600
+```
+
+**文件: camera/camera_v4l2.h**
+```c
+// 新增声明
+void camera_convert_to_rgb24(const camera_ctx_t *ctx, const uint8_t *src, uint8_t *dst);
+```
+
+### 验证结果
+| 项目 | 修复前 | 修复后 |
+|------|--------|--------|
+| 缓冲区帧大小 | 614400字节(RGB565) | **921600字节(RGB24)** |
+| ffmpeg输入 | 像素错位 | **正确匹配** |
+| 文件格式 | 无法播放 | **ISO MP4 Base Media** ✅ |
+| 视频时长 | N/A | **~20秒(605帧)** ✅ |
+| 视频内容 | 灰色波动 | **正常彩色画面** ✅ |
+
+### 关于 dvr_buffer.bin
+- 这是环形缓冲区的磁盘文件，用于暂存30秒原始帧数据
+- 最大791MB（按需增长），用于提取"信号前15秒"历史画面
+- **不能在DVR运行时删除**，停止后可删（下次启动自动重建）
+
 ## 测试日期: 2026-05-03
 
 ## 异构通信集成 (M核 ↔ A核)

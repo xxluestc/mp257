@@ -16,5 +16,6 @@ int  camera_get_height(const camera_ctx_t *ctx);
 int  camera_get_pixelformat(const camera_ctx_t *ctx);
 int  camera_get_frame_size(const camera_ctx_t *ctx);
 int  camera_get_bpp(const camera_ctx_t *ctx);
+void camera_convert_to_rgb24(const camera_ctx_t *ctx, const uint8_t *src, uint8_t *dst);
 
 #endif
