@@ -239,7 +239,7 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
                  "ffmpeg -y -f rawvideo -pix_fmt rgb565 -s %dx%d -r %d -i pipe:0 "
-                 "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p %s 2>/dev/null",
+                 "-vsync cfr -c:v mpeg4 -q:v 5 -pix_fmt yuv420p %s 2>/dev/null",
                  eng->config.width, eng->config.height, fps_for_ffmpeg, filename);
 
         FILE *ffmpeg = popen(cmd, "w");
@@ -248,9 +248,22 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         uint8_t *buf = malloc((size_t)frame_size);
         if (!buf) { close(fd); pclose(ffmpeg); free(offsets); _exit(1); }
 
+        int off_cmp(const void *a, const void *b) {
+            off_t diff = *(const off_t *)a - *(const off_t *)b;
+            return (diff > 0) - (diff < 0);
+        }
+        qsort(offsets, (size_t)frame_count, sizeof(off_t), off_cmp);
+
         int sent = 0;
+        off_t last_off = -1;
         for (int i = 0; i < frame_count; i++) {
-            ssize_t n = pread(fd, buf, (size_t)frame_size, offsets[i]);
+            ssize_t n;
+            if (offsets[i] == last_off + frame_size) {
+                n = read(fd, buf, (size_t)frame_size);
+            } else {
+                n = pread(fd, buf, (size_t)frame_size, offsets[i]);
+            }
+            last_off = offsets[i];
             if (n <= 0) continue;
             size_t written = fwrite(buf, 1, (size_t)n, ffmpeg);
             if (written != (size_t)n) break;
