@@ -231,11 +231,16 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         int fd = open(filepath, O_RDONLY);
         if (fd < 0) { free(offsets); _exit(1); }
 
+        double duration_sec = difftime(end_time, start_time);
+        int fps_for_ffmpeg = (duration_sec > 0) ? (int)((double)frame_count / duration_sec + 0.5) : eng->config.fps;
+        if (fps_for_ffmpeg < 1) fps_for_ffmpeg = 1;
+        if (fps_for_ffmpeg > 60) fps_for_ffmpeg = 60;
+
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
                  "ffmpeg -y -f rawvideo -pix_fmt rgb565 -s %dx%d -r %d -i pipe:0 "
                  "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p %s 2>/dev/null",
-                 eng->config.width, eng->config.height, eng->config.fps, filename);
+                 eng->config.width, eng->config.height, fps_for_ffmpeg, filename);
 
         FILE *ffmpeg = popen(cmd, "w");
         if (!ffmpeg) { close(fd); free(offsets); _exit(1); }
