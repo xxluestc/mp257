@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <dirent.h>
 
 struct dvr_engine {
     dvr_config_t     config;
@@ -20,14 +21,95 @@ struct dvr_engine {
     ring_buffer_t   *ring_buf;
     trigger_ctx_t   *trigger;
     rpmsg_ctx_t     *rpmsg;
+    clip_manager_t   clips;
     int              target_present;
     time_t           buffer_start_time;
-    time_t           save_trigger_time;
+    time_t           last_cycle_time;
     int              save_pending;
     int              save_event;
+    time_t           save_trigger_time;
+    volatile int     sd_card_ok;
 };
 
 static void on_trigger(const trigger_data_t *data, void *user_data);
+
+static int check_sd_card(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return access(path, W_OK) == 0;
+}
+
+clip_manager_t *clip_manager_create(const char *sd_path)
+{
+    clip_manager_t *cm = calloc(1, sizeof(clip_manager_t));
+    if (!cm) return NULL;
+    cm->sd_path = sd_path;
+    cm->count = 0;
+    cm->next_index = 0;
+    memset(cm->clips, 0, sizeof(cm->clips));
+    return cm;
+}
+
+void clip_manager_destroy(clip_manager_t *cm)
+{
+    if (!cm) return;
+    free(cm);
+}
+
+const char *clip_type_name(clip_type_t t)
+{
+    switch (t) {
+    case CLIP_TYPE_WARNING:  return "WARNING";
+    case CLIP_TYPE_FALL:     return "FALL";
+    case CLIP_TYPE_COLLISION: return "COLLISION";
+    default: return "UNKNOWN";
+    }
+}
+
+int clip_is_protected(clip_type_t t)
+{
+    return t == CLIP_TYPE_FALL || t == CLIP_TYPE_COLLISION;
+}
+
+int clip_manager_add(clip_manager_t *cm, const char *filename, clip_type_t type)
+{
+    if (!cm) return -1;
+
+    if (!clip_is_protected(type)) {
+        if (cm->clips[cm->next_index].filename[0]) {
+            unlink(cm->clips[cm->next_index].filename);
+            printf("[CLIP] Overwritten old: %s\n", cm->clips[cm->next_index].filename);
+        }
+        strncpy(cm->clips[cm->next_index].filename, filename, DVR_MAX_PATH - 1);
+        cm->clips[cm->next_index].filename[DVR_MAX_PATH - 1] = '\0';
+        cm->clips[cm->next_index].type       = type;
+        cm->clips[cm->next_index].save_time  = time(NULL);
+        cm->clips[cm->next_index].protected_ = 0;
+        printf("[CLIP] Saved normal [%d/%d]: %s (%s)\n",
+               cm->next_index + 1, DVR_MAX_NORMAL_CLIPS, filename, clip_type_name(type));
+        cm->next_index = (cm->next_index + 1) % DVR_MAX_NORMAL_CLIPS;
+        if (cm->count < DVR_MAX_NORMAL_CLIPS) cm->count++;
+    } else {
+        printf("[CLIP] Saved PROTECTED: %s (%s) - will NOT be auto-overwritten\n",
+               filename, clip_type_name(type));
+    }
+    return 0;
+}
+
+void clip_manager_list(clip_manager_t *cm)
+{
+    if (!cm) return;
+    printf("[CLIP] === Clip list ===\n");
+    for (int i = 0; i < DVR_MAX_NORMAL_CLIPS; i++) {
+        if (cm->clips[i].filename[0]) {
+            printf("  [%d] %s (%s)%s\n", i,
+                   cm->clips[i].filename,
+                   clip_type_name(cm->clips[i].type),
+                   cm->clips[i].protected_ ? " [PROTECTED]" : "");
+        }
+    }
+}
 
 dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
 {
@@ -35,8 +117,9 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
     if (!eng) return NULL;
 
     memcpy(&eng->config, config, sizeof(dvr_config_t));
-    eng->state   = DVR_STATE_IDLE;
-    eng->running = 1;
+    eng->state      = DVR_STATE_IDLE;
+    eng->running    = 1;
+    eng->sd_card_ok = 1;
 
     eng->camera = camera_open(config->camera_device, config->width,
                               config->height, config->fps);
@@ -82,7 +165,9 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
         printf("[DVR] RPMSG channel not available (M-core may not be running)\n");
     }
 
-    printf("[DVR] Engine created, state=IDLE\n");
+    eng->clips = *(clip_manager_create(config->sd_card_path));
+
+    printf("[DVR] Engine created, state=IDLE, max_normal_clips=%d\n", DVR_MAX_NORMAL_CLIPS);
     return eng;
 }
 
@@ -95,11 +180,12 @@ void dvr_engine_destroy(dvr_engine_t *eng)
     if (eng->display) display_close(eng->display);
     if (eng->ring_buf) ring_buffer_destroy(eng->ring_buf);
     if (eng->camera) camera_close(eng->camera);
+    clip_manager_destroy(&eng->clips);
     free(eng);
 }
 
 static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_time,
-                            const char *filename)
+                            const char *filename, clip_type_t ctype)
 {
     ring_buffer_t *rb = eng->ring_buf;
     int max_frames = rb->capacity;
@@ -180,9 +266,13 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
         _exit(0);
     }
 
+    clip_manager_add(&eng->clips, filename, ctype);
+
     free(offsets);
     free(timestamps);
-    printf("[DVR] Async encoding started (pid=%d): %s, %d frames\n", pid, filename, frame_count);
+    printf("[DVR] Async encoding started (pid=%d): %s, %d frames, type=%s%s\n",
+           pid, filename, frame_count, clip_type_name(ctype),
+           clip_is_protected(ctype) ? " [PROTECTED]" : "");
     return 0;
 }
 
@@ -197,7 +287,8 @@ static void on_trigger(const trigger_data_t *data, void *user_data)
             eng->state = DVR_STATE_BUFFERING;
             eng->target_present = 1;
             eng->buffer_start_time = time(NULL);
-            printf("[DVR] >>> STATE: IDLE -> BUFFERING (target detected)\n");
+            eng->last_cycle_time  = time(NULL);
+            printf("[DVR] >>> STATE: IDLE -> BUFFERING (target detected, circular recording)\n");
         }
         break;
 
@@ -206,7 +297,7 @@ static void on_trigger(const trigger_data_t *data, void *user_data)
             eng->state = DVR_STATE_IDLE;
             eng->target_present = 0;
             ring_buffer_clear(eng->ring_buf);
-            printf("[DVR] >>> STATE: BUFFERING -> IDLE (target lost)\n");
+            printf("[DVR] >>> STATE: BUFFERING -> IDLE (target lost, stopped)\n");
         } else if (eng->state == DVR_STATE_BUFFERING && eng->save_pending) {
             eng->target_present = 0;
             printf("[DVR] Target off but save pending, keeping buffer\n");
@@ -217,18 +308,21 @@ static void on_trigger(const trigger_data_t *data, void *user_data)
     case TRIGGER_FALL:
     case TRIGGER_COLLISION:
         if (eng->state == DVR_STATE_BUFFERING || eng->state == DVR_STATE_IDLE) {
-            const char *evt_name = data->event == TRIGGER_WARNING ? "WARNING" :
-                                   data->event == TRIGGER_FALL ? "FALL" : "COLLISION";
-            printf("[DVR] >>> EMERGENCY triggered: %s, will save after %ds buffer\n",
-                   evt_name, eng->config.save_after_seconds);
-
             eng->save_pending      = 1;
             eng->save_event        = data->event;
             eng->save_trigger_time = data->timestamp;
 
+            clip_type_t ctype = (clip_type_t)(eng->save_event - TRIGGER_WARNING);
+            const char *evt_name = clip_type_name(ctype);
+
             if (eng->state == DVR_STATE_IDLE) {
                 eng->state = DVR_STATE_BUFFERING;
+                eng->buffer_start_time = data->timestamp;
+                eng->last_cycle_time  = data->timestamp;
             }
+
+            printf("[DVR] >>> EMERGENCY triggered: %s (protected=%d), buffering...\n",
+                   evt_name, clip_is_protected(ctype));
         }
         break;
     }
@@ -244,6 +338,12 @@ int dvr_engine_run(dvr_engine_t *eng)
     if (!frame_buf) return -1;
 
     printf("[DVR] Main loop started\n");
+    printf("[DVR] Rules:\n");
+    printf("[DVR]   - TARGET_ON: start circular 30s buffer (no SD save)\n");
+    printf("[DVR]   - Every 30s: cycle buffer if target present + no emergency\n");
+    printf("[DVR]   - WARNING: save 30s clip (before+after 15s), max %d clips (overwrite oldest)\n", DVR_MAX_NORMAL_CLIPS);
+    printf("[DVR]   - FALL/COLLISION: save 30s clip (PROTECTED, never overwritten)\n");
+    printf("[DVR]   - TARGET_OFF: stop recording\n");
 
     while (eng->running) {
         fd_set fds;
@@ -287,7 +387,9 @@ int dvr_engine_run(dvr_engine_t *eng)
                 }
 
                 if (eng->state == DVR_STATE_BUFFERING) {
-                    ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
+                    if (eng->sd_card_ok) {
+                        ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
+                    }
                 }
             }
         }
@@ -298,6 +400,23 @@ int dvr_engine_run(dvr_engine_t *eng)
 
         if (rpmsg_fd >= 0 && FD_ISSET(rpmsg_fd, &fds)) {
             rpmsg_channel_process(eng->rpmsg, on_trigger, eng);
+        }
+
+        eng->sd_card_ok = check_sd_card(eng->config.sd_card_path);
+        if (!eng->sd_card_ok && eng->state == DVR_STATE_BUFFERING) {
+            printf("[DVR] WARNING: SD card removed! Buffering continues but cannot save.\n");
+        }
+
+        if (eng->state == DVR_STATE_BUFFERING && !eng->save_pending) {
+            time_t now = time(NULL);
+            time_t elapsed = now - eng->last_cycle_time;
+
+            if (elapsed >= eng->config.buffer_seconds) {
+                printf("[DVR] Circular 30s cycle complete, rotating buffer (target still present)\n");
+                ring_buffer_clear(eng->ring_buf);
+                eng->buffer_start_time = now;
+                eng->last_cycle_time  = now;
+            }
         }
 
         if (eng->save_pending) {
@@ -312,13 +431,13 @@ int dvr_engine_run(dvr_engine_t *eng)
             if (needed_after < eng->config.save_after_seconds)
                 needed_after = eng->config.save_after_seconds;
 
-            time_t elapsed = now - eng->save_trigger_time;
+            time_t elapsed_save = now - eng->save_trigger_time;
 
-            if (elapsed >= needed_after) {
+            if (elapsed_save >= needed_after) {
                 eng->save_pending = 0;
 
-                const char *evt_name = eng->save_event == TRIGGER_WARNING ? "WARNING" :
-                                       eng->save_event == TRIGGER_FALL ? "FALL" : "COLLISION";
+                clip_type_t ctype = (clip_type_t)(eng->save_event - TRIGGER_WARNING);
+                const char *evt_name = clip_type_name(ctype);
 
                 time_t start = eng->save_trigger_time - available_before;
                 time_t end   = eng->save_trigger_time + needed_after;
@@ -329,16 +448,27 @@ int dvr_engine_run(dvr_engine_t *eng)
                          eng->config.sd_card_path,
                          (long)eng->save_trigger_time, evt_name);
 
-                printf("[DVR] Saving clip: [%ld, %ld] -> %s\n",
-                       (long)start, (long)end, filename);
+                printf("[DVR] Saving clip: [%ld, %ld] -> %s (type=%s, protected=%d)\n",
+                       (long)start, (long)end, filename, evt_name, clip_is_protected(ctype));
 
-                save_clip_to_mp4(eng, start, end, filename);
+                if (eng->sd_card_ok) {
+                    save_clip_to_mp4(eng, start, end, filename, ctype);
+                } else {
+                    printf("[DVR] SD card not available, clip SKIPPED: %s\n", filename);
+                }
 
                 if (!eng->target_present) {
                     eng->state = DVR_STATE_IDLE;
                     ring_buffer_clear(eng->ring_buf);
-                    printf("[DVR] >>> STATE: -> IDLE (no target)\n");
+                    printf("[DVR] >>> STATE: -> IDLE (no target, save done)\n");
+                } else {
+                    ring_buffer_clear(eng->ring_buf);
+                    eng->buffer_start_time = time(NULL);
+                    eng->last_cycle_time  = time(NULL);
+                    printf("[DVR] >>> Save done, target still present -> continuing BUFFERING\n");
                 }
+
+                clip_manager_list(&eng->clips);
             }
         }
     }

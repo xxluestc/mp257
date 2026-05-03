@@ -11,6 +11,7 @@
 #define DVR_BUFFER_SECONDS  30
 #define DVR_SAVE_BEFORE_SEC 15
 #define DVR_SAVE_AFTER_SEC  15
+#define DVR_MAX_NORMAL_CLIPS 3
 
 typedef enum {
     DVR_STATE_IDLE       = 0,
@@ -32,6 +33,12 @@ typedef enum {
     DISPLAY_MODE_QT   = 2,
 } display_mode_t;
 
+typedef enum {
+    CLIP_TYPE_WARNING  = 0,
+    CLIP_TYPE_FALL     = 1,
+    CLIP_TYPE_COLLISION = 2,
+} clip_type_t;
+
 typedef struct {
     uint8_t *data;
     int      size;
@@ -47,6 +54,20 @@ typedef struct {
     int             object_id;
     char            extra[64];
 } trigger_data_t;
+
+typedef struct {
+    char         filename[DVR_MAX_PATH];
+    clip_type_t  type;
+    time_t       save_time;
+    int          protected_;
+} clip_info_t;
+
+typedef struct {
+    clip_info_t clips[DVR_MAX_NORMAL_CLIPS];
+    int         count;
+    int         next_index;
+    const char *sd_path;
+} clip_manager_t;
 
 typedef struct {
     int  buffer_seconds;
