@@ -432,8 +432,301 @@ ffprobe emergency_*.mp4 2>&1 | grep -E 'Duration|Video'
 │  │  实时显示    │            │  └─ emergency_*.mp4     │  │  │
 │  └──────────────┘            └────────────────────────┘  │  │
 │                                                             │
-│  ┌──────────────┐                                        │  │
-│  │  SD卡       │◄─────── 录制的MP4视频文件               │  │
 │  └──────────────┘                                        │  │
 └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## LCD卡死终极修复 (2026-05-03 晚)
+
+### 问题现象
+- LCD显示摄像头画面**完全卡死**，看起来像静态图片
+- 进程状态始终为 **D (Disk sleep)** — 不可中断的磁盘I/O等待
+- 系统负载: `load average: 1.97, 1.98, 1.75`，CPU `43.5% wa` (等待I/O)
+- **即使关闭SD卡缓冲和LCD显示**（仅保留摄像头采集），进程仍然D状态
+
+### 排查过程
+
+#### 第1步：分析正点原子systemui_src/video模块
+- 正点原子使用 **QMediaPlayer(GStreamer后端) + QML GPU渲染**
+- **录制时停止显示并独占摄像头**（不是同时录制+显示）
+- 他们没有使用tee分流，也不是单线程处理——而是GPU硬件加速渲染
+- 结论：不能直接复用他们的方案，需要自己优化
+
+#### 第2步：怀疑CPU像素格式转换太慢
+- 原方案：摄像头输出RGB24(921KB/帧) → display_show_frame()逐像素转RGB565 → framebuffer
+- 30万像素 × RGB24→RGB565 转换 ≈ 30ms/帧
+- **修复**: 改为摄像头直接输出RGB565(614KB/帧)，显示时零转换memcpy
+- **结果**: ❌ 仍然卡死！说明这不是主因
+
+#### 第3步：诊断测试 — 逐步关闭功能
+| 测试配置 | 进程状态 | 结论 |
+|----------|----------|------|
+| 完整功能(摄像头+显示+SD卡) | D | 卡死 |
+| 关闭SD卡缓冲 | D | 仍然卡死 |
+| 关闭SD卡+关闭显示 | D | **仍然卡死！** |
+| 仅摄像头采集(camera_grab_frame) | D | **问题100%在摄像头读取** |
+
+#### 第4步：strace + 内核栈定位真正根因
+```bash
+# strace 5秒内零系统调用 — 进程完全卡在内核内部
+$ timeout 5 strace -p $(pgrep dvr)
+strace: Process 4314 attached
+strace: Process 4314 detached    # ← 零输出!
+
+# 内核调用栈揭示真相:
+$ cat /proc/$(pgrep dvr)/stack
+[<0>] __bread_gfp+0x18c/0x1ac
+[<0>] fat_ent_bread+0x58/0xe8
+[<0>] fat_alloc_clusters+0x1a8/0x418     # ← FAT32簇分配!
+[<0>] fat_add_cluster+0x38/0x9c
+[<0>] fat_get_block+0xcc/0x298
+[<0>] __block_write_begin_int+0x114/0x6ac
+[<0>] block_write_begin+0x5c/0xf8
+[<0>] cont_write_begin+0x1d8/0x2e4
+[<0>] fat_write_begin+0x38/0x84
+[<0>] generic_cont_expand_simple+0x60/0xc4
+[<0>] fat_cont_expand+0x2c/0x100
+[<0>] fat_setattr+0x31c/0x3b4
+[<0>] notify_change+0x19c/0x3f0
+[<0>] do_truncate+0xb0/0x118
+[<0>] do_sys_ftruncate+0x148/0x150      # ← 罪魁祸首!
+```
+
+### 🎯 真正根因: `ftruncate(527MB)` 在FAT32 SD卡上
+
+```
+ring_buffer_create() 中执行:
+  ftruncate(fd, 900 * 614400)   // = 552,960,000 字节 ≈ 527 MB
+       ↓
+  FAT32文件系统需要逐个分配磁盘簇
+       ↓
+  527MB / 4KB(簇大小) = ~131,000 个簇
+       ↓
+  每个簇分配需要磁盘I/O (__bread_gfp)
+       ↓
+  总耗时: 数分钟甚至更久!
+       ↓
+  进程进入 D 状态(不可中断睡眠)
+       ↓
+  用户看到: LCD完全卡死
+```
+
+### 修复方案 (三重优化)
+
+#### 修复1: 去掉ftruncate预分配 ✅ 核心修复
+```c
+// ring_buffer.c - ring_buffer_create()
+// 修改前:
+off_t total = (off_t)rb->capacity * rb->frame_size;  // 527MB!
+ftruncate(rb->fd, total);  // ← FAT32上卡死数分钟!
+
+// 修改后:
+// 不调用ftruncate! 文件按需增长(pwrite自动扩展)
+printf("[RINGBUF] Buffer: %s, %d frames, %d bytes/frame, %.1f MB max\n",
+       ...);
+```
+
+#### 修复2: pwrite移到mutex锁外部 ✅ 防止锁竞争
+```c
+// ring_buffer.c - write_thread_func()
+// 修改前 (pwrite在锁内,阻塞主线程的ring_buffer_push):
+pthread_mutex_lock(&rb->lock);
+// ... 取出pending frame ...
+ssize_t n = pwrite(rb->fd, data, size, offset);  // ← 在锁内!
+// ... 更新index ...
+pthread_mutex_unlock(&rb->lock);
+
+// 修改后 (pwrite在锁外,不阻塞主线程):
+pthread_mutex_lock(&rb->lock);
+// ... 取出数据到局部变量 ...
+pthread_mutex_unlock(&rb->lock);                  // ← 先释放锁!
+
+ssize_t n = pwrite(rb->fd, local_pf.data, copy_size, offset);  // ← 锁外写盘
+
+pthread_mutex_lock(&rb->lock);
+// ... 更新index ...
+pthread_mutex_unlock(&rb->lock);
+```
+
+#### 修复3: 摄像头原生RGB565格式 ✅ 显示性能优化
+```c
+// camera_v4l2.c - 格式优先级调整
+static const uint32_t try_fmts[] = {
+    V4L2_PIX_FMT_RGB565,  // ← 优先! (原来第3位)
+    V4L2_PIX_FMT_RGB24,
+    V4L2_PIX_FMT_NV12,
+};
+
+// display_lcd.c - 直接支持RGB565输入
+if (dst_bpp == 2 && src_bpp == 2) {
+    // RGB565→RGB565: 零转换, 直接memcpy
+    for (int y = 0; y < copy_h; y++) {
+        memcpy(dst_line, src_line, copy_w * 2);  // ~1ms/帧!
+    }
+}
+```
+
+#### 修复4: TARGET_OFF不再清空保存中的缓冲区 ✅ Bug修复
+```c
+// dvr_engine.c - on_trigger()
+case TRIGGER_TARGET_OFF:
+    if (eng->state == DVR_STATE_BUFFERING && !eng->save_pending) {
+        // 只有非保存状态才清空缓冲区
+        ring_buffer_clear(eng->ring_buf);
+        eng->state = DVR_STATE_IDLE;
+    } else if (eng->save_pending) {
+        // 保存进行中只标记目标消失,不清空!
+        eng->target_present = 0;
+        printf("Target off but save pending, keeping buffer\n");
+    }
+```
+
+### 修改文件清单
+
+| 文件 | 修改内容 |
+|------|----------|
+| [camera/camera_v4l2.h](camera/camera_v4l2.h) | 新增camera_get_pixelformat/frame_size/bpp接口, convert_to_rgb24() |
+| [camera/camera_v4l2.c](camera/camera_v4l2.c) | RGB565优先格式, rgb565_to_rgb24查表转换 |
+| [display/display_lcd.h](display/display_lcd.h) | 新增display_set_source_format() |
+| [display/display_lcd.c](display/display_lcd.c) | 支持多格式输入(RGB565/RGB24→RGB565/RGB32), 零转换memcpy路径 |
+| [common/ring_buffer.h](common/ring_buffer.h) | create增加frame_size参数, 新增set_frame_size() |
+| [common/ring_buffer.c](common/ring_buffer.c) | 去掉ftruncate预分配, pwrite移到锁外, 按需增长 |
+| [recorder/dvr_engine.c](recorder/dvr_engine.c) | 适配新API, TARGET_OFF保护保存中缓冲区 |
+
+### 测试结果对比
+
+| 指标 | 修改前 | 修改后 |
+|------|--------|--------|
+| **进程状态** | D (Disk sleep, 卡死) | S/R (正常运行) ✅ |
+| **内核等待** | `fat_alloc_clusters` (数分钟) | `do_select` (正常等待帧) ✅ |
+| **摄像头格式** | RGB24, 921KB/帧 | **RGB565, 614KB/帧** (-33%) ✅ |
+| **显示方式** | CPU逐像素转换 (~30ms) | **直接memcpy (~1ms)** ✅ |
+| **SD卡预分配** | ftruncate(527MB) 卡死 | **按需增长, 零启动延迟** ✅ |
+| **写盘阻塞** | mutex内pwrite阻塞主线程 | **锁外异步写入** ✅ |
+| **视频保存** | ❌ 无法保存(进程卡死) | **✅ 成功生成MP4** (61MB/559帧) |
+| **录制时LCD** | 完全卡死 | **实时流畅** ✅ |
+
+### 完整录制流程测试日志
+```
+═══════════════════════════════════════
+   完整录制流程测试
+═══════════════════════════════════════
+
+[1/4] TARGET_ON → 开始缓冲+显示
+  PID 4887: S状态, CPU=12.1%, wchan=do_select ✅
+
+[2/4] 缓冲10秒后:
+  dvr_buffer.bin = 329MB ✅ (异步写盘正常)
+  PID: R状态, CPU=29.7% ✅
+
+[3/4] WARNING触发保存:
+  "Target off but save pending, keeping buffer" ✅ (M核干扰不丢失数据)
+
+[4/4] 录制过程中状态监控:
+  T+5s:  状态正常, LOG=Target off but save pending...
+  T+10s: 状态正常, LOG=RPMSG Received TARGET_ON
+  T+15s: EMERGENCY triggered: WARNING
+  T+20s: Target off but save pending, keeping buffer
+  T+25s: ★ Saved 559 frames → emergency_1709057842_WARNING.mp4 ✅
+  T+30s: 继续正常运行
+
+生成的视频文件:
+  emergency_1709057842_WARNING.mp4   61MB  (559帧, ~18秒)
+  emergency_1709057872_WARNING.mp4   35MB  (751帧, ~25秒)
+  emergency_1709057887_WARNING.mp4   4.1MB (363帧, ~12秒)
+```
+
+---
+
+## 测试方法详解 (2026-05-03)
+
+### M核如何给A核发送触发指令
+
+M核固件通过 **OpenAMP RPMSG虚拟串口** 向A核发送命令：
+
+#### M核端 (app_freertos.c - M_Send_Task)
+```
+M核 FreeRTOS任务, 每5秒循环发送:
+
+  Cycle N×3+1: 发送 "TARGET_ON\n"   → A核开始缓冲
+  Cycle N×3+2: 发送 "WARNING\n"     → A核触发紧急保存
+  Cycle N×3+3: 发送 "TARGET_OFF\n"  → A核停止缓冲
+
+通信链路:
+  M_Send_Task → SendQueue → OpenAMP_Task
+    → VIRT_UART_TransmitNB() → RPMSG总线
+    → /dev/ttyRPMSG1 (A核Linux设备节点)
+```
+
+#### A核端 (dvr_engine.c - 主循环select())
+```
+select() 同时监听3个fd:
+  ├─ fd=camera_fd     → 摄像头帧就绪
+  ├─ fd=trigger_fd    → 命名管道 /tmp/dvr_trigger_pipe (手动测试用)
+  └─ fd=rpmsg_fd=7    → /dev/ttyRPMSG1 (M核命令)
+
+当rpmsg_fd可读时:
+  rpmsg_channel_process() → 按'\n'分割 → on_trigger() → 状态机转换
+```
+
+#### 支持的命令及效果
+
+| 命令 | 来源 | 效果 |
+|------|------|------|
+| `TARGET_ON` | M核或命名管道 | IDLE→BUFFERING, 开始往SD卡写缓冲帧 |
+| `TARGET_OFF` | M核或命名管道 | BUFFERING→IDLE, 停止缓冲(除非正在保存) |
+| `WARNING` | M核或命名管道 | 触发紧急保存, 生成~30秒MP4片段 |
+| `FALL` | 命名管道 | 同WARNING, 文件名含FALL |
+| `COLLISION` | 命名管道 | 同WARNING, 文件名含COLLISION |
+
+### 你自己如何验证（两种方式）
+
+#### 方式一：通过M核自动触发（当前默认行为）
+M核每5秒自动循环发送 TARGET_ON→WARNING→TARGET_OFF，你只需观察：
+1. **看LCD**: 应该全程流畅显示摄像头画面
+2. **看日志**: `cat /tmp/dvr.log | tail -20`
+3. **看视频**: `ls -lh /run/media/mmcblk0p1/emergency_*.mp4`
+
+#### 方式二：通过命名管道手动触发（推荐用于精确控制）
+```bash
+# SSH到开发板后依次执行:
+
+# Step 1: 开始缓冲（模拟雷达检测到目标）
+echo "TARGET_ON" > /tmp/dvr_trigger_pipe
+# → LCD继续流畅显示, SD卡开始积累缓冲数据
+
+# Step 2: 等15-20秒（让缓冲区积累足够数据）
+sleep 15
+
+# Step 3: 触发紧急保存（模拟摔倒/碰撞预警）
+echo "WARNING" > /tmp/dvr_trigger_pipe
+# → LCD应仍然流畅显示! 不卡顿!
+# → 约25-30秒后生成 emergency_*.mp4
+
+# Step 4: 查看结果
+ls -lh /run/media/mmcblk0p1/emergency_*.mp4
+cat /tmp/dvr.log | grep -E "Saved|Saving"
+
+# Step 5: （可选）拷贝视频到电脑回放
+scp root@192.168.88.10:/run/media/mmcblk0p1/emergency_*.mp4 ./
+```
+
+#### 方式三：观察M核自动触发的完整周期
+```bash
+# 清空日志重新观察
+> /tmp/dvr.log
+
+# 等待60秒（M核会完成约4个完整周期）
+sleep 60
+
+# 查看完整状态变化
+cat /tmp/dvr.log | grep -E 'STATE|EMERGENCY|Saved'
+
+# 预期看到多次:
+# STATE: IDLE -> BUFFERING
+# EMERGENCY triggered: WARNING
+# Saved N frames: emergency_xxx_WARNING.mp4
+# STATE: BUFFERING -> IDLE
 ```

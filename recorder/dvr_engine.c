@@ -47,8 +47,10 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
     }
 
     eng->ring_buf = ring_buffer_create(config->buffer_seconds, config->fps,
-                                       config->width, config->height,
-                                       config->sd_card_path);
+                                       camera_get_width(eng->camera),
+                                       camera_get_height(eng->camera),
+                                       config->sd_card_path,
+                                       camera_get_frame_size(eng->camera));
     if (!eng->ring_buf) {
         fprintf(stderr, "[DVR] Ring buffer init failed\n");
         camera_close(eng->camera);
@@ -58,7 +60,11 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
 
     if (config->enable_display && config->display_mode == DISPLAY_MODE_LCD) {
         eng->display = display_open(config->width, config->height);
-        if (!eng->display) {
+        if (eng->display) {
+            display_set_source_format(eng->display,
+                                      camera_get_pixelformat(eng->camera),
+                                      camera_get_bpp(eng->camera));
+        } else {
             printf("[DVR] LCD not available, running headless\n");
         }
     }
@@ -196,11 +202,14 @@ static void on_trigger(const trigger_data_t *data, void *user_data)
         break;
 
     case TRIGGER_TARGET_OFF:
-        if (eng->state == DVR_STATE_BUFFERING) {
+        if (eng->state == DVR_STATE_BUFFERING && !eng->save_pending) {
             eng->state = DVR_STATE_IDLE;
             eng->target_present = 0;
             ring_buffer_clear(eng->ring_buf);
             printf("[DVR] >>> STATE: BUFFERING -> IDLE (target lost)\n");
+        } else if (eng->state == DVR_STATE_BUFFERING && eng->save_pending) {
+            eng->target_present = 0;
+            printf("[DVR] Target off but save pending, keeping buffer\n");
         }
         break;
 
@@ -229,7 +238,9 @@ int dvr_engine_run(dvr_engine_t *eng)
 {
     if (!eng) return -1;
 
-    uint8_t *frame_buf = malloc((size_t)(eng->config.width * eng->config.height * 3));
+    int frame_size = camera_get_frame_size(eng->camera);
+    if (frame_size <= 0) frame_size = eng->config.width * eng->config.height * 3;
+    uint8_t *frame_buf = malloc((size_t)frame_size);
     if (!frame_buf) return -1;
 
     printf("[DVR] Main loop started\n");
@@ -268,8 +279,7 @@ int dvr_engine_run(dvr_engine_t *eng)
 
         if (FD_ISSET(cam_fd, &fds)) {
             time_t ts;
-            int size = camera_grab_frame(eng->camera, frame_buf,
-                                         eng->config.width * eng->config.height * 3, &ts);
+            int size = camera_grab_frame(eng->camera, frame_buf, frame_size, &ts);
             if (size > 0) {
                 if (eng->display) {
                     display_show_frame(eng->display, frame_buf,

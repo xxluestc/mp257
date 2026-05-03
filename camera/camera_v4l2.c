@@ -16,6 +16,8 @@ struct camera_ctx {
     int    fps;
     int    buf_count;
     int    pixelformat;
+    int    frame_size;
+    int    bpp;
     void  *buffers[3];
     size_t buf_lengths[3];
 };
@@ -60,11 +62,12 @@ camera_ctx_t *camera_open(const char *device, int width, int height, int fps)
     fmt.fmt.pix.field  = V4L2_FIELD_NONE;
 
     static const uint32_t try_fmts[] = {
-        V4L2_PIX_FMT_RGB24,
         V4L2_PIX_FMT_RGB565,
+        V4L2_PIX_FMT_RGB24,
         V4L2_PIX_FMT_NV12,
     };
-    static const char *try_names[] = { "RGB24", "RGB565", "NV12" };
+    static const char *try_names[] = { "RGB565", "RGB24", "NV12" };
+    static const int try_bpp[]     = { 2,       3,      1.5   };
 
     int ok = 0;
     for (int i = 0; i < 3; i++) {
@@ -73,6 +76,7 @@ camera_ctx_t *camera_open(const char *device, int width, int height, int fps)
         fmt.fmt.pix.height = height;
         if (ioctl(ctx->fd, VIDIOC_S_FMT, &fmt) == 0) {
             ctx->pixelformat = try_fmts[i];
+            ctx->bpp         = try_bpp[i];
             printf("[CAMERA] Format: %dx%d %s (req: %dx%d)\n",
                    fmt.fmt.pix.width, fmt.fmt.pix.height, try_names[i],
                    width, height);
@@ -87,8 +91,9 @@ camera_ctx_t *camera_open(const char *device, int width, int height, int fps)
         goto fail;
     }
 
-    ctx->width  = fmt.fmt.pix.width;
-    ctx->height = fmt.fmt.pix.height;
+    ctx->width      = fmt.fmt.pix.width;
+    ctx->height     = fmt.fmt.pix.height;
+    ctx->frame_size = fmt.fmt.pix.sizeimage;
 
     {
         struct v4l2_format verify;
@@ -160,7 +165,11 @@ camera_ctx_t *camera_open(const char *device, int width, int height, int fps)
     system("/usr/local/demo/bin/dcmipp-isp-ctrl -i0 -g > /dev/null");
     printf("[CAMERA] ISP control configured\n");
 
-    printf("[CAMERA] Streaming: %dx%d @ %d fps\n", ctx->width, ctx->height, fps);
+    printf("[CAMERA] Streaming: %dx%d @ %d fps, format=%s, bpp=%d, frame_size=%d\n",
+           ctx->width, ctx->height, fps,
+           ctx->pixelformat == V4L2_PIX_FMT_RGB565 ? "RGB565" :
+           ctx->pixelformat == V4L2_PIX_FMT_RGB24 ? "RGB24" : "Other",
+           ctx->bpp, ctx->frame_size);
     return ctx;
 
 fail:
@@ -195,19 +204,15 @@ int camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, time_t *
         return -1;
     }
 
-    if (ctx->pixelformat == V4L2_PIX_FMT_RGB565) {
-        int pixels = ctx->width * ctx->height;
-        int rgb24_size = pixels * 3;
-        if (rgb24_size <= buf_size) {
-            rgb565_to_rgb24(ctx->buffers[buf.index], buffer, pixels);
-        }
-        if (ts) *ts = time(NULL);
-        ioctl(ctx->fd, VIDIOC_QBUF, &buf);
-        return rgb24_size <= buf_size ? rgb24_size : -1;
-    }
-
     int copy_size = (int)buf.bytesused < buf_size ? (int)buf.bytesused : buf_size;
-    memcpy(buffer, ctx->buffers[buf.index], copy_size);
+
+    if (ctx->pixelformat == V4L2_PIX_FMT_RGB565) {
+        memcpy(buffer, ctx->buffers[buf.index], copy_size);
+    } else if (ctx->pixelformat == V4L2_PIX_FMT_RGB24) {
+        memcpy(buffer, ctx->buffers[buf.index], copy_size);
+    } else {
+        memcpy(buffer, ctx->buffers[buf.index], copy_size);
+    }
 
     if (ts) *ts = time(NULL);
 
@@ -219,6 +224,19 @@ int camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, time_t *
     return copy_size;
 }
 
-int camera_get_fd(const camera_ctx_t *ctx) { return ctx ? ctx->fd : -1; }
-int camera_get_width(const camera_ctx_t *ctx)  { return ctx ? ctx->width : 0; }
-int camera_get_height(const camera_ctx_t *ctx) { return ctx ? ctx->height : 0; }
+void camera_convert_to_rgb24(const camera_ctx_t *ctx, const uint8_t *src, uint8_t *dst)
+{
+    if (!ctx || !src || !dst) return;
+    if (ctx->pixelformat == V4L2_PIX_FMT_RGB565) {
+        rgb565_to_rgb24(src, dst, ctx->width * ctx->height);
+    } else {
+        memcpy(dst, src, ctx->frame_size);
+    }
+}
+
+int camera_get_fd(const camera_ctx_t *ctx)           { return ctx ? ctx->fd : -1; }
+int camera_get_width(const camera_ctx_t *ctx)        { return ctx ? ctx->width : 0; }
+int camera_get_height(const camera_ctx_t *ctx)       { return ctx ? ctx->height : 0; }
+int camera_get_pixelformat(const camera_ctx_t *ctx)  { return ctx ? ctx->pixelformat : 0; }
+int camera_get_frame_size(const camera_ctx_t *ctx)   { return ctx ? ctx->frame_size : 0; }
+int camera_get_bpp(const camera_ctx_t *ctx)          { return ctx ? ctx->bpp : 0; }

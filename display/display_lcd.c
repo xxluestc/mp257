@@ -17,6 +17,8 @@ struct display_ctx {
     uint8_t       *fb_ptr;
     struct fb_var_screeninfo vinfo;
     struct fb_fix_screeninfo finfo;
+    int            src_bpp;
+    int            src_pixelformat;
 };
 
 display_ctx_t *display_open(int width, int height)
@@ -75,14 +77,21 @@ void display_close(display_ctx_t *ctx)
     printf("[DISPLAY] Closed\n");
 }
 
-int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int height)
+void display_set_source_format(display_ctx_t *ctx, int pixelformat, int bpp)
 {
-    if (!ctx || !rgb24) return -1;
+    if (!ctx) return;
+    ctx->src_pixelformat = pixelformat;
+    ctx->src_bpp         = bpp;
+}
 
-    int bpp        = ctx->vinfo.bits_per_pixel / 8;
-    int stride     = (int)ctx->finfo.line_length;
-    int disp_w     = ctx->width;
-    int disp_h     = ctx->height;
+int display_show_frame(display_ctx_t *ctx, const uint8_t *data, int width, int height)
+{
+    if (!ctx || !data) return -1;
+
+    int dst_bpp   = ctx->vinfo.bits_per_pixel / 8;
+    int stride    = (int)ctx->finfo.line_length;
+    int disp_w    = ctx->width;
+    int disp_h    = ctx->height;
 
     int copy_w = width  < disp_w ? width  : disp_w;
     int copy_h = height < disp_h ? height : disp_h;
@@ -90,7 +99,27 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int 
     int off_x = (disp_w - copy_w) / 2;
     int off_y = (disp_h - copy_h) / 2;
 
-    if (bpp == 2) {
+    int src_bpp = ctx->src_bpp > 0 ? ctx->src_bpp : 3;
+    int src_stride = width * src_bpp;
+
+    if (dst_bpp == 2 && src_bpp == 2) {
+        for (int y = 0; y < copy_h; y++) {
+            const uint8_t *src = data + (size_t)y * src_stride;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
+            memcpy(dst, src, (size_t)(copy_w * 2));
+        }
+    } else if (dst_bpp == 4 && src_bpp == 2) {
+        for (int y = 0; y < copy_h; y++) {
+            const uint8_t *src = data + (size_t)y * src_stride;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
+            for (int x = 0; x < copy_w; x++) {
+                dst[x * 4]     = src[x * 2];
+                dst[x * 4 + 1] = src[x * 2 + 1];
+                dst[x * 4 + 2] = 0;
+                dst[x * 4 + 3] = 0;
+            }
+        }
+    } else if (dst_bpp == 2 && src_bpp == 3) {
         static uint8_t tbl_init = 0;
         static uint8_t r_tbl[256], g_tbl[256], b_tbl[256];
         if (!tbl_init) {
@@ -102,8 +131,10 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int 
             tbl_init = 1;
         }
         for (int y = 0; y < copy_h; y++) {
-            const uint8_t *src = rgb24 + (size_t)y * width * 3;
-            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * bpp;
+            const uint8_t *src_line = data + (size_t)y * src_stride;
+            uint8_t *dst_line = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
+            const uint8_t *src = src_line;
+            uint8_t *dst = dst_line;
             for (int x = 0; x < copy_w; x++) {
                 uint16_t v = ((uint16_t)r_tbl[src[0]] << 11) |
                              ((uint16_t)g_tbl[src[1]] << 5) |
@@ -114,10 +145,10 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int 
                 dst += 2;
             }
         }
-    } else if (bpp == 4) {
+    } else if (dst_bpp == 4 && src_bpp == 3) {
         for (int y = 0; y < copy_h; y++) {
-            const uint8_t *src = rgb24 + (size_t)y * width * 3;
-            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * bpp;
+            const uint8_t *src = data + (size_t)y * src_stride;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
             for (int x = 0; x < copy_w; x++) {
                 dst[0] = src[2];
                 dst[1] = src[1];
@@ -126,6 +157,12 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int 
                 src += 3;
                 dst += 4;
             }
+        }
+    } else {
+        for (int y = 0; y < copy_h; y++) {
+            const uint8_t *src = data + (size_t)y * src_stride;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
+            memcpy(dst, src, (size_t)(copy_w * src_bpp < copy_w * dst_bpp ? copy_w * src_bpp : copy_w * dst_bpp));
         }
     }
 

@@ -7,14 +7,17 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+static void *write_thread_func(void *arg);
+
 ring_buffer_t *ring_buffer_create(int capacity_seconds, int fps,
-                                  int width, int height, const char *dir)
+                                  int width, int height, const char *dir,
+                                  int frame_size)
 {
     ring_buffer_t *rb = calloc(1, sizeof(ring_buffer_t));
     if (!rb) return NULL;
 
     rb->capacity   = capacity_seconds * fps;
-    rb->frame_size = width * height * 3;
+    rb->frame_size = frame_size > 0 ? frame_size : width * height * 3;
     rb->head       = 0;
     rb->tail       = 0;
     rb->count      = 0;
@@ -28,14 +31,6 @@ ring_buffer_t *ring_buffer_create(int capacity_seconds, int fps,
         return NULL;
     }
 
-    off_t total = (off_t)rb->capacity * rb->frame_size;
-    if (ftruncate(rb->fd, total) < 0) {
-        perror("[RINGBUF] ftruncate");
-        close(rb->fd);
-        free(rb);
-        return NULL;
-    }
-
     rb->index = calloc((size_t)rb->capacity, sizeof(frame_index_t));
     if (!rb->index) {
         close(rb->fd);
@@ -44,21 +39,108 @@ ring_buffer_t *ring_buffer_create(int capacity_seconds, int fps,
     }
 
     pthread_mutex_init(&rb->lock, NULL);
-    printf("[RINGBUF] Single-file buffer: %s, %d frames, %d bytes/frame, %.1f MB total\n",
-           rb->filepath, rb->capacity, rb->frame_size, (double)total / (1024 * 1024));
+    pthread_cond_init(&rb->write_cond, NULL);
+
+    for (int i = 0; i < PENDING_QUEUE_SIZE; i++) {
+        rb->pending[i].data = malloc((size_t)rb->frame_size);
+        if (!rb->pending[i].data) {
+            for (int j = 0; j < i; j++) free(rb->pending[j].data);
+            free(rb->index);
+            close(rb->fd);
+            free(rb);
+            return NULL;
+        }
+        rb->pending[i].size = 0;
+        rb->pending[i].timestamp = 0;
+    }
+    rb->pending_head = 0;
+    rb->pending_tail = 0;
+    rb->pending_count = 0;
+
+    rb->write_thread_running = 1;
+    if (pthread_create(&rb->write_thread, NULL, write_thread_func, rb) != 0) {
+        perror("[RINGBUF] pthread_create");
+        rb->write_thread_running = 0;
+        for (int i = 0; i < PENDING_QUEUE_SIZE; i++) free(rb->pending[i].data);
+        free(rb->index);
+        close(rb->fd);
+        free(rb);
+        return NULL;
+    }
+
+    printf("[RINGBUF] Buffer: %s, %d frames, %d bytes/frame, %.1f MB max\n",
+           rb->filepath, rb->capacity, rb->frame_size,
+           (double)(rb->capacity * rb->frame_size) / (1024 * 1024));
+    printf("[RINGBUF] Async write thread started (queue depth=%d)\n", PENDING_QUEUE_SIZE);
     return rb;
 }
 
 void ring_buffer_destroy(ring_buffer_t *rb)
 {
     if (!rb) return;
+    rb->write_thread_running = 0;
+    pthread_cond_signal(&rb->write_cond);
+    pthread_join(rb->write_thread, NULL);
+
     pthread_mutex_lock(&rb->lock);
     free(rb->index);
+    for (int i = 0; i < PENDING_QUEUE_SIZE; i++) free(rb->pending[i].data);
     if (rb->fd >= 0) close(rb->fd);
     pthread_mutex_unlock(&rb->lock);
+
     pthread_mutex_destroy(&rb->lock);
+    pthread_cond_destroy(&rb->write_cond);
     unlink(rb->filepath);
     free(rb);
+}
+
+static void *write_thread_func(void *arg)
+{
+    ring_buffer_t *rb = (ring_buffer_t *)arg;
+    pending_frame_t local_pf;
+    local_pf.data = malloc((size_t)rb->frame_size);
+    if (!local_pf.data) return NULL;
+
+    while (rb->write_thread_running) {
+        pthread_mutex_lock(&rb->lock);
+
+        while (rb->pending_count == 0 && rb->write_thread_running) {
+            pthread_cond_wait(&rb->write_cond, &rb->lock);
+        }
+
+        if (!rb->write_thread_running) {
+            pthread_mutex_unlock(&rb->lock);
+            break;
+        }
+
+        local_pf = rb->pending[rb->pending_head];
+        rb->pending_head = (rb->pending_head + 1) % PENDING_QUEUE_SIZE;
+        rb->pending_count--;
+
+        off_t offset = (off_t)(rb->head % rb->capacity) * rb->frame_size;
+        time_t ts = local_pf.timestamp;
+        int copy_size = local_pf.size;
+
+        pthread_mutex_unlock(&rb->lock);
+
+        ssize_t n = pwrite(rb->fd, local_pf.data, (size_t)copy_size, offset);
+
+        pthread_mutex_lock(&rb->lock);
+        if (n > 0) {
+            rb->index[rb->head % rb->capacity].timestamp = ts;
+            rb->index[rb->head % rb->capacity].offset    = offset;
+            rb->head++;
+            if (rb->count < rb->capacity) {
+                rb->count++;
+            } else {
+                rb->tail++;
+            }
+        }
+        pthread_mutex_unlock(&rb->lock);
+    }
+
+    free(local_pf.data);
+    return NULL;
 }
 
 int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, time_t ts)
@@ -67,31 +149,28 @@ int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, time_t ts
 
     pthread_mutex_lock(&rb->lock);
 
-    off_t offset = (off_t)(rb->head % rb->capacity) * rb->frame_size;
-
-    ssize_t n = pwrite(rb->fd, data, (size_t)(size < rb->frame_size ? size : rb->frame_size), offset);
-    if (n < 0) {
-        pthread_mutex_unlock(&rb->lock);
-        return -1;
+    if (rb->pending_count >= PENDING_QUEUE_SIZE) {
+        rb->pending_tail = (rb->pending_tail + 1) % PENDING_QUEUE_SIZE;
+        rb->pending_count--;
     }
 
-    rb->index[rb->head % rb->capacity].timestamp = ts;
-    rb->index[rb->head % rb->capacity].offset    = offset;
+    int slot = (rb->pending_tail + rb->pending_count) % PENDING_QUEUE_SIZE;
+    int copy_size = size < rb->frame_size ? size : rb->frame_size;
+    memcpy(rb->pending[slot].data, data, (size_t)copy_size);
+    rb->pending[slot].size      = copy_size;
+    rb->pending[slot].timestamp = ts;
+    rb->pending_tail           = (rb->pending_tail + 1) % PENDING_QUEUE_SIZE;
+    rb->pending_count++;
 
-    rb->head++;
-    if (rb->count < rb->capacity) {
-        rb->count++;
-    } else {
-        rb->tail++;
-    }
-
+    pthread_cond_signal(&rb->write_cond);
     pthread_mutex_unlock(&rb->lock);
+
     return 0;
 }
 
 int ring_buffer_stream_range(ring_buffer_t *rb, time_t start, time_t end,
                               int (*callback)(const frame_t *f, void *user),
-                              void *user)
+                              void *user_data)
 {
     if (!rb || !callback) return -1;
 
@@ -122,7 +201,7 @@ int ring_buffer_stream_range(ring_buffer_t *rb, time_t start, time_t end,
             f.data      = buf;
             f.size      = (int)n;
             f.timestamp = rb->index[pos].timestamp;
-            int ret = callback(&f, user);
+            int ret = callback(&f, user_data);
             if (ret < 0) break;
             sent++;
         }
@@ -149,10 +228,24 @@ void ring_buffer_clear(ring_buffer_t *rb)
 {
     if (!rb) return;
     pthread_mutex_lock(&rb->lock);
+    rb->pending_head  = 0;
+    rb->pending_tail  = 0;
+    rb->pending_count = 0;
     rb->head  = 0;
     rb->tail  = 0;
     rb->count = 0;
-    ftruncate(rb->fd, 0);
-    ftruncate(rb->fd, (off_t)rb->capacity * rb->frame_size);
+    pthread_mutex_unlock(&rb->lock);
+}
+
+void ring_buffer_set_frame_size(ring_buffer_t *rb, int frame_size)
+{
+    if (!rb || frame_size <= 0) return;
+    pthread_mutex_lock(&rb->lock);
+    rb->frame_size = frame_size;
+    for (int i = 0; i < PENDING_QUEUE_SIZE; i++) {
+        free(rb->pending[i].data);
+        rb->pending[i].data = malloc((size_t)frame_size);
+    }
+    printf("[RINGBUF] Frame size updated to %d bytes\n", frame_size);
     pthread_mutex_unlock(&rb->lock);
 }
