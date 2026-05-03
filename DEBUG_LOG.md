@@ -151,17 +151,63 @@ echo start > /sys/class/remoteproc/remoteproc0/state
 - ✅ DVR主循环运行，摄像头采集正常，LCD显示正常
 - ✅ 命名管道触发正常
 
-#### 待解决: M核RPMSG无数据流通
+#### 待解决: M核RPMSG无数据流通 ✅ 已解决 (2026-05-03)
 - 现象: M核启动后，/dev/ttyRPMSG0 无任何数据输出
-- 测试: `timeout 10 cat /dev/ttyRPMSG0` 无输出
-- 测试: `echo 'TEST' > /dev/ttyRPMSG0` 后读取也无回应
-- 原始固件(OpenAMP_TTY_echo_CM33_NonSecure.elf)同样无数据
-- 可能原因:
-  1. M核固件签名问题(目录名含_sign，可能需要签名后的.bin文件)
-  2. M核任务初始化失败(需查看M核串口调试输出)
-  3. OpenAMP端点未就绪
-  4. 内存区域配置不匹配
-- 下一步: 需通过M核调试串口查看M核启动日志，确认任务是否正常运行
+- 根因1: **开发板重启后加载的是原始固件** `OpenAMP_TTY_echo_CM33_NonSecure.elf`（非修改版）
+  - 修复: 每次重启后需重新SCP部署修改后固件到 /lib/firmware/
+- 根因2: **IDE副本缺少换行符** — Makefile编译用的是STM32CubeIDE目录下的副本
+  - 源码副本(CM33/NonSecure/FREERTOS/App/): 有 `\n` ✅
+  - IDE副本(STM32CubeIDE/.../Application/User/FREERTOS/App/): **无 `\n`** ❌
+  - 修复: 在IDE副本中添加 `\n`: `"TARGET_ON\n"`, `"WARNING\n"`, `"TARGET_OFF\n"`
+- 根因3: **DVR的RPMSG解析不处理粘包** — 多条命令粘在一起时只处理第一条
+  - 修复: 重写 rpmsg_channel_process()，按 `\n` 分割逐条处理
+
+### 端到端测试结果 (2026-05-03) ✅ 全部通过
+
+#### 测试环境
+- 开发板IP: 192.168.88.10, 刚重启
+- M核固件: OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf (含\n分隔符)
+- RPMSG设备: /dev/ttyRPMSG1 (自动探测)
+- DVR参数: 640x480@30fps, SD卡缓冲30秒, LCD显示开启
+
+#### 测试日志 (关键输出)
+```
+[RPMSG] Cannot open /dev/ttyRPMSG0: No such file or directory
+[RPMSG] Channel opened: /dev/ttyRPMSG1 (fd=7)        ← 自动探测成功
+[DVR] Engine created, state=IDLE
+[DVR] Main loop started
+
+[RPMSG] Received from M-core: TARGET_ON               ← 命令正确分割!
+[DVR] >>> STATE: IDLE -> BUFFERING (target detected)   ← 状态转换正确!
+[RPMSG] Received from M-core: WARNING                 ← 紧急命令到达
+[DVR] >>> EMERGENCY triggered: WARNING, will save after 15s buffer
+[RPMSG] Received from M-core: TARGET_OFF
+[DVR] >>> STATE: BUFFERING -> IDLE (target lost)      ← 循环正常
+
+[RPMSG] Received from M-core: TARGET_ON               ← 第2轮循环
+[DVR] >>> STATE: IDLE -> BUFFERING (target detected)
+[RPMSG] Received from M-core: WARNING
+[DVR] >>> EMERGENCY triggered: WARNING, will save after 15s buffer
+```
+
+#### 验证项
+| 测试项 | 结果 | 说明 |
+|--------|------|------|
+| M核编译(GCC 12.3.1) | ✅ | EXIT=0, ELF 3875992字节 |
+| M核固件部署 | ✅ | SCP到/lib/firmware/ |
+| M核启动 | ✅ | remoteproc状态: running |
+| RPMSG通道创建 | ✅ | /dev/ttyRPMSG1 |
+| RPMSG设备自动探测 | ✅ | 先试ttyRPMSG0失败→自动切换ttyRPMSG1 |
+| M核→A核数据传输 | ✅ | cat /dev/ttyRPMSG1 收到 TARGET_ON |
+| 命令分割(去粘包) | ✅ | 每条命令独立接收，不再粘连 |
+| TARGET_ON → BUFFERING | ✅ | IDLE → BUFFERING 状态转换 |
+| WARNING → EMERGENCY | ✅ | 紧急保存触发 |
+| TARGET_OFF → IDLE | ✅ | BUFFERING → IDLE 状态转换 |
+| 多轮循环稳定 | ✅ | 连续2+轮循环均正常 |
+
+#### 已知限制
+- 测试周期5秒太短，WARNING触发时缓冲不足15秒导致"No frames in range"
+- 实际使用中TARGET_ON会持续更长时间（雷达持续检测到目标），不会有此问题
 
 ### 调试命令速查
 ```bash

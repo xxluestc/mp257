@@ -52,41 +52,56 @@ int rpmsg_channel_get_fd(const rpmsg_ctx_t *ctx)
     return ctx ? ctx->fd : -1;
 }
 
-int rpmsg_channel_process(rpmsg_ctx_t *ctx, rpmsg_callback_t cb, void *user_data)
+static int parse_and_dispatch(const char *cmd, rpmsg_callback_t cb, void *user_data)
 {
-    if (!ctx || !cb) return -1;
-
-    char line[256];
-    ssize_t n = read(ctx->fd, line, sizeof(line) - 1);
-    if (n <= 0) return 0;
-
-    line[n] = '\0';
-
-    char *nl = strchr(line, '\n');
-    if (nl) *nl = '\0';
-    char *cr = strchr(line, '\r');
-    if (cr) *cr = '\0';
+    while (*cmd == ' ' || *cmd == '\t' || *cmd == '\r') cmd++;
+    size_t len = strlen(cmd);
+    while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\t' || cmd[len-1] == '\r')) len--;
+    if (len == 0) return 0;
 
     trigger_data_t data;
     memset(&data, 0, sizeof(data));
     data.timestamp = time(NULL);
 
-    if (strncmp(line, "TARGET_ON", 9) == 0) {
+    if (strncmp(cmd, "TARGET_ON", 9) == 0) {
         data.event = TRIGGER_TARGET_ON;
-    } else if (strncmp(line, "TARGET_OFF", 10) == 0) {
+    } else if (strncmp(cmd, "TARGET_OFF", 10) == 0) {
         data.event = TRIGGER_TARGET_OFF;
-    } else if (strncmp(line, "WARNING", 7) == 0) {
+    } else if (strncmp(cmd, "WARNING", 7) == 0) {
         data.event = TRIGGER_WARNING;
-    } else if (strncmp(line, "FALL", 4) == 0) {
+    } else if (strncmp(cmd, "FALL", 4) == 0) {
         data.event = TRIGGER_FALL;
-    } else if (strncmp(line, "COLLISION", 9) == 0) {
+    } else if (strncmp(cmd, "COLLISION", 9) == 0) {
         data.event = TRIGGER_COLLISION;
     } else {
-        printf("[RPMSG] Unknown command: %s\n", line);
+        printf("[RPMSG] Unknown command: %.*s\n", (int)len, cmd);
         return 0;
     }
 
-    printf("[RPMSG] Received from M-core: %s\n", line);
+    printf("[RPMSG] Received from M-core: %.*s\n", (int)len, cmd);
     cb(&data, user_data);
     return 1;
+}
+
+int rpmsg_channel_process(rpmsg_ctx_t *ctx, rpmsg_callback_t cb, void *user_data)
+{
+    if (!ctx || !cb) return -1;
+
+    char buf[1024];
+    ssize_t n = read(ctx->fd, buf, sizeof(buf) - 1);
+    if (n <= 0) return 0;
+
+    buf[n] = '\0';
+    int count = 0;
+    char *p = buf;
+    char *next;
+    while ((next = strchr(p, '\n')) != NULL) {
+        *next = '\0';
+        count += parse_and_dispatch(p, cb, user_data);
+        p = next + 1;
+    }
+    if (*p != '\0') {
+        count += parse_and_dispatch(p, cb, user_data);
+    }
+    return count;
 }
