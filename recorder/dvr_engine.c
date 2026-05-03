@@ -271,13 +271,13 @@ int dvr_engine_run(dvr_engine_t *eng)
             int size = camera_grab_frame(eng->camera, frame_buf,
                                          eng->config.width * eng->config.height * 3, &ts);
             if (size > 0) {
-                if (eng->state == DVR_STATE_BUFFERING) {
-                    ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
-                }
-
                 if (eng->display) {
                     display_show_frame(eng->display, frame_buf,
                                        eng->config.width, eng->config.height);
+                }
+
+                if (eng->state == DVR_STATE_BUFFERING) {
+                    ring_buffer_push(eng->ring_buf, frame_buf, size, ts);
                 }
             }
         }

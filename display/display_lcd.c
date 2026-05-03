@@ -90,24 +90,41 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *rgb24, int width, int 
     int off_x = (disp_w - copy_w) / 2;
     int off_y = (disp_h - copy_h) / 2;
 
-    for (int y = 0; y < copy_h; y++) {
-        for (int x = 0; x < copy_w; x++) {
-            int src_idx = (y * width + x) * 3;
-            int dst_idx = ((off_y + y) * stride) + (off_x + x) * bpp;
-
-            uint8_t r = rgb24[src_idx];
-            uint8_t g = rgb24[src_idx + 1];
-            uint8_t b = rgb24[src_idx + 2];
-
-            if (bpp == 4) {
-                ctx->fb_ptr[dst_idx]     = b;
-                ctx->fb_ptr[dst_idx + 1] = g;
-                ctx->fb_ptr[dst_idx + 2] = r;
-                ctx->fb_ptr[dst_idx + 3] = 0;
-            } else if (bpp == 2) {
-                uint16_t rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
-                ctx->fb_ptr[dst_idx]     = rgb565 & 0xff;
-                ctx->fb_ptr[dst_idx + 1] = (rgb565 >> 8) & 0xff;
+    if (bpp == 2) {
+        static uint8_t tbl_init = 0;
+        static uint8_t r_tbl[256], g_tbl[256], b_tbl[256];
+        if (!tbl_init) {
+            for (int i = 0; i < 256; i++) {
+                r_tbl[i] = (uint8_t)(i >> 3);
+                g_tbl[i] = (uint8_t)(i >> 2);
+                b_tbl[i] = (uint8_t)(i >> 3);
+            }
+            tbl_init = 1;
+        }
+        for (int y = 0; y < copy_h; y++) {
+            const uint8_t *src = rgb24 + (size_t)y * width * 3;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * bpp;
+            for (int x = 0; x < copy_w; x++) {
+                uint16_t v = ((uint16_t)r_tbl[src[0]] << 11) |
+                             ((uint16_t)g_tbl[src[1]] << 5) |
+                              (uint16_t)b_tbl[src[2]];
+                dst[0] = (uint8_t)(v & 0xff);
+                dst[1] = (uint8_t)(v >> 8);
+                src += 3;
+                dst += 2;
+            }
+        }
+    } else if (bpp == 4) {
+        for (int y = 0; y < copy_h; y++) {
+            const uint8_t *src = rgb24 + (size_t)y * width * 3;
+            uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * bpp;
+            for (int x = 0; x < copy_w; x++) {
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = 0;
+                src += 3;
+                dst += 4;
             }
         }
     }
