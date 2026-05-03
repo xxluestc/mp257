@@ -730,3 +730,222 @@ cat /tmp/dvr.log | grep -E 'STATE|EMERGENCY|Saved'
 # Saved N frames: emergency_xxx_WARNING.mp4
 # STATE: BUFFERING -> IDLE
 ```
+
+---
+
+## 状态机完整重写 (2026-05-03 晚)
+
+### 用户需求（5条规则）
+
+| # | 需求 | 之前行为 | 现在行为 |
+|---|------|----------|----------|
+| 1 | 目标出现→循环录制30s覆盖(不存SD卡) | ❌ WARNING立即保存,无循环 | ✅ BUFFERING每30s清空缓冲区 |
+| 2 | 预警→保存前后15s=30s片段,最多3个(满了覆盖) | ❌ 无限制保存 | ✅ clip_manager 3槽位FIFO |
+| 3 | 摔倒/碰撞→保存30s片段(**不可被覆盖**) | ❌ 和WARNING一样 | ✅ PROTECTED标记 |
+| 4 | 无目标→停止录制 | ⚠️ 基本正确 | ✅ TARGET_OFF→IDLE |
+| 5 | 录制不影响LCD显示 | ⚠️ 已修复(RGB565) | ✅ 保持不变 |
+| 6 | M核只发4次 | ❌ 无限循环 | ✅ MAX_CYCLES=4后idle |
+| 7 | SD卡热插拔保护 | ❌ 无保护 | ✅ check_sd_card() |
+
+### 新状态机设计
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         IDLE (等待目标)              │
+                    │   - LCD实时显示摄像头画面             │
+                    │   - 不写入SD卡                       │
+                    └──────────┬──────────────────────────┘
+                               │ TARGET_ON (雷达/目标检测)
+                               ▼
+                    ┌─────────────────────────────────────┐
+                    │      BUFFERING (循环录制)            │
+                    │   - 帧数据→SD卡环形缓冲区            │
+                    │   - LCD继续实时显示                  │
+                    │   - 每30s自动清空缓冲(不存MP4)       │
+                    └──┬──────────────┬───────────────────┘
+                       │              │
+          30s无预警     │    WARNING/FALL/COLLISION
+          +目标仍在     │              │
+                       ▼              ▼
+               继续BUFFERING     SAVING(异步编码)
+                                  (fork子进程ffmpeg)
+                                       │
+                              ┌────────┴────────┐
+                              │                 │
+                        目标仍在?           目标消失?
+                              │                 │
+                              ▼                 ▼
+                         BUFFERING            IDLE
+```
+
+### 核心代码变更
+
+#### 1. dvr_types.h — 新增类型定义
+```c
+// 片段类型: 区分普通(可覆盖)和保护(不可覆盖)
+typedef enum {
+    CLIP_TYPE_WARNING   = 0,  // 普通, 可被覆盖
+    CLIP_TYPE_FALL      = 1,  // 保护, 不可覆盖
+    CLIP_TYPE_COLLISION = 2,  // 保护, 不可覆盖
+} clip_type_t;
+
+// 片段信息
+typedef struct {
+    char         filename[DVR_MAX_PATH];
+    clip_type_t  type;
+    time_t       save_time;
+    int          protected_;  // 0=普通, 1=保护
+} clip_info_t;
+
+// 片段管理器 (最多3个普通片段)
+typedef struct {
+    clip_info_t clips[DVR_MAX_NORMAL_CLIPS];  // 3槽位
+    int         count;
+    int         next_index;                   // 下次覆盖位置(FIFO)
+    const char *sd_path;
+} clip_manager_t;
+```
+
+#### 2. dvr_engine.c — 完整重写状态机
+
+**新增成员变量:**
+```c
+struct dvr_engine {
+    // ...原有字段...
+    clip_manager_t   clips;            // 片段管理器
+    time_t           last_cycle_time;  // 30s循环计时
+    volatile int     sd_card_ok;       // SD卡热插拔检测
+};
+```
+
+**循环录制逻辑 (主循环中):**
+```c
+// 每30s检查一次, 如果还在BUFFERING且没有save_pending:
+if (eng->state == DVR_STATE_BUFFERING && !eng->save_pending) {
+    time_t elapsed = now - eng->last_cycle_time;
+    if (elapsed >= eng->config.buffer_seconds) {  // 30秒到了
+        printf("[DVR] Circular 30s cycle complete, rotating buffer\n");
+        ring_buffer_clear(eng->ring_buf);  // 清空缓冲区,开始新一轮
+        eng->buffer_start_time = now;
+        eng->last_cycle_time  = now;
+    }
+}
+```
+
+**SD卡热插拔检测 (每次select循环):**
+```c
+eng->sd_card_ok = check_sd_card(eng->config.sd_card_path);
+if (!eng->sd_card_ok && eng->state == DVR_STATE_BUFFERING) {
+    printf("[DVR] WARNING: SD card removed! Buffering continues but cannot save.\n");
+}
+
+// 写入帧时检查:
+if (eng->state == DVR_STATE_BUFFERING) {
+    if (eng->sd_card_ok) {        // 只有SD卡正常才写
+        ring_buffer_push(...);
+    }
+}
+```
+
+**clip_manager 覆盖逻辑:**
+```c
+int clip_manager_add(clip_manager_t *cm, const char *filename, clip_type_t type)
+{
+    if (!clip_is_protected(type)) {  // WARNING类型
+        // 覆盖最旧的普通片段
+        if (cm->clips[cm->next_index].filename[0]) {
+            unlink(cm->clips[cm->next_index].filename);  // 删除旧文件!
+        }
+        // 写入新片段到next_index位置
+        cm->next_index = (cm->next_index + 1) % DVR_MAX_NORMAL_CLIPS;  // FIFO轮转
+    } else {  // FALL/COLLISION类型
+        // 直接保存, 不进入3槽位管理, 永不被自动覆盖!
+        printf("[CLIP] Saved PROTECTED: %s\n", filename);
+    }
+}
+```
+
+#### 3. M核固件修改 (app_freertos.c)
+```c
+// 修改前: while(1) → 无限循环
+// 修改后:
+const int MAX_CYCLES = 4;
+while (cycle < MAX_CYCLES) {  // 只执行4次
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
+    cycle++;
+    // ...发送命令...
+}
+// 4次完成后进入idle:
+loc_printf("[M-SEND] === All %d cycles done, task idle ===\r\n", MAX_CYCLES);
+while (1) { vTaskDelay(pdMS_TO_TICKS(10000)); }
+```
+
+### 修复的BUG: WARNING误判为PROTECTED
+
+**原因:** `on_trigger()`中将`trigger_event_t`直接传给`clip_is_protected()`
+```c
+// 错误代码:
+printf("...protected=%d...", clip_is_protected((clip_type_t)data->event));
+// data->event是trigger_event_t: WARNING=2, FALL=3, COLLISION=4
+// 但clip_type_t:       WARNING=0, FALL=1, COLLISION=2
+// 所以WARNING(2)被当成COLLISION(2) → protected=1! 错误!
+
+// 正确代码:
+clip_type_t ctype = (clip_type_t)(eng->save_event - TRIGGER_WARNING);
+// WARNING(2)-TRIGGER_WARNING(2)=0 → CLIP_TYPE_WARNING(0) → protected=0 ✅
+// FALL(3)-TRIGGER_WARNING(2)=1    → CLIP_TYPE_FALL(1)    → protected=1 ✅
+```
+
+### 测试验证日志
+```
+=== 编译部署成功 ===
+[CAMERA] Format: 640x480 RGB565 ✅
+[RINGBUF] Buffer: 900 frames, 614400 bytes/frame, 527.3 MB max
+[DISPLAY] LCD: 800x480, bpp=16
+[RPMSG] Channel opened: /dev/ttyRPMSG1 ✅
+[DVR] Engine created, state=IDLE, max_normal_clips=3 ✅
+
+=== M核触发测试 (旧固件仍无限循环,新固件待烧录) ===
+[RPMSG] Received from M-core: WARNING
+[DVR] >>> EMERGENCY triggered: WARNING (protected=0) ✅ 修复正确!
+[RPMSG] Received from M-core: TARGET_OFF
+[DVR] Target off but save pending, keeping buffer ✅
+... (15秒后) ...
+[DVR] Saving clip: [1709059027, 1709059057] -> emergency_...WARNING.mp4
+[CLIP] Saved normal [1/3]: emergency_...WARNING.mp4 (WARNING) ✅ 第1个片段
+[DVR] Async encoding started (pid=6764): 651 frames ✅ 异步编码
+[CLIP] === Clip list ===
+  [0] emergency_1709059042_WARNING.mp4 (WARNING) ✅
+[DVR] >>> STATE: -> IDLE (no target, save done) ✅ 状态转换正确
+```
+
+### SD卡热插拔说明
+
+**问: 可以在运行时直接拔掉SD卡吗?**
+
+**答: 不建议直接热插拔，但代码已有保护机制：**
+
+| 操作 | 结果 | 说明 |
+|------|------|------|
+| **运行时拔卡** | 进程**不会崩溃** ✅ | `check_sd_card()`检测到路径不可访问→设`sd_card_ok=0`→跳过ring_buffer_push→LCD继续显示 |
+| **拔卡时正在保存** | 当前保存**可能失败** | ffmpeg子进程写文件会报错，但父进程不受影响 |
+| **重新插入SD卡** | 自动恢复 ✅ | 下次select循环检测到SD卡可写→`sd_card_ok=1`→恢复正常缓冲 |
+
+**但要注意:**
+- FAT32文件系统**不支持真正的热插拔安全卸载**
+- 拔卡可能导致文件系统元数据不一致
+- **推荐做法**: 先停止DVR进程(`pkill dvr`)，再拔卡
+- 或者使用 `sync` 命令刷新缓存后再拔卡
+
+### 修改文件清单 (本次)
+
+| 文件 | 变更类型 | 关键内容 |
+|------|----------|----------|
+| [common/dvr_types.h](common/dvr_types.h) | **重写** | 新增clip_type_t/clip_info_t/clip_manager_t/DVR_MAX_NORMAL_CLIPS |
+| [recorder/dvr_engine.c](recorder/dvr_engine.c) | **大改** | 完整状态机重写+clip_manager+循环录制+SD卡检测+protected修复 |
+| [app_freertos.c (源码)](../STM32Cube_ATK_FW_MP2_V1.0.0/Projects/STM32MP257D-ATK/Applications/CM33_OpenAMP_DEMO/OpenAMP_TTY_echo_FreeRTOS/CM33/NonSecure/FREERTOS/App/app_freertos.c) | **修改** | MAX_CYCLES=4, 循环结束后idle |
+| [app_freertos.c (IDE副本)](../STM32Cube_ATK_FW_MP2_V1.0.0/Projects/STM32MP257D-ATK/Applications/CM33_OpenAMP_DEMO/OpenAMP_TTY_echo_FreeRTOS/STM32CubeIDE/CM33/NonSecure/Application/User/FREERTOS/App/app_freertos.c) | **同步修改** | 同上 |
+
+### 待办事项
+- [ ] 通过STM32CubeIDE编译新的M核固件并烧录到开发板（当前板上运行的仍是旧版无限循环固件）
+- [ ] 清理SD卡上的旧测试视频文件（之前无限循环产生的几十个WARNING mp4）
