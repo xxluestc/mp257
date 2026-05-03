@@ -9,6 +9,10 @@ echo "========================================="
 
 echo "[1/6] Cleaning up old state..."
 pkill -9 dvr 2>/dev/null
+pkill -9 weston 2>/dev/null
+pkill -9 seatd 2>/dev/null
+systemctl stop netdata 2>/dev/null
+sleep 1
 echo stop > /sys/class/remoteproc/remoteproc0/state 2>/dev/null
 sleep 2
 rm -f "$SD"/emergency_*.mp4 2>/dev/null
@@ -16,34 +20,40 @@ rm -f "$SD"/emergency_*.mp4 2>/dev/null
 
 echo "[2/6] Starting DVR..."
 /usr/local/bin/dvr > "$LOG" 2>&1 &
+DVR_PID=$!
 sleep 5
 
-if ! pgrep -x dvr > /dev/null; then
+if ! kill -0 $DVR_PID 2>/dev/null; then
     echo "ERROR: DVR failed to start!"
     cat "$LOG"
     exit 1
 fi
-echo "      DVR started (pid=$(pgrep -x dvr))"
+echo "      DVR started (pid=$DVR_PID)"
 
 echo "[3/6] Restarting M-core (will send 4 commands)..."
-echo start > /sys/class/remoteproc/remoteproc0/state 2>/dev/null
+echo start > /sys/class/remoteproc/remoteproc0.state 2>/dev/null
 sleep 2
 
-if [ "$(cat /sys/class/remoteproc/remoteproc0/state)" != "running" ]; then
-    echo "WARNING: M-core not running, testing via pipe only..."
-else
+if [ "$(cat /sys/class/remoteproc/remoteproc0.state 2>/dev/null)" = "running" ]; then
     echo "      M-core running"
+else
+    echo "      NOTE: M-core not available, use pipe commands manually"
 fi
 
-echo "[4/6] Waiting for M-core 4-cycle test (40s)..."
-sleep 40
+echo "[4/6] Waiting for test (45s)..."
+sleep 45
 
 echo ""
 echo "========== TEST RESULTS =========="
 echo ""
 
+echo "--- Memory ---"
+free -h | grep Mem
+echo ""
+
 echo "--- M-core Commands Received ---"
-grep -c "Received from M-core" "$LOG" 2>/dev/null && echo "commands received" || echo "0 commands (M-core may not be running)"
+CNT=$(grep -c "Received from M-core" "$LOG" 2>/dev/null)
+echo "${CNT:-0} commands received"
 echo ""
 
 echo "--- State Transitions ---"
@@ -63,13 +73,13 @@ ls -lh "$SD"/emergency_*.mp4 2>/dev/null || echo "(no emergency files)"
 echo ""
 
 echo "--- Errors (if any) ---"
-grep -i "error\|fail\|warn" "$LOG" 2>/dev/null | grep -v "WARNING.*SD card\|WARN.*target" | head -5 || echo "(none)"
+grep -i "error\|fail" "$LOG" 2>/dev/null | grep -v "WARNING.*SD card\|WARN.*target" | head -5 || echo "(none)"
 echo ""
 
 echo "========================================="
 echo "  Manual Pipe Test (optional)"
 echo "========================================="
-echo "Run these commands in another terminal:"
+echo "Run these commands:"
 echo "  echo 'TARGET_ON' > $PIPE"
 echo "  echo 'WARNING'   > $PIPE"
 echo "  echo 'FALL'      > $PIPE"

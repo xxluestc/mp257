@@ -103,10 +103,29 @@ int display_show_frame(display_ctx_t *ctx, const uint8_t *data, int width, int h
     int src_stride = width * src_bpp;
 
     if (dst_bpp == 2 && src_bpp == 2) {
+        static uint16_t bright_tbl[32][64][32];
+        static int tbl_init = 0;
+        if (!tbl_init) {
+            float brightness = 0.75f;
+            for (int r = 0; r < 32; r++)
+                for (int g = 0; g < 64; g++)
+                    for (int b = 0; b < 32; b++) {
+                        int rn = (int)(r * brightness); if (rn > 31) rn = 31;
+                        int gn = (int)(g * brightness); if (gn > 63) gn = 63;
+                        int bn = (int)(b * brightness); if (bn > 31) bn = 31;
+                        bright_tbl[r][g][b] = (uint16_t)((rn << 11) | (gn << 5) | bn);
+                    }
+            tbl_init = 1;
+        }
         for (int y = 0; y < copy_h; y++) {
             const uint8_t *src = data + (size_t)y * src_stride;
             uint8_t *dst = ctx->fb_ptr + (size_t)(off_y + y) * stride + (size_t)off_x * dst_bpp;
-            memcpy(dst, src, (size_t)(copy_w * 2));
+            const uint16_t *src16 = (const uint16_t *)src;
+            uint16_t *dst16 = (uint16_t *)dst;
+            for (int x = 0; x < copy_w; x++) {
+                uint16_t v = src16[x];
+                dst16[x] = bright_tbl[v >> 11][(v >> 5) & 0x3F][v & 0x1F];
+            }
         }
     } else if (dst_bpp == 4 && src_bpp == 2) {
         for (int y = 0; y < copy_h; y++) {
