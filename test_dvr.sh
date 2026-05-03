@@ -30,16 +30,24 @@ echo "      OK (pid=$DVR_PID)"
 
 echo "[3/6] M-core: $(cat /sys/class/remoteproc/remoteproc0.state 2>/dev/null || echo 'N/A')"
 
-echo "[4/6] Triggers..."
+echo "[4/6] Triggers (buffer 10s, then WARNING)..."
 echo TARGET_ON > "$PIPE" 2>/dev/null
-sleep 5
+sleep 10
 echo WARNING > "$PIPE" 2>/dev/null
-sleep 35
+
+BUF_BEFORE=10
+AFTER_NEEDED=$(( 30 - BUF_BEFORE ))
+if [ $AFTER_NEEDED -lt 15 ]; then AFTER_NEEDED=15; fi
+ENCODE_EXTRA=15
+TOTAL_WAIT=$(( AFTER_NEEDED + ENCODE_EXTRA ))
+echo "      Buffered ${BUF_BEFORE}s before trigger, waiting ${TOTAL_WAIT}s for save..."
+
+sleep $TOTAL_WAIT
 
 echo ""
 echo "========== RESULTS =========="
 grep "STATE:" "$LOG" 2>/dev/null || echo "(no state changes)"
-grep -E "Saving|Saved|EMERGENCY" "$LOG" 2>/dev/null || echo "(no saves)"
+grep -E "Saving|Saved|EMERGENCY|No frames" "$LOG" 2>/dev/null || echo "(no saves)"
 ls -lh "$SD"/emergency_*.mp4 2>/dev/null || echo "(no files on SD)"
 grep -iE "error|fail" "$LOG" 2>/dev/null | grep -v RPMSG | head -3 || echo "(no errors)"
 echo "============================="
