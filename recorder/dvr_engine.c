@@ -162,7 +162,7 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
         eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG1");
     }
     if (!eng->rpmsg) {
-        printf("[DVR] RPMSG channel not available (M-core may not be running)\n");
+        printf("[DVR] RPMSG channel not available (will retry every 5s)\n");
     }
 
     eng->clips = *(clip_manager_create(config->sd_card_path));
@@ -399,12 +399,28 @@ int dvr_engine_run(dvr_engine_t *eng)
         }
 
         if (rpmsg_fd >= 0 && FD_ISSET(rpmsg_fd, &fds)) {
-            rpmsg_channel_process(eng->rpmsg, on_trigger, eng);
+            int ret = rpmsg_channel_process(eng->rpmsg, on_trigger, eng);
+            if (ret < 0) {
+                printf("[DVR] RPMSG connection lost, will reconnect...\n");
+                rpmsg_channel_close(eng->rpmsg);
+                eng->rpmsg = NULL;
+            }
         }
 
         eng->sd_card_ok = check_sd_card(eng->config.sd_card_path);
         if (!eng->sd_card_ok && eng->state == DVR_STATE_BUFFERING) {
             printf("[DVR] WARNING: SD card removed! Buffering continues but cannot save.\n");
+        }
+
+        {
+            static time_t last_rpmsg_retry = 0;
+            time_t now = time(NULL);
+            if (!eng->rpmsg && (now - last_rpmsg_retry >= 5)) {
+                last_rpmsg_retry = now;
+                eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG0");
+                if (!eng->rpmsg) eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG1");
+                if (eng->rpmsg) printf("[DVR] RPMSG channel connected! (fd=%d)\n", rpmsg_channel_get_fd(eng->rpmsg));
+            }
         }
 
         if (eng->state == DVR_STATE_BUFFERING && !eng->save_pending) {

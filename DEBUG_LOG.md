@@ -79,6 +79,86 @@ WARNING   → 紧急保存触发，等待15秒缓冲
 
 ---
 
+## M核命令行编译 + 4次循环 + 端到端测试 (2026-05-03) ✅
+
+### 编译命令
+```bash
+export PATH="/home/alientek/download/makeself_dir_RBGMxz/y/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.linux64_1.1.0.202410170702/tools/bin:$PATH"
+cd /home/alientek/STM32Cube_ATK_FW_MP2_V1.0.0/Projects/STM32MP257D-ATK/Applications/CM33_OpenAMP_DEMO/OpenAMP_TTY_echo_FreeRTOS/STM32CubeIDE/CM33/NonSecure/CA35TDCID_m33_ns_sign
+make main-build
+# 输出: OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf (MD5: 6389f7b272c2518bed307920cfd1ae49)
+```
+
+### 部署命令
+```bash
+scp OpenAMP_TTY_echo_FreeRTOS_CM33_NonSecure.elf root@192.168.88.10:/lib/firmware/
+ssh root@192.168.88.10 "
+  echo stop > /sys/class/remoteproc/remoteproc0/state
+  sleep 2
+  echo start > /sys/class/remoteproc/remoteproc0/state
+"
+```
+
+### 新增: RPMSG自动重连机制
+**问题**: DVR启动时M核未就绪→RPMSG设备不存在→永久放弃连接
+**解决**: dvr_engine.c主循环每5秒重试打开/dev/ttyRPMSG0/1
+
+```c
+// dvr_engine.c - 主循环中新增:
+static time_t last_rpmsg_retry = 0;
+time_t now = time(NULL);
+if (!eng->rpmsg && (now - last_rpmsg_retry >= 5)) {
+    last_rpmsg_retry = now;
+    eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG0");
+    if (!eng->rpmsg) eng->rpmsg = rpmsg_channel_open("/dev/ttyRPMSG1");
+    if (eng->rpmsg)
+        printf("[DVR] RPMSG channel connected! (fd=%d)\n", rpmsg_channel_get_fd(eng->rpmsg));
+}
+```
+
+**踩坑记录**: 曾尝试"每5s强制关闭旧连接+开新连接"，导致fd在7/8之间乒乓跳转，
+数据在close时丢失。修正为"仅未连接时才重试"。
+
+### 端到端测试结果 — 全部通过 ✅
+
+**测试步骤**: 先启动DVR → 再重启M核 → 等待40秒观察日志
+
+**M核发送的4条命令** (间隔5秒):
+| # | 命令 | 时间 | A核响应 |
+|---|------|------|---------|
+| 1 | `TARGET_ON\n` | T+5s | IDLE→BUFFERING ✅ |
+| 2 | `WARNING\n` | T+10s | EMERGENCY(protected=0) ✅ |
+| 3 | `TARGET_OFF\n` | T+15s | save pending, keep buffer ✅ |
+| 4 | `TARGET_ON\n` | T+20s | 最后一条, 之后idle ✅ |
+
+**关键日志输出**:
+```
+[RPMSG] Received from M-core: TARGET_ON
+[DVR] >>> STATE: IDLE -> BUFFERING (target detected, circular recording)
+[RPMSG] Received from M-core: WARNING
+[DVR] >>> EMERGENCY triggered: WARNING (protected=0), buffering...
+[RPMSG] Received from M-core: TARGET_OFF
+[DVR] Target off but save pending, keeping buffer
+[RPMSG] Received from M-core: TARGET_ON
+[DVR] Saving clip: [1709060309, 1709060339] -> emergency_...WARNING.mp4
+[CLIP] Saved normal [1/3]: emergency_...WARNING.mp4 (WARNING)
+[DVR] >>> STATE: -> IDLE (no target, save done)
+[DVR] Saved 614 frames: emergency_...WARNING.mp4
+```
+
+**验证结果**:
+- ✅ M核恰好发4条命令后停止(不再无限循环)
+- ✅ WARNING类型正确识别为protected=0(非保护，可被覆盖)
+- ✅ 保存614帧(约20.5s有效数据)，ffmpeg异步编码完成
+- ✅ 片段进入clip_manager的3槽位FIFO管理
+- ✅ LCD实时显示不受影响(RGB565直接memcpy)
+
+### SD卡热插拔说明
+- **可以拔**: 进程不会崩溃，LCD继续显示，缓冲区继续工作(但不写盘)
+- **不推荐直接拔**: FAT32不支持安全热插拔，可能导致文件系统不一致
+- **推荐操作**: `pkill dvr; sync` 后再拔卡
+- 重新插入后自动恢复，RPMSG每5s自动重连
+
 ## 测试日期: 2026-05-03
 
 ## 异构通信集成 (M核 ↔ A核)
