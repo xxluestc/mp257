@@ -1,0 +1,68 @@
+/*
+ * MAX98357A 设备树配置参考
+ * 适用于 STM32MP257 开发板 (1GB DDR)
+ * 文件: stm32mp257d-atk-ddr-1GB.dts
+ */
+
+/ {
+    /* MAX98357A 虚拟codec - 无需I2C控制 */
+    max98357a_codec: max98357a {
+        compatible = "maxim,max98357a";
+        #sound-dai-cells = <0>;
+        status = "okay";
+    };
+
+    /* 音频子系统 - 使用simple-audio-card */
+    sound {
+        compatible = "simple-audio-card";
+        label = "MAX98357A-BoneConduction";
+        simple-audio-card,format = "i2s";
+        simple-audio-card,mclk-fs = <256>;
+
+        simple-audio-card,cpu {
+            sound-dai = <&sai1b>;
+            clocks = <&rcc CK_KER_SAI1>;
+            bitclock-master;
+            frame-master;
+            dai-tdm-slot-num = <2>;
+            dai-tdm-slot-width = <32>;
+        };
+
+        max98357a_dailink: simple-audio-card,codec {
+            sound-dai = <&max98357a_codec>;
+        };
+    };
+};
+
+/* SAI1B 引脚复用配置 */
+&pinctrl {
+    sai1b_max98357a_pins: sai1b-max98357a-0 {
+        pins {
+            pinmux = <STM32_PINMUX('D', 6, AF4)>,  /* SAI1_SCK_B (BCLK) */
+                     <STM32_PINMUX('D', 5, AF4)>,  /* SAI1_FS_B (LRCLK) */
+                     <STM32_PINMUX('D', 4, AF4)>;  /* SAI1_SD_B (DATA) */
+            slew-rate = <1>;
+            drive-push-pull;
+            bias-disable;
+        };
+    };
+};
+
+/* SAI1B 外设配置 */
+&sai1b {
+    pinctrl-names = "default";
+    pinctrl-0 = <&sai1b_max98357a_pins>;
+    clocks = <&rcc CK_KER_SAI1>;
+    clock-names = "sai_ck";
+    status = "okay";
+};
+
+/* 禁用ES8388 (原板载codec) */
+&es8388 {
+    status = "disabled";
+};
+
+/* 禁用SAI1A (原ES8388使用的子块) */
+&sai1a {
+    status = "disabled";
+};

@@ -1,0 +1,16 @@
+pcm.!default {
+    type softvol
+    slave.pcm "hw:0,0"
+    control {
+        name "PCM"
+        card 0
+    }
+    max_dB 0.0
+    min_dB -20.0
+    resolution 256
+}
+
+ctl.!default {
+    type hw
+    card 0
+}
