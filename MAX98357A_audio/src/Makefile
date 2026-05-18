@@ -1,5 +1,5 @@
 CROSS_COMPILE ?= aarch64-ostl-linux-
-CC = $(CROSS_COMPILE)gcc
+CC ?= $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -O2
 LDFLAGS = -lasound
 
