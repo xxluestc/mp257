@@ -9,7 +9,7 @@ typedef struct camera_ctx camera_ctx_t;
 camera_ctx_t *camera_open(const char *device, int width, int height, int fps);
 void         camera_close(camera_ctx_t *ctx);
 
-int  camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, time_t *ts);
+int  camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, int64_t *ts_us);
 int  camera_get_fd(const camera_ctx_t *ctx);
 int  camera_get_width(const camera_ctx_t *ctx);
 int  camera_get_height(const camera_ctx_t *ctx);

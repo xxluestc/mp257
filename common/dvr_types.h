@@ -4,6 +4,13 @@
 #include <stdint.h>
 #include <time.h>
 
+static inline int64_t dvr_time_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
 #define DVR_MAX_PATH        256
 #define DVR_DEFAULT_FPS     30
 #define DVR_DEFAULT_WIDTH   640
@@ -45,7 +52,7 @@ typedef struct {
     int      width;
     int      height;
     int      format;
-    time_t   timestamp;
+    int64_t  timestamp;
 } frame_t;
 
 typedef struct {

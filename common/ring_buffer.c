@@ -118,7 +118,7 @@ static void *write_thread_func(void *arg)
         rb->pending_count--;
 
         off_t offset = (off_t)(rb->head % rb->capacity) * rb->frame_size;
-        time_t ts = local_pf.timestamp;
+        int64_t t_us = local_pf.timestamp;
         int copy_size = local_pf.size;
 
         pthread_mutex_unlock(&rb->lock);
@@ -127,7 +127,7 @@ static void *write_thread_func(void *arg)
 
         pthread_mutex_lock(&rb->lock);
         if (n > 0) {
-            rb->index[rb->head % rb->capacity].timestamp = ts;
+            rb->index[rb->head % rb->capacity].timestamp = t_us;
             rb->index[rb->head % rb->capacity].offset    = offset;
             rb->head++;
             if (rb->count < rb->capacity) {
@@ -143,7 +143,7 @@ static void *write_thread_func(void *arg)
     return NULL;
 }
 
-int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, time_t ts)
+int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, int64_t timestamp_us)
 {
     if (!rb || !data) return -1;
 
@@ -158,7 +158,7 @@ int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, time_t ts
     int copy_size = size < rb->frame_size ? size : rb->frame_size;
     memcpy(rb->pending[slot].data, data, (size_t)copy_size);
     rb->pending[slot].size      = copy_size;
-    rb->pending[slot].timestamp = ts;
+    rb->pending[slot].timestamp = timestamp_us;
     rb->pending_tail           = (rb->pending_tail + 1) % PENDING_QUEUE_SIZE;
     rb->pending_count++;
 
@@ -168,7 +168,7 @@ int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, time_t ts
     return 0;
 }
 
-int ring_buffer_stream_range(ring_buffer_t *rb, time_t start, time_t end,
+int ring_buffer_stream_range(ring_buffer_t *rb, int64_t start, int64_t end,
                               int (*callback)(const frame_t *f, void *user),
                               void *user_data)
 {
@@ -183,7 +183,7 @@ int ring_buffer_stream_range(ring_buffer_t *rb, time_t start, time_t end,
         return -1;
     }
 
-    time_t first_ts = 0, last_ts = 0;
+    int64_t first_ts = 0, last_ts = 0;
 
     for (int i = 0; i < rb->count; i++) {
         int pos = (rb->tail + i) % rb->capacity;
@@ -209,8 +209,8 @@ int ring_buffer_stream_range(ring_buffer_t *rb, time_t start, time_t end,
 
     free(buf);
     pthread_mutex_unlock(&rb->lock);
-    printf("[RINGBUF] stream_range: buf=[%ld,%ld] query=[%ld,%ld] count=%d sent=%d\n",
-           (long)first_ts, (long)last_ts, (long)start, (long)end, rb->count, sent);
+    printf("[RINGBUF] stream_range: buf=[%lld,%lld] query=[%lld,%lld] count=%d sent=%d\n",
+           (long long)first_ts, (long long)last_ts, (long long)start, (long long)end, rb->count, sent);
     return sent;
 }
 

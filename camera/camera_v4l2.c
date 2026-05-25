@@ -1,4 +1,5 @@
 #include "camera_v4l2.h"
+#include "dvr_types.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -191,7 +192,7 @@ void camera_close(camera_ctx_t *ctx)
     printf("[CAMERA] Closed\n");
 }
 
-int camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, time_t *ts)
+int camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, int64_t *ts_us)
 {
     struct v4l2_buffer buf;
     memset(&buf, 0, sizeof(buf));
@@ -214,7 +215,7 @@ int camera_grab_frame(camera_ctx_t *ctx, uint8_t *buffer, int buf_size, time_t *
         memcpy(buffer, ctx->buffers[buf.index], copy_size);
     }
 
-    if (ts) *ts = time(NULL);
+    if (ts_us) *ts_us = dvr_time_us();
 
     if (ioctl(ctx->fd, VIDIOC_QBUF, &buf) < 0) {
         fprintf(stderr, "[CAMERA] VIDIOC_QBUF failed: %s\n", strerror(errno));

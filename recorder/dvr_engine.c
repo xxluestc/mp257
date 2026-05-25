@@ -30,6 +30,8 @@ struct dvr_engine {
     int              save_event;
     time_t           save_trigger_time;
     volatile int     sd_card_ok;
+    volatile pid_t   encoder_pid;
+    volatile int     encoder_running;
 };
 
 static void on_trigger(const trigger_data_t *data, void *user_data);
@@ -185,24 +187,36 @@ void dvr_engine_destroy(dvr_engine_t *eng)
     free(eng);
 }
 
+typedef struct {
+    off_t   offset;
+    int64_t timestamp_us;
+} frame_info_t;
+
+static int frame_cmp_by_ts(const void *a, const void *b)
+{
+    int64_t diff = ((const frame_info_t *)a)->timestamp_us - ((const frame_info_t *)b)->timestamp_us;
+    return (diff > 0) - (diff < 0);
+}
+
 static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_time,
                             const char *filename, clip_type_t ctype)
 {
     ring_buffer_t *rb = eng->ring_buf;
     int max_frames = rb->capacity;
-    off_t *offsets = malloc((size_t)max_frames * sizeof(off_t));
-    if (!offsets) return -1;
+    frame_info_t *frames = malloc((size_t)max_frames * sizeof(frame_info_t));
+    if (!frames) return -1;
 
-    printf("[DVR] Pausing write thread for safe file read...\n");
-    ring_buffer_pause_writing(rb);
+    int64_t start_us = (int64_t)start_time * 1000000;
+    int64_t end_us   = (int64_t)end_time * 1000000 + 999999;
 
-    int frame_count = 0;
     pthread_mutex_lock(&rb->lock);
+    int frame_count = 0;
     for (int i = 0; i < rb->count; i++) {
         int pos = (rb->tail + i) % rb->capacity;
-        if (rb->index[pos].timestamp >= start_time &&
-            rb->index[pos].timestamp <= end_time) {
-            offsets[frame_count] = rb->index[pos].offset;
+        if (rb->index[pos].timestamp >= start_us &&
+            rb->index[pos].timestamp <= end_us) {
+            frames[frame_count].offset       = rb->index[pos].offset;
+            frames[frame_count].timestamp_us = rb->index[pos].timestamp;
             frame_count++;
         }
     }
@@ -214,27 +228,47 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
 
     if (frame_count == 0) {
         printf("[DVR] No frames in range [%ld, %ld]\n", (long)start_time, (long)end_time);
-        free(offsets);
-        ring_buffer_resume_writing(rb);
+        free(frames);
         return 0;
     }
+
+    double window_sec = difftime(end_time, start_time);
+    if (window_sec <= 0.0) window_sec = 30.0;
+    int fps_for_ffmpeg = (int)((double)frame_count / window_sec + 0.5);
+    if (fps_for_ffmpeg < 1) fps_for_ffmpeg = 1;
+    if (fps_for_ffmpeg > 60) fps_for_ffmpeg = 60;
+
+    pthread_mutex_lock(&rb->lock);
+    rb->paused = 1;
+    pthread_cond_signal(&rb->write_cond);
+    int drain_cycles = 0;
+    while (rb->pending_count > 0 && drain_cycles < 50) {
+        pthread_mutex_unlock(&rb->lock);
+        usleep(2000);
+        pthread_mutex_lock(&rb->lock);
+        drain_cycles++;
+    }
+    pthread_mutex_unlock(&rb->lock);
 
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "[DVR] fork failed: %s\n", strerror(errno));
-        free(offsets);
-        ring_buffer_resume_writing(rb);
+        free(frames);
         return -1;
     }
 
     if (pid == 0) {
-        int fd = open(filepath, O_RDONLY);
-        if (fd < 0) { free(offsets); _exit(1); }
+        usleep(50000);
+        fsync(rb->fd);
 
-        double duration_sec = difftime(end_time, start_time);
-        int fps_for_ffmpeg = (duration_sec > 0) ? (int)((double)frame_count / duration_sec + 0.5) : eng->config.fps;
-        if (fps_for_ffmpeg < 1) fps_for_ffmpeg = 1;
-        if (fps_for_ffmpeg > 60) fps_for_ffmpeg = 60;
+        qsort(frames, (size_t)frame_count, sizeof(frame_info_t), frame_cmp_by_ts);
+
+        int64_t first_ts = frames[0].timestamp_us;
+        int64_t last_ts  = frames[frame_count - 1].timestamp_us;
+        double actual_dur = (double)(last_ts - first_ts) / 1000000.0;
+
+        printf("[DVR] Frames=%d, window=%.1fs, actual=%.2fs, fps=%d\n",
+               frame_count, window_sec, actual_dur, fps_for_ffmpeg);
 
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
@@ -242,50 +276,52 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
                  "-vsync cfr -c:v mpeg4 -q:v 5 -pix_fmt yuv420p %s 2>/dev/null",
                  eng->config.width, eng->config.height, fps_for_ffmpeg, filename);
 
-        FILE *ffmpeg = popen(cmd, "w");
-        if (!ffmpeg) { close(fd); free(offsets); _exit(1); }
+        int fd = open(filepath, O_RDONLY);
+        FILE *ffmpeg_pipe = popen(cmd, "w");
+        if (fd < 0 || !ffmpeg_pipe) {
+            fprintf(stderr, "[DVR] Child: open(%s)=%d popen=%p (%s)\n",
+                    filepath, fd, (void*)ffmpeg_pipe, fd < 0 ? strerror(errno) : "popen failed");
+            if (fd >= 0) close(fd);
+            if (ffmpeg_pipe) pclose(ffmpeg_pipe);
+            free(frames);
+            exit(1);
+        }
 
         uint8_t *buf = malloc((size_t)frame_size);
-        if (!buf) { close(fd); pclose(ffmpeg); free(offsets); _exit(1); }
-
-        int off_cmp(const void *a, const void *b) {
-            off_t diff = *(const off_t *)a - *(const off_t *)b;
-            return (diff > 0) - (diff < 0);
-        }
-        qsort(offsets, (size_t)frame_count, sizeof(off_t), off_cmp);
+        if (!buf) { close(fd); pclose(ffmpeg_pipe); free(frames); exit(1); }
 
         int sent = 0;
-        off_t last_off = -1;
         for (int i = 0; i < frame_count; i++) {
-            ssize_t n;
-            if (offsets[i] == last_off + frame_size) {
-                n = read(fd, buf, (size_t)frame_size);
-            } else {
-                n = pread(fd, buf, (size_t)frame_size, offsets[i]);
-            }
-            last_off = offsets[i];
+            ssize_t n = pread(fd, buf, (size_t)frame_size, frames[i].offset);
             if (n <= 0) continue;
-            size_t written = fwrite(buf, 1, (size_t)n, ffmpeg);
+            size_t written = fwrite(buf, 1, (size_t)n, ffmpeg_pipe);
             if (written != (size_t)n) break;
             sent++;
         }
 
         free(buf);
-        free(offsets);
+        free(frames);
         close(fd);
-        int ret = pclose(ffmpeg);
+        int ret = pclose(ffmpeg_pipe);
 
         if (ret != 0) {
             fprintf(stderr, "[DVR] ffmpeg failed with code %d\n", ret);
         } else {
             printf("[DVR] Saved %d frames: %s\n", sent, filename);
         }
-        _exit(0);
+
+        exit(ret != 0 ? 1 : 0);
     }
 
-    free(offsets);
-    ring_buffer_resume_writing(rb);
-    printf("[DVR] Write thread resumed, ffmpeg encoding in background (pid=%d)\n", pid);
+    pthread_mutex_lock(&rb->lock);
+    rb->paused = 1;
+    pthread_cond_signal(&rb->write_cond);
+    pthread_mutex_unlock(&rb->lock);
+
+    eng->encoder_pid = pid;
+    eng->encoder_running = 1;
+
+    free(frames);
 
     clip_manager_add(&eng->clips, filename, ctype);
 
@@ -394,10 +430,23 @@ int dvr_engine_run(dvr_engine_t *eng)
             break;
         }
 
-        while (waitpid(-1, NULL, WNOHANG) > 0);
+        {
+            int status;
+            pid_t reaped;
+            while ((reaped = waitpid(-1, &status, WNOHANG)) > 0) {
+                if (eng->encoder_running && reaped == eng->encoder_pid) {
+                    eng->encoder_running = 0;
+                    pthread_mutex_lock(&eng->ring_buf->lock);
+                    eng->ring_buf->paused = 0;
+                    pthread_cond_signal(&eng->ring_buf->write_cond);
+                    pthread_mutex_unlock(&eng->ring_buf->lock);
+                    printf("[DVR] Encoder finished, write thread resumed\n");
+                }
+            }
+        }
 
         if (FD_ISSET(cam_fd, &fds)) {
-            time_t ts;
+            int64_t ts;
             int size = camera_grab_frame(eng->camera, frame_buf, frame_size, &ts);
             if (size > 0) {
                 if (eng->display) {

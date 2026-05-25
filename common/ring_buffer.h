@@ -6,14 +6,14 @@
 #include <sys/types.h>
 
 typedef struct {
-    time_t timestamp;
-    off_t  offset;
+    int64_t timestamp;
+    off_t   offset;
 } frame_index_t;
 
 typedef struct {
     uint8_t *data;
     int      size;
-    time_t   timestamp;
+    int64_t  timestamp;
 } pending_frame_t;
 
 #define PENDING_QUEUE_SIZE 16
@@ -45,9 +45,9 @@ ring_buffer_t *ring_buffer_create(int capacity_seconds, int fps,
 void           ring_buffer_set_frame_size(ring_buffer_t *rb, int frame_size);
 void           ring_buffer_destroy(ring_buffer_t *rb);
 int            ring_buffer_push(ring_buffer_t *rb, const uint8_t *data,
-                                int size, time_t ts);
-int            ring_buffer_stream_range(ring_buffer_t *rb, time_t start,
-                                        time_t end,
+                                int size, int64_t timestamp_us);
+int            ring_buffer_stream_range(ring_buffer_t *rb, int64_t start,
+                                        int64_t end,
                                         int (*callback)(const frame_t *f, void *user),
                                         void *user);
 int            ring_buffer_count(const ring_buffer_t *rb);
