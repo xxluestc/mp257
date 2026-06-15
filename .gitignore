@@ -5,3 +5,4 @@ A_Core/*.d
 *.o
 *.d
 build/
+mier/radar/radar_init
