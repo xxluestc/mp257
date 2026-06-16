@@ -125,34 +125,6 @@
 			phandle = <0xc2>;
 		};
 
-		max98357a_codec: max98357a {
-			compatible = "maxim,max98357a";
-			#sound-dai-cells = <0x00>;
-			status = "okay";
-			phandle = <0x501>;
-		};
-
-		sound {
-			compatible = "simple-audio-card";
-			label = "MAX98357A";
-			simple-audio-card,format = "i2s";
-			simple-audio-card,mclk-fs = <0x100>;
-
-			simple-audio-card,cpu {
-				sound-dai = <0x10b>;
-				clocks = <0x16 0x11e>;
-				bitclock-master;
-				frame-master;
-				dai-tdm-slot-num = <0x02>;
-				dai-tdm-slot-width = <0x20>;
-			};
-
-			simple-audio-card,codec {
-				sound-dai = <0x501>;
-			};
-		};
-
-
 		clk-ext-phy1 {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
@@ -172,6 +144,32 @@
 			compatible = "fixed-clock";
 			clock-frequency = <0x17d7840>;
 			phandle = <0xc3>;
+		};
+	};
+
+	max98357a_codec: max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0x00>;
+		status = "okay";
+		phandle = <0x501>;
+	};
+
+	sound {
+		compatible = "simple-audio-card";
+		label = "MAX98357A";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <0x100>;
+
+		simple-audio-card,cpu {
+			sound-dai = <0x10b>;
+			bitclock-master;
+			frame-master;
+			dai-tdm-slot-num = <0x02>;
+			dai-tdm-slot-width = <0x20>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <0x501>;
 		};
 	};
 
@@ -1935,19 +1933,19 @@
 				};
 
 				audio-controller@40340024 {
-					compatible = "st,stm32-sai-sub-b";
-					reg = <0x24 0x20>;
-					#sound-dai-cells = <0x00>;
-					clocks = <0x16 0x11e>;
-					clock-names = "sai_ck";
-					dmas = <0x1c 0x50 0x43 0x12>;
-					dma-names = "rx";
-					power-domains = <0x0c>;
-					status = "okay";
-					pinctrl-names = "default";
-					pinctrl-0 = <0x500>;
-					phandle = <0x10b>;
-					};
+				compatible = "st,stm32-sai-sub-b";
+				reg = <0x24 0x20>;
+				#sound-dai-cells = <0x00>;
+				clocks = <0x16 0x11e>;
+				clock-names = "sai_ck";
+					dmas = <0x1c 0x50 0x43 0x21>;
+				dma-names = "tx";
+				power-domains = <0x0c>;
+				status = "okay";
+				pinctrl-names = "default";
+				pinctrl-0 = <0x500>;
+				phandle = <0x10b>;
+			};
 			};
 
 			spi@40350000 {
@@ -5644,8 +5642,8 @@
 			phandle = <0x18>;
 		};
 
-		hpdma2-lli@a02f0f0 {
-			reg = <0x00 0xa02f0f0 0x00 0xf0f0>;
+		hpdma2-lli@a030000 {
+			reg = <0x00 0xa030000 0x00 0xe000>;
 			no-map;
 			phandle = <0x19>;
 		};
@@ -6221,7 +6219,7 @@
 		usdhc1_pwrseq = "/usdhc1_pwrseq";
 		tfa_bl31 = "/reserved-memory/tfa-bl31@a000000";
 		hpdma1_lli = "/reserved-memory/hpdma1-lli@a020000";
-		hpdma2_lli = "/reserved-memory/hpdma2-lli@a02f0f0";
+		hpdma2_lli = "/reserved-memory/hpdma2-lli@a030000";
 		hpdma3_lli = "/reserved-memory/hpdma3-lli@a03e1e0";
 		bsec_mirror = "/reserved-memory/bsec-mirror@a040000";
 		cm33_sram1 = "/reserved-memory/cm33-sram1@a041000";

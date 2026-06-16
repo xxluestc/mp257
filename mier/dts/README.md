@@ -7,22 +7,24 @@
 - **开发板 IP**: `192.168.88.10`
 - **SSH 用户**: `root` (免密登录)
 
+> **重要教训**: 必须从开发板原始dtb反编译修改，**不能使用内核源码中的dts**。内核源码dts的保留内存地址与开发板实际镜像不一致，会导致启动失败或DMA异常。
+
 ## 编译方法
 
 ### 1. 反编译 dtb → dts
 
 ```bash
 # 从开发板拷贝设备树到虚拟机
-scp root@192.168.88.10:/boot/myb-stm32mp257x-2GB.dtb /tmp/
+scp root@192.168.88.10:/boot/myb-stm32mp257x-2GB.dtb /tmp/board.dtb
 
 # 反编译为 dts
-dtc -I dtb -O dts /tmp/myb-stm32mp257x-2GB.dtb -o /tmp/myb-stm32mp257x-2GB.dts
+dtc -I dtb -O dts /tmp/board.dtb -o /tmp/board.dts
 ```
 
 ### 2. 修改 dts 后编译回 dtb
 
 ```bash
-dtc -I dts -O dtb /tmp/myb-stm32mp257x-2GB.dts -o /tmp/myb-stm32mp257x-2GB.dtb
+dtc -I dts -O dtb /tmp/board.dts -o /tmp/board_new.dtb
 ```
 
 > 编译时会出现大量 `phandle reference` / `power_domains` / `resets` 等 Warning，这是 dtb↔dts 反编译再编译的正常现象，不影响功能。
@@ -34,35 +36,35 @@ dtc -I dts -O dtb /tmp/myb-stm32mp257x-2GB.dts -o /tmp/myb-stm32mp257x-2GB.dtb
 ssh root@192.168.88.10 'cp /boot/myb-stm32mp257x-2GB.dtb /boot/myb-stm32mp257x-2GB.dtb.bak.$(date +%Y%m%d%H%M%S)'
 
 # 上传新 dtb
-scp /tmp/myb-stm32mp257x-2GB.dtb root@192.168.88.10:/boot/myb-stm32mp257x-2GB.dtb
+scp /tmp/board_new.dtb root@192.168.88.10:/boot/myb-stm32mp257x-2GB.dtb
 
 # 重启生效
-ssh root@192.168.88.10 'reboot'
+ssh root@192.168.88.10 'sync; reboot'
 ```
 
 ## 修改内容汇总
 
-### 修改 1: 禁用 UART4（释放 PB6、PD11）
+### 修改 1: 禁用 UART4（释放 PB6）
 
 - **节点**: `serial@40100000` (UART4)
 - **修改**: `status = "disabled"`
 - **释放引脚**:
-  - PB6 (原 UART4_TX, AF4)
-  - PD11 (原 UART4_RX, AF5)
+  - PB6 (原 UART4_RX, AF3)
 
 ### 修改 2: 禁用 I2C2（释放 PB4、PB5）
 
 - **节点**: `i2c@40130000` (I2C2)
 - **修改**: `status = "disabled"`
 - **释放引脚**:
-  - PB4 (原 I2C2_SDA, AF10)
-  - PB5 (原 I2C2_SCL, AF10)
+  - PB4 (原 I2C2_SDA)
+  - PB5 (原 I2C2_SCL)
 - **副作用**: I2C2 上的 eeprom@50、es8328@10 (ES8388)、stusb1600@28 均不可用
 
-### 修改 3: 禁用 ES8388 Codec
+### 修改 3: 禁用 ES8388 相关节点
 
-- **节点**: `es8328@10`
+- **节点**: `ES8388-Sound`
 - **修改**: `status = "disabled"`
+- **说明**: `es8328@10` 节点因父节点 `i2c@40130000` 已禁用，无需单独修改
 
 ### 修改 4: 新增 SAI4B 引脚配置（接 MAX98357A 功放）
 
@@ -70,23 +72,32 @@ ssh root@192.168.88.10 'reboot'
 - **引脚分配**:
   | 引脚 | pinmux | 功能 | 接功放 |
   |------|--------|------|--------|
-  | PB4 | `0x1404` | SAI4_FS_B (AF4) | I2S 帧时钟 (LRCLK) |
-  | PB5 | `0x1504` | SAI4_SD_B (AF4) | I2S 数据 |
-  | PB6 | `0x1604` | SAI4_SCK_B (AF4) | BCLK 位时钟 |
+  | PB4 | `0x1405` | SAI4_FS_B (AF4) | I2S 帧时钟 (LRCLK) |
+  | PB5 | `0x1505` | SAI4_SD_B (AF4) | I2S 数据 |
+  | PB6 | `0x1605` | SAI4_SCK_B (AF4) | BCLK 位时钟 |
+
+> **注意**: `AF4` 在 `stm32-pinfunc.h` 中对应数值为 `0x05`，不是 `0x04`。`0x04` 对应的是 `AF3`。
 
 ### 修改 5: 启用 SAI4 / SAI4B
 
 - **节点**: `sai@40340000` (SAI4)
   - `status = "okay"`
+  - `pinctrl-names = "default"`
+  - `pinctrl-0 = <0x500>` (引用 sai4b-0)
+  - **注意**: pinctrl 必须在 **父节点** (sai@40340000) 上配置，不能放在子节点 (audio-controller@40340024)
+
 - **子节点**: `audio-controller@40340024` (SAI4B)
   - `status = "okay"`
-  - `pinctrl-0 = <0x500>` (引用 sai4b-0)
+  - `dma-names = "tx"`
+  - `dmas = <&hpdma 80 0x43 0x21>` (使用 dma0 / hpdma)
+  - `dai-tdm-slot-num = <2>`
+  - `dai-tdm-slot-width = <32>`
 
 ### 修改 6: 新增 MAX98357A 音频子系统
 
 - **新增 Codec 节点** (`/` 根节点下):
   ```dts
-  max98357a_codec: max98357a {
+  max98357a {
       compatible = "maxim,max98357a";
       #sound-dai-cells = <0>;
       status = "okay";
@@ -103,7 +114,6 @@ ssh root@192.168.88.10 'reboot'
 
       simple-audio-card,cpu {
           sound-dai = <&sai4b>;
-          clocks = <&rcc CK_KER_SAI4>;
           bitclock-master;
           frame-master;
           dai-tdm-slot-num = <2>;
@@ -111,32 +121,47 @@ ssh root@192.168.88.10 'reboot'
       };
 
       simple-audio-card,codec {
-          sound-dai = <&max98357a_codec>;
+          sound-dai = <&max98357a>;
       };
   };
   ```
-
-### 修改 7: I2C3 引脚改为 PG1/PG2 AF9（SCL/SDA 互换）
-
-- **节点**: `i2c3-0` / `i2c3-sleep-0`
-- **原配置**:
-  - `pinmux = <0x610a 0x620a>` (PG1=AF10-SCL, PG2=AF10-SDA)
-- **新配置**:
-  - `pinmux = <0x6209 0x6109>` (PG2=AF9-SCL, PG1=AF9-SDA)
-- **时序参数**改为与原 I2C2 一致:
-  - `i2c-scl-rising-time-ns = <0x64>` (100ns)
-  - `i2c-scl-falling-time-ns = <0x0d>` (13ns)
 
 ## 引脚变更总览
 
 | 引脚 | 原功能 | 新功能 |
 |------|--------|--------|
-| PB4 | I2C2_SDA (AF10) | SAI4_FS_B (AF4) |
-| PB5 | I2C2_SCL (AF10) | SAI4_SD_B (AF4) |
-| PB6 | UART4_TX (AF4) | SAI4_SCK_B (AF4) |
-| PD11 | UART4_RX (AF5) | 释放为 GPIO |
-| PG1 | I2C3_SCL (AF10) | I2C3_SDA (AF9) |
-| PG2 | I2C3_SDA (AF10) | I2C3_SCL (AF9) |
+| PB4 | I2C2_SDA | SAI4_FS_B (AF4) |
+| PB5 | I2C2_SCL | SAI4_SD_B (AF4) |
+| PB6 | UART4_RX (AF3) | SAI4_SCK_B (AF4) |
+
+## 关键踩坑记录
+
+| # | 问题 | 根因 | 解决方案 |
+|---|------|------|---------|
+| 1 | Input/output error，DMA中断为0 | pinmux值错误，`AF4`写成了`0x04`（实际应为`0x05`） | 修正为 `0x1405/0x1505/0x1605` |
+| 2 | pinctrl未生效 | 把 `pinctrl-0` 放在了 `sai4b` 子节点上 | 移到 `sai@40340000` 父节点 |
+| 3 | DMA传输失败 | 曾尝试使用 `dma1`，CID不匹配导致请求被过滤 | 使用 `dma0` (`hpdma`) |
+| 4 | 开发板启动失败/变砖 | 使用内核源码dts编译，保留内存地址与镜像不匹配 | **必须用开发板原始dtb反编译修改** |
+
+## 测试验证
+
+```bash
+# 检查声卡注册
+cat /proc/asound/cards
+# 应显示: 0 [MAX98357A]: simple-card - MAX98357A
+
+# 检查引脚复用
+cat /sys/kernel/debug/pinctrl/pinctrl-maps | grep -A2 -B2 "40340000"
+# 应显示 function af4
+
+# 检查DMA中断
+cat /proc/interrupts | grep dma0chan10
+# 播放时中断计数应持续增加
+
+# 播放测试
+aplay -D hw:0,0 /xxl/audio/assets/xxl_test.wav
+speaker-test -D hw:0,0 -c 2 -t sine -f 1000
+```
 
 ## 文件位置
 
