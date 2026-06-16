@@ -126,6 +126,14 @@ ssh root@192.168.88.10 'sync; reboot'
   };
   ```
 
+### 修改 7: 禁用 FDCAN1（释放 PB11 为 GPIO）
+
+- **节点**: `can@402d0000` (FDCAN1)
+- **修改**: `status = "disabled"`
+- **释放引脚**:
+  - PB11 (原 FDCAN1_RX, AF8) → 用作 GPIO 控制 MAX98357A 的 SD_MODE
+  - PB9 (原 FDCAN1_TX, AF8) → 同步释放为 GPIO
+
 ## 引脚变更总览
 
 | 引脚 | 原功能 | 新功能 |
@@ -133,6 +141,7 @@ ssh root@192.168.88.10 'sync; reboot'
 | PB4 | I2C2_SDA | SAI4_FS_B (AF4) |
 | PB5 | I2C2_SCL | SAI4_SD_B (AF4) |
 | PB6 | UART4_RX (AF3) | SAI4_SCK_B (AF4) |
+| PB11 | FDCAN1_RX (AF8) | GPIO 控制 MAX98357A SD_MODE |
 
 ## 关键踩坑记录
 
@@ -142,6 +151,7 @@ ssh root@192.168.88.10 'sync; reboot'
 | 2 | pinctrl未生效 | 把 `pinctrl-0` 放在了 `sai4b` 子节点上 | 移到 `sai@40340000` 父节点 |
 | 3 | DMA传输失败 | 曾尝试使用 `dma1`，CID不匹配导致请求被过滤 | 使用 `dma0` (`hpdma`) |
 | 4 | 开发板启动失败/变砖 | 使用内核源码dts编译，保留内存地址与镜像不匹配 | **必须用开发板原始dtb反编译修改** |
+| 5 | GAIN增益选择困惑 | 不清楚不同dB对应的放大倍数 | 悬空=9dB（推荐），接VDD=6dB，接GND=12dB |
 
 ## 测试验证
 

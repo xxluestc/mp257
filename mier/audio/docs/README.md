@@ -10,8 +10,8 @@
 | SAI4_FS_B | PB4 | AF4，帧同步 |
 | SAI4_SD_B | PB5 | AF4，数据输出 |
 | SAI4_SCK_B | PB6 | AF4，位时钟 |
-| SD_MODE | 接 VDD (3.3V/5V) | 高电平使能，接GND=关机 |
-| GAIN | 接 VDD | 6dB增益（可串100kΩ降为3dB） |
+| SD_MODE | **PB11** | GPIO 输出高电平使能，低电平=关机 |
+| GAIN | **悬空** | 默认 9dB 增益（推荐） |
 
 ## 设备树修改 (基于原始dtb反编译修改)
 
@@ -84,7 +84,14 @@
    };
    ```
 
-6. **禁用 ES8388 相关节点**
+6. **禁用 FDCAN1（释放 PB11 为 GPIO）**
+   ```dts
+   can@402d0000 {
+       status = "disabled";
+   };
+   ```
+
+7. **禁用 ES8388 相关节点**
    ```dts
    ES8388-Sound { status = "disabled"; };
    /* i2c@40130000 下的 es8328@10 状态因 i2c disabled 已失效 */
@@ -158,15 +165,36 @@ cat /sys/kernel/debug/pinctrl/pinctrl-maps | grep -A2 -B2 "40340000"
 # 应显示 function af4 (不是 af3)
 ```
 
-### 3. 检查DMA通道
+### 3. 检查PB11是否释放为GPIO
+```bash
+cat /sys/kernel/debug/pinctrl/pinctrl-maps | grep -i fdcan1
+# 应无输出（FDCAN1已禁用）
+gpioinfo | grep PB11
+# 应显示 line 11: "PB11" input
+```
+
+### 4. 控制功放使能（SD_MODE接PB11）
+```bash
+# 拉高 PB11 使能功放
+gpioset -c gpiochip1 11=1 &
+
+# 拉低 PB11 关闭功放
+killall gpioset
+gpioset -c gpiochip1 11=0 &
+```
+
+### 5. 检查DMA通道
 ```bash
 cat /sys/kernel/debug/dmaengine/summary | grep sai
 cat /proc/interrupts | grep dma0chan10
 # 播放时中断计数应增加
 ```
 
-### 4. 播放测试
+### 6. 播放测试
 ```bash
+# 先使能功放
+gpioset -c gpiochip1 11=1 &
+
 # 使用系统aplay
 aplay -D hw:0,0 /xxl/audio/assets/xxl_test.wav
 
@@ -177,7 +205,7 @@ aplay -D hw:0,0 /xxl/audio/assets/xxl_test.wav
 speaker-test -D hw:0,0 -c 2 -t sine -f 1000
 ```
 
-### 5. 调节音量
+### 7. 调节音量
 ```bash
 amixer -c 0 sset PCM 100%   # 最大
 amixer -c 0 sset PCM 50%    # 中等

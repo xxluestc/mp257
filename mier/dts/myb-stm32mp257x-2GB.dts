@@ -92,7 +92,7 @@
 		arm,smc-id = <0xbc000000>;
 		status = "okay";
 		timeout-sec = <0x20>;
-		phandle = <0xc0>;
+		phandle = <0xc4>;
 	};
 
 	clocks {
@@ -101,75 +101,49 @@
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x3d09000>;
-			phandle = <0x51>;
+			phandle = <0x53>;
 		};
 
 		clk-ext-camera {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x16e3600>;
-			phandle = <0x5a>;
+			phandle = <0x5c>;
 		};
 
 		pad-clk {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x5f5e100>;
-			phandle = <0xc1>;
+			phandle = <0xc5>;
 		};
 
 		clk-ext-sound {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0xac4400>;
-			phandle = <0xc2>;
+			phandle = <0xc6>;
 		};
 
 		clk-ext-phy1 {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x17d7840>;
-			phandle = <0x79>;
+			phandle = <0x7b>;
 		};
 
 		clk-ext-phy2 {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x17d7840>;
-			phandle = <0x8b>;
+			phandle = <0x8f>;
 		};
 
 		clk-ext-phy3 {
 			#clock-cells = <0x00>;
 			compatible = "fixed-clock";
 			clock-frequency = <0x17d7840>;
-			phandle = <0xc3>;
-		};
-	};
-
-	max98357a_codec: max98357a {
-		compatible = "maxim,max98357a";
-		#sound-dai-cells = <0x00>;
-		status = "okay";
-		phandle = <0x501>;
-	};
-
-	sound {
-		compatible = "simple-audio-card";
-		label = "MAX98357A";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <0x100>;
-
-		simple-audio-card,cpu {
-			sound-dai = <0x10b>;
-			bitclock-master;
-			frame-master;
-			dai-tdm-slot-num = <0x02>;
-			dai-tdm-slot-width = <0x20>;
-		};
-
-		simple-audio-card,codec {
-			sound-dai = <0x501>;
+			phandle = <0xc7>;
 		};
 	};
 
@@ -178,7 +152,7 @@
 		clocks = <0x07 0x78>;
 		clock-names = "apb_pclk";
 		status = "okay";
-		phandle = <0xc4>;
+		phandle = <0xc8>;
 
 		in-ports {
 
@@ -186,7 +160,7 @@
 
 				endpoint {
 					remote-endpoint = <0x08>;
-					phandle = <0x9d>;
+					phandle = <0xa1>;
 				};
 			};
 		};
@@ -200,7 +174,7 @@
 
 				endpoint {
 					remote-endpoint = <0x09>;
-					phandle = <0x9e>;
+					phandle = <0xa2>;
 				};
 			};
 
@@ -209,7 +183,7 @@
 
 				endpoint {
 					remote-endpoint = <0x0a>;
-					phandle = <0x9f>;
+					phandle = <0xa3>;
 				};
 			};
 		};
@@ -224,7 +198,7 @@
 			interrupts = <0x01 0x0f 0x308>;
 			interrupt-controller;
 			#interrupt-cells = <0x01>;
-			phandle = <0xc5>;
+			phandle = <0xc9>;
 		};
 
 		scmi {
@@ -232,12 +206,12 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			linaro,optee-channel-id = <0x00>;
-			phandle = <0xc6>;
+			phandle = <0xca>;
 
 			protocol@11 {
 				reg = <0x11>;
 				#power-domain-cells = <0x01>;
-				phandle = <0x90>;
+				phandle = <0x94>;
 			};
 
 			protocol@13 {
@@ -260,73 +234,73 @@
 
 			protocol@17 {
 				reg = <0x17>;
-				phandle = <0xc7>;
+				phandle = <0xcb>;
 
 				regulators {
 					#address-cells = <0x01>;
 					#size-cells = <0x00>;
-					phandle = <0xc8>;
+					phandle = <0xcc>;
 
 					regulator@0 {
 						reg = <0x00>;
 						regulator-name = "vddio1";
 						regulator-min-microvolt = <0x325aa0>;
 						regulator-max-microvolt = <0x325aa0>;
-						phandle = <0x69>;
+						phandle = <0x6b>;
 					};
 
 					regulator@1 {
 						reg = <0x01>;
 						regulator-name = "vddio2";
-						phandle = <0x70>;
+						phandle = <0x72>;
 					};
 
 					regulator@2 {
 						reg = <0x02>;
 						regulator-name = "vddio3";
-						phandle = <0xc9>;
+						phandle = <0xcd>;
 					};
 
 					regulator@3 {
 						reg = <0x03>;
 						regulator-name = "vddio4";
-						phandle = <0xca>;
+						phandle = <0xce>;
 					};
 
 					regulator@5 {
 						reg = <0x05>;
 						regulator-name = "vdd33ucpd";
-						phandle = <0xcb>;
+						phandle = <0xcf>;
 					};
 
 					regulator@7 {
 						reg = <0x07>;
 						regulator-name = "vdda18adc";
-						phandle = <0xcc>;
+						phandle = <0xd0>;
 					};
 
 					regulator@11 {
 						reg = <0x0b>;
 						regulator-name = "vddcore";
-						phandle = <0x61>;
+						phandle = <0x63>;
 					};
 
 					regulator@14 {
 						reg = <0x0e>;
 						regulator-name = "v1v8";
-						phandle = <0x4d>;
+						phandle = <0x4f>;
 					};
 
 					regulator@16 {
 						reg = <0x10>;
 						regulator-name = "v3v3";
-						phandle = <0x74>;
+						phandle = <0x76>;
 					};
 
 					regulator@18 {
 						reg = <0x12>;
 						regulator-name = "vdd_emmc";
-						phandle = <0x6f>;
+						phandle = <0x71>;
 					};
 
 					regulator@20 {
@@ -338,7 +312,7 @@
 					regulator@23 {
 						reg = <0x17>;
 						regulator-name = "vdd_sdcard";
-						phandle = <0x68>;
+						phandle = <0x6a>;
 					};
 				};
 			};
@@ -361,7 +335,7 @@
 			compatible = "arm,gic-v2m-frame";
 			reg = <0x00 0x48090000 0x00 0x1000>;
 			msi-controller;
-			phandle = <0x84>;
+			phandle = <0x86>;
 		};
 	};
 
@@ -473,7 +447,7 @@
 		resets = <0x16 0x3f>;
 		status = "okay";
 		vdd33-supply = <0x17>;
-		phandle = <0x7f>;
+		phandle = <0x81>;
 	};
 
 	usb2-phy2 {
@@ -485,7 +459,7 @@
 		resets = <0x16 0x40>;
 		status = "okay";
 		vdd33-supply = <0x17>;
-		phandle = <0x81>;
+		phandle = <0x83>;
 	};
 
 	soc@0 {
@@ -516,7 +490,7 @@
 			#dma-cells = <0x03>;
 			st,axi-max-burst-len = <0x10>;
 			memory-region = <0x19>;
-			phandle = <0xcd>;
+			phandle = <0xd1>;
 		};
 
 		dma-controller@40420000 {
@@ -528,7 +502,7 @@
 			#dma-cells = <0x03>;
 			st,axi-max-burst-len = <0x10>;
 			memory-region = <0x1a>;
-			phandle = <0xce>;
+			phandle = <0xd2>;
 		};
 
 		mailbox@40490000 {
@@ -540,7 +514,7 @@
 			interrupt-names = "rx\0tx";
 			clocks = <0x07 0x69>;
 			status = "okay";
-			phandle = <0xac>;
+			phandle = <0xb0>;
 		};
 
 		ommanager@40500000 {
@@ -556,7 +530,7 @@
 			power-domains = <0x0c>;
 			status = "disabled";
 			ranges = <0x00 0x00 0x40430000 0x400 0x01 0x00 0x40440000 0x400>;
-			phandle = <0xcf>;
+			phandle = <0xd3>;
 
 			spi@40430000 {
 				compatible = "st,stm32mp25-omi";
@@ -570,7 +544,7 @@
 				access-controllers = <0x1b 0x4a>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd0>;
+				phandle = <0xd4>;
 			};
 
 			spi@40440000 {
@@ -585,7 +559,7 @@
 				access-controllers = <0x1b 0x4b>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd1>;
+				phandle = <0xd5>;
 			};
 		};
 
@@ -611,7 +585,7 @@
 				access-controllers = <0x1b 0x01>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd2>;
+				phandle = <0xd6>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -643,7 +617,7 @@
 				access-controllers = <0x1b 0x02>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd3>;
+				phandle = <0xd7>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -675,7 +649,7 @@
 				access-controllers = <0x1b 0x03>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd4>;
+				phandle = <0xd8>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -707,7 +681,7 @@
 				access-controllers = <0x1b 0x04>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd5>;
+				phandle = <0xd9>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -739,7 +713,7 @@
 				access-controllers = <0x1b 0x05>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd6>;
+				phandle = <0xda>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -765,7 +739,7 @@
 				access-controllers = <0x1b 0x06>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd7>;
+				phandle = <0xdb>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -791,7 +765,7 @@
 				access-controllers = <0x1b 0x0a>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd8>;
+				phandle = <0xdc>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -823,7 +797,7 @@
 				access-controllers = <0x1b 0x0b>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xd9>;
+				phandle = <0xdd>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -855,7 +829,7 @@
 				access-controllers = <0x1b 0x0c>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xda>;
+				phandle = <0xde>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -887,7 +861,7 @@
 				power-domains = <0x0f>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0xdb>;
+				phandle = <0xdf>;
 
 				counter {
 					compatible = "st,stm32mp25-lptimer-counter";
@@ -924,7 +898,7 @@
 				power-domains = <0x0f>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0xdc>;
+				phandle = <0xe0>;
 
 				counter {
 					compatible = "st,stm32mp25-lptimer-counter";
@@ -965,7 +939,7 @@
 				pinctrl-names = "default\0sleep";
 				pinctrl-0 = <0x1f>;
 				pinctrl-1 = <0x20>;
-				phandle = <0xdd>;
+				phandle = <0xe1>;
 			};
 
 			spi@400b0000 {
@@ -981,7 +955,7 @@
 				access-controllers = <0x1b 0x17>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xde>;
+				phandle = <0xe2>;
 			};
 
 			audio-controller@400c0000 {
@@ -996,14 +970,14 @@
 				dma-names = "rx\0tx";
 				access-controllers = <0x1b 0x18>;
 				power-domains = <0x0f>;
-				status = "okay";
+				status = "disabled";
 				pinctrl-names = "default\0sleep";
 				pinctrl-0 = <0x21>;
 				pinctrl-1 = <0x22>;
-				phandle = <0xdf>;
+				phandle = <0xe3>;
 
 				port@0 {
-					phandle = <0xbd>;
+					phandle = <0xc1>;
 
 					endpoint {
 						remote-endpoint = <0x23>;
@@ -1031,7 +1005,7 @@
 				pinctrl-names = "default\0sleep";
 				pinctrl-0 = <0x24>;
 				pinctrl-1 = <0x25>;
-				phandle = <0xe0>;
+				phandle = <0xe4>;
 			};
 
 			audio-controller@400d0000 {
@@ -1045,7 +1019,7 @@
 				dma-names = "rx\0rx-ctrl";
 				access-controllers = <0x1b 0x1e>;
 				status = "disabled";
-				phandle = <0xe1>;
+				phandle = <0xe5>;
 			};
 
 			serial@400e0000 {
@@ -1061,7 +1035,7 @@
 				pinctrl-0 = <0x26>;
 				pinctrl-1 = <0x27>;
 				pinctrl-2 = <0x28>;
-				phandle = <0xe2>;
+				phandle = <0xe6>;
 			};
 
 			serial@400f0000 {
@@ -1079,7 +1053,7 @@
 				pinctrl-0 = <0x29>;
 				pinctrl-1 = <0x2a>;
 				pinctrl-2 = <0x2b>;
-				phandle = <0xe3>;
+				phandle = <0xe7>;
 			};
 
 			serial@40100000 {
@@ -1097,7 +1071,7 @@
 				pinctrl-0 = <0x2c>;
 				pinctrl-1 = <0x2d>;
 				pinctrl-2 = <0x2e>;
-				phandle = <0xe4>;
+				phandle = <0xe8>;
 			};
 
 			serial@40110000 {
@@ -1111,7 +1085,7 @@
 				power-domains = <0x0c>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0xe5>;
+				phandle = <0xe9>;
 			};
 
 			i2c@40120000 {
@@ -1128,7 +1102,7 @@
 				access-controllers = <0x1b 0x29>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xe6>;
+				phandle = <0xea>;
 			};
 
 			i2c@40130000 {
@@ -1149,7 +1123,7 @@
 				i2c-scl-rising-time-ns = <0x64>;
 				i2c-scl-falling-time-ns = <0x0d>;
 				clock-frequency = <0x186a0>;
-				phandle = <0xe7>;
+				phandle = <0xeb>;
 
 				eeprom@50 {
 					compatible = "atmel,24c256";
@@ -1158,13 +1132,13 @@
 				};
 
 				es8328@10 {
-					status = "disabled";
+					status = "okay";
 					#sound-dai-cells = <0x00>;
 					compatible = "everest,es8388";
 					reg = <0x10>;
 					clocks = <0x31>;
 					clock-names = "MCLK";
-					phandle = <0xbf>;
+					phandle = <0xc3>;
 
 					port {
 						#address-cells = <0x01>;
@@ -1200,7 +1174,7 @@
 
 							endpoint {
 								remote-endpoint = <0x34>;
-								phandle = <0x83>;
+								phandle = <0x85>;
 							};
 						};
 					};
@@ -1225,7 +1199,7 @@
 				i2c-scl-rising-time-ns = <0xb9>;
 				i2c-scl-falling-time-ns = <0x14>;
 				clock-frequency = <0x186a0>;
-				phandle = <0xe8>;
+				phandle = <0xec>;
 
 				edt-ft5x06@38 {
 					compatible = "edt,edt-ft5406";
@@ -1240,7 +1214,7 @@
 					compatible = "nxp,pcf8563";
 					reg = <0x51>;
 					status = "okay";
-					phandle = <0xe9>;
+					phandle = <0xed>;
 				};
 
 				hdmi-bridge@39 {
@@ -1259,7 +1233,7 @@
 
 							endpoint {
 								remote-endpoint = <0x39>;
-								phandle = <0x8d>;
+								phandle = <0x91>;
 							};
 						};
 
@@ -1268,7 +1242,7 @@
 
 							endpoint {
 								remote-endpoint = <0x3a>;
-								phandle = <0xba>;
+								phandle = <0xbe>;
 							};
 						};
 
@@ -1298,7 +1272,7 @@
 				access-controllers = <0x1b 0x2c>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xea>;
+				phandle = <0xee>;
 			};
 
 			i2c@40160000 {
@@ -1315,7 +1289,7 @@
 				access-controllers = <0x1b 0x2d>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xeb>;
+				phandle = <0xef>;
 			};
 
 			i2c@40170000 {
@@ -1332,7 +1306,7 @@
 				access-controllers = <0x1b 0x2e>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xec>;
+				phandle = <0xf0>;
 			};
 
 			i2c@40180000 {
@@ -1349,7 +1323,7 @@
 				access-controllers = <0x1b 0x2f>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xed>;
+				phandle = <0xf1>;
 			};
 
 			i3c@40190000 {
@@ -1363,7 +1337,7 @@
 				access-controllers = <0x1b 0x72>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xee>;
+				phandle = <0xf2>;
 			};
 
 			i3c@401a0000 {
@@ -1377,7 +1351,7 @@
 				access-controllers = <0x1b 0x73>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xef>;
+				phandle = <0xf3>;
 			};
 
 			i3c@401b0000 {
@@ -1391,7 +1365,7 @@
 				access-controllers = <0x1b 0x74>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf0>;
+				phandle = <0xf4>;
 			};
 
 			timer@401c0000 {
@@ -1406,7 +1380,7 @@
 				access-controllers = <0x1b 0x08>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf1>;
+				phandle = <0xf5>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -1438,7 +1412,7 @@
 				access-controllers = <0x1b 0x09>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf2>;
+				phandle = <0xf6>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -1470,7 +1444,7 @@
 				access-controllers = <0x1b 0x00>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf3>;
+				phandle = <0xf7>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -1502,7 +1476,7 @@
 				access-controllers = <0x1b 0x07>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf4>;
+				phandle = <0xf8>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -1538,7 +1512,7 @@
 				pinctrl-1 = <0x3d>;
 				pinctrl-2 = <0x3e>;
 				uart-has-rtscts;
-				phandle = <0xf5>;
+				phandle = <0xf9>;
 			};
 
 			audio-controller@40230000 {
@@ -1561,7 +1535,7 @@
 				phandle = <0x31>;
 
 				port {
-					phandle = <0xf6>;
+					phandle = <0xfa>;
 
 					endpoint {
 						remote-endpoint = <0x41>;
@@ -1585,7 +1559,7 @@
 				access-controllers = <0x1b 0x16>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf7>;
+				phandle = <0xfb>;
 			};
 
 			spi@40240000 {
@@ -1601,7 +1575,7 @@
 				access-controllers = <0x1b 0x19>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf8>;
+				phandle = <0xfc>;
 			};
 
 			timer@40250000 {
@@ -1616,7 +1590,7 @@
 				access-controllers = <0x1b 0x0d>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xf9>;
+				phandle = <0xfd>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -1648,7 +1622,7 @@
 				access-controllers = <0x1b 0x0e>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xfa>;
+				phandle = <0xfe>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -1680,7 +1654,7 @@
 				access-controllers = <0x1b 0x0f>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xfb>;
+				phandle = <0xff>;
 
 				counter {
 					compatible = "st,stm32mp25-timer-counter";
@@ -1713,7 +1687,7 @@
 				access-controllers = <0x1b 0x1a>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0xfc>;
+				phandle = <0x100>;
 			};
 
 			sai@40290000 {
@@ -1728,7 +1702,7 @@
 				resets = <0x16 0x32>;
 				access-controllers = <0x1b 0x31>;
 				status = "disabled";
-				phandle = <0xfd>;
+				phandle = <0x101>;
 
 				audio-controller@40290004 {
 					compatible = "st,stm32-sai-sub-a";
@@ -1740,7 +1714,7 @@
 					dma-names = "tx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0xfe>;
+					phandle = <0x102>;
 				};
 
 				audio-controller@40290024 {
@@ -1753,7 +1727,7 @@
 					dma-names = "rx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0xff>;
+					phandle = <0x103>;
 				};
 			};
 
@@ -1769,7 +1743,7 @@
 				resets = <0x16 0x33>;
 				access-controllers = <0x1b 0x32>;
 				status = "disabled";
-				phandle = <0x100>;
+				phandle = <0x104>;
 
 				audio-controller@402a0004 {
 					compatible = "st,stm32-sai-sub-a";
@@ -1781,7 +1755,7 @@
 					dma-names = "tx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0x101>;
+					phandle = <0x105>;
 				};
 
 				audio-controller@402a0024 {
@@ -1794,7 +1768,7 @@
 					dma-names = "rx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0x102>;
+					phandle = <0x106>;
 				};
 			};
 
@@ -1810,7 +1784,7 @@
 				resets = <0x16 0x34>;
 				access-controllers = <0x1b 0x33>;
 				status = "disabled";
-				phandle = <0x103>;
+				phandle = <0x107>;
 
 				audio-controller@402b0004 {
 					compatible = "st,stm32-sai-sub-a";
@@ -1822,7 +1796,7 @@
 					dma-names = "tx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0x104>;
+					phandle = <0x108>;
 				};
 
 				audio-controller@502b0024 {
@@ -1835,7 +1809,7 @@
 					dma-names = "rx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0x105>;
+					phandle = <0x109>;
 				};
 			};
 
@@ -1854,7 +1828,7 @@
 				pinctrl-0 = <0x42>;
 				pinctrl-1 = <0x43>;
 				pinctrl-2 = <0x44>;
-				phandle = <0x106>;
+				phandle = <0x10a>;
 			};
 
 			timer@40320000 {
@@ -1869,7 +1843,7 @@
 				access-controllers = <0x1b 0x10>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x107>;
+				phandle = <0x10b>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
@@ -1902,7 +1876,7 @@
 				pinctrl-0 = <0x45>;
 				pinctrl-1 = <0x46>;
 				pinctrl-2 = <0x47>;
-				phandle = <0x108>;
+				phandle = <0x10c>;
 			};
 
 			sai@40340000 {
@@ -1916,8 +1890,10 @@
 				interrupts = <0x00 0xdf 0x04>;
 				resets = <0x16 0x35>;
 				access-controllers = <0x1b 0x34>;
+				pinctrl-names = "default";
+				pinctrl-0 = <0x500>;
 				status = "okay";
-				phandle = <0x109>;
+				phandle = <0x10d>;
 
 				audio-controller@40340004 {
 					compatible = "st,stm32-sai-sub-a";
@@ -1929,23 +1905,21 @@
 					dma-names = "tx";
 					power-domains = <0x0c>;
 					status = "disabled";
-					phandle = <0x10a>;
+					phandle = <0x10e>;
 				};
 
 				audio-controller@40340024 {
-				compatible = "st,stm32-sai-sub-b";
-				reg = <0x24 0x20>;
-				#sound-dai-cells = <0x00>;
-				clocks = <0x16 0x11e>;
-				clock-names = "sai_ck";
+					compatible = "st,stm32-sai-sub-b";
+					reg = <0x24 0x20>;
+					#sound-dai-cells = <0x00>;
+					clocks = <0x16 0x11e>;
+					clock-names = "sai_ck";
 					dmas = <0x1c 0x50 0x43 0x21>;
-				dma-names = "tx";
-				power-domains = <0x0c>;
-				status = "okay";
-				pinctrl-names = "default";
-				pinctrl-0 = <0x500>;
-				phandle = <0x10b>;
-			};
+					dma-names = "tx";
+					power-domains = <0x0c>;
+					status = "okay";
+					phandle = <0x10f>;
+				};
 			};
 
 			spi@40350000 {
@@ -1961,7 +1935,7 @@
 				access-controllers = <0x1b 0x1b>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x10c>;
+				phandle = <0x110>;
 			};
 
 			spi@40360000 {
@@ -1976,8 +1950,20 @@
 				dma-names = "rx\0tx";
 				access-controllers = <0x1b 0x1c>;
 				power-domains = <0x0c>;
-				status = "disabled";
-				phandle = <0x10d>;
+				status = "okay";
+				pinctrl-names = "default\0sleep";
+				pinctrl-0 = <0x48>;
+				pinctrl-1 = <0x49>;
+				cs-gpios = <0x38 0x01 0x01>;
+				phandle = <0x111>;
+
+				spidev7@0 {
+					reg = <0x00>;
+					compatible = "rohm,dh2228fv";
+					spi-max-frequency = <0x7a120>;
+					spi-rx-bus-width = <0x01>;
+					spi-tx-bus-width = <0x01>;
+				};
 			};
 
 			serial@40370000 {
@@ -1991,7 +1977,7 @@
 				power-domains = <0x0c>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0x10e>;
+				phandle = <0x112>;
 			};
 
 			serial@40380000 {
@@ -2006,10 +1992,10 @@
 				wakeup-source;
 				status = "okay";
 				pinctrl-names = "default\0idle\0sleep";
-				pinctrl-0 = <0x48>;
-				pinctrl-1 = <0x49>;
-				pinctrl-2 = <0x4a>;
-				phandle = <0x10f>;
+				pinctrl-0 = <0x4a>;
+				pinctrl-1 = <0x4b>;
+				pinctrl-2 = <0x4c>;
+				phandle = <0x113>;
 			};
 
 			dcmi@404a0000 {
@@ -2024,7 +2010,7 @@
 				access-controllers = <0x1b 0x58>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x110>;
+				phandle = <0x114>;
 			};
 
 			crc@404c0000 {
@@ -2034,7 +2020,7 @@
 				access-controllers = <0x1b 0x6d>;
 				power-domains = <0x0c>;
 				status = "okay";
-				phandle = <0x111>;
+				phandle = <0x115>;
 			};
 
 			adc@404e0000 {
@@ -2051,27 +2037,27 @@
 				power-domains = <0x0c>;
 				status = "disabled";
 				pinctrl-names = "default\0sleep";
-				pinctrl-0 = <0x4b>;
-				pinctrl-1 = <0x4c>;
-				vdda-supply = <0x4d>;
-				vref-supply = <0x4d>;
-				phandle = <0x4e>;
+				pinctrl-0 = <0x4d>;
+				pinctrl-1 = <0x4e>;
+				vdda-supply = <0x4f>;
+				vref-supply = <0x4f>;
+				phandle = <0x50>;
 
 				adc@0 {
 					compatible = "st,stm32mp25-adc";
 					reg = <0x00>;
-					interrupt-parent = <0x4e>;
+					interrupt-parent = <0x50>;
 					interrupts = <0x00>;
 					dmas = <0x1c 0x51 0x20 0x12>;
 					dma-names = "rx";
 					#io-channel-cells = <0x01>;
 					#address-cells = <0x01>;
 					#size-cells = <0x00>;
-					nvmem-cells = <0x4f>;
+					nvmem-cells = <0x51>;
 					nvmem-cell-names = "vrefint";
 					st,adc-trigger-sel = <0x00>;
 					status = "okay";
-					phandle = <0x112>;
+					phandle = <0x116>;
 
 					channel@14 {
 						reg = <0x0e>;
@@ -2092,18 +2078,18 @@
 				adc@100 {
 					compatible = "st,stm32mp25-adc";
 					reg = <0x100>;
-					interrupt-parent = <0x4e>;
+					interrupt-parent = <0x50>;
 					interrupts = <0x01>;
 					dmas = <0x1c 0x52 0x20 0x12>;
 					dma-names = "rx";
 					#io-channel-cells = <0x01>;
 					#address-cells = <0x01>;
 					#size-cells = <0x00>;
-					nvmem-cells = <0x4f>;
+					nvmem-cells = <0x51>;
 					nvmem-cell-names = "vrefint";
 					st,adc-trigger-sel = <0x00>;
 					status = "disabled";
-					phandle = <0x113>;
+					phandle = <0x117>;
 
 					channel@14 {
 						reg = <0x0e>;
@@ -2141,62 +2127,62 @@
 				access-controllers = <0x1b 0x36>;
 				power-domains = <0x0f>;
 				status = "disabled";
-				phandle = <0x114>;
+				phandle = <0x118>;
 
 				sitf@80 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x80 0x04>;
 					status = "disabled";
-					phandle = <0x115>;
+					phandle = <0x119>;
 				};
 
 				sitf@100 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x100 0x04>;
 					status = "disabled";
-					phandle = <0x116>;
+					phandle = <0x11a>;
 				};
 
 				sitf@180 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x180 0x04>;
 					status = "disabled";
-					phandle = <0x117>;
+					phandle = <0x11b>;
 				};
 
 				sitf@200 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x200 0x04>;
 					status = "disabled";
-					phandle = <0x118>;
+					phandle = <0x11c>;
 				};
 
 				sitf@280 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x280 0x04>;
 					status = "disabled";
-					phandle = <0x119>;
+					phandle = <0x11d>;
 				};
 
 				sitf@300 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x300 0x04>;
 					status = "disabled";
-					phandle = <0x11a>;
+					phandle = <0x11e>;
 				};
 
 				sitf@380 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x380 0x04>;
 					status = "disabled";
-					phandle = <0x11b>;
+					phandle = <0x11f>;
 				};
 
 				sitf@400 {
 					compatible = "st,stm32mp25-sitf-mdf";
 					reg = <0x400 0x04>;
 					status = "disabled";
-					phandle = <0x11c>;
+					phandle = <0x120>;
 				};
 
 				filter@84 {
@@ -2207,7 +2193,7 @@
 					dmas = <0x1c 0x3f 0x63 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x11d>;
+					phandle = <0x121>;
 				};
 
 				filter@104 {
@@ -2218,7 +2204,7 @@
 					dmas = <0x1c 0x40 0x63 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x11e>;
+					phandle = <0x122>;
 				};
 
 				filter@184 {
@@ -2229,7 +2215,7 @@
 					dmas = <0x1c 0x41 0x63 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x11f>;
+					phandle = <0x123>;
 				};
 
 				filter@204 {
@@ -2240,7 +2226,7 @@
 					dmas = <0x1c 0x42 0x63 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x120>;
+					phandle = <0x124>;
 				};
 
 				filter@284 {
@@ -2251,7 +2237,7 @@
 					dmas = <0x1c 0x43 0x43 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x121>;
+					phandle = <0x125>;
 				};
 
 				filter@304 {
@@ -2262,7 +2248,7 @@
 					dmas = <0x1c 0x44 0x43 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x122>;
+					phandle = <0x126>;
 				};
 
 				filter@384 {
@@ -2273,7 +2259,7 @@
 					dmas = <0x1c 0x45 0x43 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x123>;
+					phandle = <0x127>;
 				};
 
 				filter@404 {
@@ -2284,7 +2270,7 @@
 					dmas = <0x1c 0x46 0x43 0x12>;
 					dma-names = "rx";
 					status = "disabled";
-					phandle = <0x124>;
+					phandle = <0x128>;
 				};
 			};
 
@@ -2301,23 +2287,23 @@
 				access-controllers = <0x1b 0x3b>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x50>;
+				phandle = <0x52>;
 
 				adc@0 {
 					compatible = "st,stm32mp25-adc";
 					reg = <0x00>;
-					interrupt-parent = <0x50>;
+					interrupt-parent = <0x52>;
 					interrupts = <0x00>;
 					dmas = <0x1c 0x53 0x20 0x12>;
 					dma-names = "rx";
 					#io-channel-cells = <0x01>;
 					#address-cells = <0x01>;
 					#size-cells = <0x00>;
-					nvmem-cells = <0x4f>;
+					nvmem-cells = <0x51>;
 					nvmem-cell-names = "vrefint";
 					st,adc-trigger-sel = <0x01>;
 					status = "disabled";
-					phandle = <0x125>;
+					phandle = <0x129>;
 
 					channel@14 {
 						reg = <0x0e>;
@@ -2352,19 +2338,19 @@
 				access-controllers = <0x1b 0x5f>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x126>;
+				phandle = <0x12a>;
 			};
 
 			rng@42020000 {
 				compatible = "st,stm32mp25-rng";
 				reg = <0x42020000 0x400>;
-				clocks = <0x51 0x16 0x6e>;
+				clocks = <0x53 0x16 0x6e>;
 				clock-names = "rng_clk\0rng_hclk";
 				resets = <0x16 0x61>;
 				access-controllers = <0x1b 0x5c>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x127>;
+				phandle = <0x12b>;
 			};
 
 			watchdog@44010000 {
@@ -2375,7 +2361,7 @@
 				clock-names = "pclk\0lsi";
 				access-controllers = <0x1b 0x62>;
 				status = "disabled";
-				phandle = <0x128>;
+				phandle = <0x12c>;
 			};
 
 			watchdog@44020000 {
@@ -2386,7 +2372,7 @@
 				clock-names = "pclk\0lsi";
 				access-controllers = <0x1b 0x63>;
 				status = "disabled";
-				phandle = <0x129>;
+				phandle = <0x12d>;
 			};
 
 			spi@46020000 {
@@ -2403,25 +2389,25 @@
 				power-domains = <0x0c>;
 				status = "disabled";
 				pinctrl-names = "default\0sleep";
-				pinctrl-0 = <0x52>;
-				pinctrl-1 = <0x53>;
-				phandle = <0x12a>;
+				pinctrl-0 = <0x54>;
+				pinctrl-1 = <0x55>;
+				phandle = <0x12e>;
 			};
 
 			serial@46030000 {
 				compatible = "st,stm32h7-uart";
 				reg = <0x46030000 0x400>;
-				interrupts-extended = <0x54 0x1a 0x04>;
+				interrupts-extended = <0x56 0x1a 0x04>;
 				clocks = <0x16 0x12c 0x16 0x173>;
 				access-controllers = <0x1b 0x28>;
 				wakeup-source;
 				status = "disabled";
 				pinctrl-names = "default\0idle\0sleep";
-				pinctrl-0 = <0x55>;
-				pinctrl-1 = <0x56>;
-				pinctrl-2 = <0x57>;
+				pinctrl-0 = <0x57>;
+				pinctrl-1 = <0x58>;
+				pinctrl-2 = <0x59>;
 				uart-has-rtscts;
-				phandle = <0x12b>;
+				phandle = <0x12f>;
 			};
 
 			i2c@46040000 {
@@ -2439,31 +2425,31 @@
 				power-domains = <0x0c>;
 				status = "okay";
 				pinctrl-names = "default\0sleep";
-				pinctrl-0 = <0x58>;
-				pinctrl-1 = <0x59>;
+				pinctrl-0 = <0x5a>;
+				pinctrl-1 = <0x5b>;
 				i2c-scl-rising-time-ns = <0xb9>;
 				i2c-scl-falling-time-ns = <0x14>;
 				clock-frequency = <0x186a0>;
-				phandle = <0x12c>;
+				phandle = <0x130>;
 
 				camera@3c {
 					compatible = "ovti,ov5640";
 					reg = <0x3c>;
-					clocks = <0x5a>;
-					powerdown-gpios = <0x5b 0x00 0x00>;
-					reset-gpios = <0x5b 0x02 0x01>;
+					clocks = <0x5c>;
+					powerdown-gpios = <0x5d 0x00 0x00>;
+					reset-gpios = <0x5d 0x02 0x01>;
 					clock-names = "xclk";
 					status = "okay";
-					phandle = <0x12d>;
+					phandle = <0x131>;
 
 					port {
 
 						endpoint {
-							remote-endpoint = <0x5c>;
+							remote-endpoint = <0x5e>;
 							clock-lanes = <0x00>;
 							data-lanes = <0x00 0x01>;
 							link-frequencies = <0x00 0x1b2e0200>;
-							phandle = <0x62>;
+							phandle = <0x64>;
 						};
 					};
 				};
@@ -2472,7 +2458,7 @@
 			timer@46050000 {
 				compatible = "st,stm32mp25-lptimer";
 				reg = <0x46050000 0x400>;
-				interrupts-extended = <0x54 0x1d 0x04>;
+				interrupts-extended = <0x56 0x1d 0x04>;
 				clocks = <0x16 0x12d>;
 				clock-names = "mux";
 				#address-cells = <0x01>;
@@ -2480,7 +2466,7 @@
 				access-controllers = <0x1b 0x13>;
 				wakeup-source;
 				status = "okay";
-				phandle = <0x12e>;
+				phandle = <0x132>;
 
 				counter {
 					compatible = "st,stm32mp25-lptimer-counter";
@@ -2508,7 +2494,7 @@
 			timer@46060000 {
 				compatible = "st,stm32mp25-lptimer";
 				reg = <0x46060000 0x400>;
-				interrupts-extended = <0x54 0x1e 0x04>;
+				interrupts-extended = <0x56 0x1e 0x04>;
 				clocks = <0x16 0x12e>;
 				clock-names = "mux";
 				#address-cells = <0x01>;
@@ -2516,7 +2502,7 @@
 				access-controllers = <0x1b 0x14>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0x12f>;
+				phandle = <0x133>;
 
 				counter {
 					compatible = "st,stm32mp25-lptimer-counter";
@@ -2544,7 +2530,7 @@
 			timer@46070000 {
 				compatible = "st,stm32mp25-lptimer";
 				reg = <0x46070000 0x400>;
-				interrupts-extended = <0x54 0x1f 0x04>;
+				interrupts-extended = <0x56 0x1f 0x04>;
 				clocks = <0x16 0x12f>;
 				clock-names = "mux";
 				#address-cells = <0x01>;
@@ -2552,7 +2538,7 @@
 				access-controllers = <0x1b 0x15>;
 				wakeup-source;
 				status = "disabled";
-				phandle = <0x130>;
+				phandle = <0x134>;
 
 				counter {
 					compatible = "st,stm32mp25-lptimer-counter";
@@ -2588,7 +2574,7 @@
 				access-controllers = <0x1b 0x75>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x131>;
+				phandle = <0x135>;
 			};
 
 			display-controller@48010000 {
@@ -2596,7 +2582,7 @@
 				reg = <0x48010000 0x400>;
 				st,syscon = <0x15>;
 				interrupts = <0x00 0x9e 0x04 0x00 0x9f 0x04>;
-				clocks = <0x16 0xce 0x16 0x153 0x15 0x00 0x5d 0x00>;
+				clocks = <0x16 0xce 0x16 0x153 0x15 0x00 0x5f 0x00>;
 				clock-names = "bus\0ref\0lcd\0lvds";
 				resets = <0x16 0x4c>;
 				power-domains = <0x0c>;
@@ -2604,8 +2590,8 @@
 				access-controllers = <0x1b 0x50>;
 				access-controller-names = "cmn";
 				default-on;
-				rotation-memory = <0x5e>;
-				phandle = <0x132>;
+				rotation-memory = <0x60>;
+				phandle = <0x136>;
 
 				l1l2 {
 					access-controllers = <0x1b 0x77>;
@@ -2628,14 +2614,14 @@
 
 					endpoint@0 {
 						reg = <0x00>;
-						remote-endpoint = <0x5f>;
-						phandle = <0x8c>;
+						remote-endpoint = <0x61>;
+						phandle = <0x90>;
 					};
 
 					endpoint@1 {
 						reg = <0x01>;
-						remote-endpoint = <0x60>;
-						phandle = <0x8e>;
+						remote-endpoint = <0x62>;
+						phandle = <0x92>;
 					};
 				};
 			};
@@ -2649,9 +2635,9 @@
 				clock-names = "pclk\0txesc\0csi2phy";
 				access-controllers = <0x1b 0x56>;
 				status = "okay";
-				vdd-supply = <0x61>;
-				vdda18-supply = <0x4d>;
-				phandle = <0x133>;
+				vdd-supply = <0x63>;
+				vdda18-supply = <0x4f>;
+				phandle = <0x137>;
 
 				ports {
 					#address-cells = <0x01>;
@@ -2661,10 +2647,10 @@
 						reg = <0x00>;
 
 						endpoint {
-							remote-endpoint = <0x62>;
+							remote-endpoint = <0x64>;
 							data-lanes = <0x00 0x01>;
 							bus-type = <0x04>;
-							phandle = <0x5c>;
+							phandle = <0x5e>;
 						};
 					};
 
@@ -2672,8 +2658,8 @@
 						reg = <0x01>;
 
 						endpoint {
-							remote-endpoint = <0x63>;
-							phandle = <0x64>;
+							remote-endpoint = <0x65>;
+							phandle = <0x66>;
 						};
 					};
 				};
@@ -2689,14 +2675,14 @@
 				access-controllers = <0x1b 0x57>;
 				power-domains = <0x0c>;
 				status = "okay";
-				phandle = <0x134>;
+				phandle = <0x138>;
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0x64>;
+						remote-endpoint = <0x66>;
 						bus-type = <0x04>;
-						phandle = <0x63>;
+						phandle = <0x65>;
 					};
 				};
 			};
@@ -2716,7 +2702,7 @@
 				interrupts-extended = <0x1e 0x2d 0x02>;
 				status = "okay";
 				st,rx_equalizer = <0x01>;
-				phandle = <0x82>;
+				phandle = <0x84>;
 			};
 
 			mmc@48220000 {
@@ -2734,16 +2720,16 @@
 				power-domains = <0x0c>;
 				status = "okay";
 				pinctrl-names = "default\0opendrain\0sleep";
-				pinctrl-0 = <0x65>;
-				pinctrl-1 = <0x66>;
-				pinctrl-2 = <0x67>;
-				cd-gpios = <0x5b 0x03 0x11>;
+				pinctrl-0 = <0x67>;
+				pinctrl-1 = <0x68>;
+				pinctrl-2 = <0x69>;
+				cd-gpios = <0x5d 0x03 0x11>;
 				disable-wp;
 				st,neg-edge;
 				bus-width = <0x04>;
-				vmmc-supply = <0x68>;
-				vqmmc-supply = <0x69>;
-				phandle = <0x135>;
+				vmmc-supply = <0x6a>;
+				vqmmc-supply = <0x6b>;
+				phandle = <0x139>;
 			};
 
 			mmc@48230000 {
@@ -2761,18 +2747,18 @@
 				power-domains = <0x0c>;
 				status = "okay";
 				pinctrl-names = "default\0opendrain\0sleep";
-				pinctrl-0 = <0x6a 0x6b>;
-				pinctrl-1 = <0x6c 0x6b>;
-				pinctrl-2 = <0x6d 0x6e>;
+				pinctrl-0 = <0x6c 0x6d>;
+				pinctrl-1 = <0x6e 0x6d>;
+				pinctrl-2 = <0x6f 0x70>;
 				non-removable;
 				no-sd;
 				no-sdio;
 				st,neg-edge;
 				bus-width = <0x08>;
-				vmmc-supply = <0x6f>;
-				vqmmc-supply = <0x70>;
+				vmmc-supply = <0x71>;
+				vqmmc-supply = <0x72>;
 				mmc-ddr-1_8v;
-				phandle = <0x136>;
+				phandle = <0x13a>;
 			};
 
 			mmc@48240000 {
@@ -2792,22 +2778,22 @@
 				#address-cells = <0x02>;
 				#size-cells = <0x01>;
 				pinctrl-names = "default\0opendrain\0sleep";
-				pinctrl-0 = <0x71>;
-				pinctrl-1 = <0x72>;
-				pinctrl-2 = <0x73>;
+				pinctrl-0 = <0x73>;
+				pinctrl-1 = <0x74>;
+				pinctrl-2 = <0x75>;
 				broken-cd;
 				disable-wp;
 				st,neg-edge;
 				bus-width = <0x04>;
-				vmmc-supply = <0x74>;
-				mmc-pwrseq = <0x75>;
-				phandle = <0x137>;
+				vmmc-supply = <0x76>;
+				mmc-pwrseq = <0x77>;
+				phandle = <0x13b>;
 
 				wifi@1 {
 					reg = <0x00 0x01 0x1000>;
 					compatible = "brcm,bcm4329-fmac";
 					status = "okay";
-					phandle = <0x138>;
+					phandle = <0x13c>;
 				};
 			};
 
@@ -2824,39 +2810,39 @@
 				snps,pbl = <0x02>;
 				snps,txqos = <0x07>;
 				snps,rxqos = <0x07>;
-				snps,axi-config = <0x76>;
+				snps,axi-config = <0x78>;
 				snps,tso;
 				access-controllers = <0x1b 0x3c>;
 				power-domains = <0x0c>;
 				wakeup-source;
 				status = "okay";
-				snps,mtl-rx-config = <0x77>;
-				snps,mtl-tx-config = <0x78>;
+				snps,mtl-rx-config = <0x79>;
+				snps,mtl-tx-config = <0x7a>;
 				phy-mode = "rgmii";
 				max-speed = <0x3e8>;
 				st,eth-clk-sel;
-				st,ext-phyclk = <0x79>;
+				st,ext-phyclk = <0x7b>;
 				snps,ext-systime;
 				st,num_reset_gpios = <0x02>;
-				st,phy-reset-gpios = <0x38 0x04 0x00 0x5b 0x0a 0x00>;
+				st,phy-reset-gpios = <0x38 0x04 0x00 0x5d 0x0a 0x00>;
 				st,reset-assert-us = <0x3a98>;
 				st,reset-deassert-us = <0x3a98>;
-				pinctrl-0 = <0x7a 0x7b>;
-				pinctrl-1 = <0x7c 0x7d>;
+				pinctrl-0 = <0x7c 0x7d>;
+				pinctrl-1 = <0x7e 0x7f>;
 				pinctrl-names = "default\0sleep";
-				phy-handle = <0x7e>;
-				phandle = <0x139>;
+				phy-handle = <0x80>;
+				phandle = <0x13d>;
 
 				stmmac-axi-config {
 					snps,wr_osr_lmt = <0x07>;
 					snps,rd_osr_lmt = <0x07>;
 					snps,blen = <0x00 0x00 0x00 0x00 0x10 0x08 0x04>;
-					phandle = <0x76>;
+					phandle = <0x78>;
 				};
 
 				rx-queues-config {
 					snps,rx-queues-to-use = <0x02>;
-					phandle = <0x77>;
+					phandle = <0x79>;
 
 					queue0 {
 					};
@@ -2867,7 +2853,7 @@
 
 				tx-queues-config {
 					snps,tx-queues-to-use = <0x04>;
-					phandle = <0x78>;
+					phandle = <0x7a>;
 
 					queue0 {
 					};
@@ -2890,13 +2876,13 @@
 					ethernet-phy@4 {
 						reg = <0x04>;
 						ytphy_delay_cfg = <0x4f5>;
-						phandle = <0x7e>;
+						phandle = <0x80>;
 					};
 
 					ethernet-phy@6 {
 						reg = <0x06>;
 						ytphy_delay_cfg = <0x8f8>;
-						phandle = <0x13a>;
+						phandle = <0x13e>;
 					};
 				};
 			};
@@ -2912,19 +2898,19 @@
 				wakeup-source;
 				interrupts-extended = <0x1e 0x2b 0x01>;
 				status = "okay";
-				phandle = <0x13b>;
+				phandle = <0x13f>;
 
 				usb@482e0000 {
 					compatible = "generic-ohci";
 					reg = <0x482e0000 0x1000>;
-					clocks = <0x7f 0x16 0xfa>;
+					clocks = <0x81 0x16 0xfa>;
 					resets = <0x16 0x3e>;
 					interrupts = <0x00 0x8c 0x04>;
-					phys = <0x7f>;
+					phys = <0x81>;
 					phy-names = "usb";
 					wakeup-source;
 					status = "disabled";
-					phandle = <0x80>;
+					phandle = <0x82>;
 				};
 
 				usb@482f0000 {
@@ -2933,18 +2919,18 @@
 					clocks = <0x16 0xfb>;
 					resets = <0x16 0x3e>;
 					interrupts = <0x00 0x8b 0x04>;
-					companion = <0x80>;
-					phys = <0x7f>;
+					companion = <0x82>;
+					phys = <0x81>;
 					phy-names = "usb";
 					wakeup-source;
 					#address-cells = <0x01>;
 					#size-cells = <0x00>;
-					phandle = <0x13c>;
+					phandle = <0x140>;
 
 					hub@1 {
 						compatible = "usb424,2514";
 						reg = <0x01>;
-						vdd-supply = <0x74>;
+						vdd-supply = <0x76>;
 					};
 				};
 			};
@@ -2960,7 +2946,7 @@
 				wakeup-source;
 				interrupts-extended = <0x1e 0x2c 0x01>;
 				status = "okay";
-				phandle = <0x13d>;
+				phandle = <0x141>;
 
 				usb@48300000 {
 					compatible = "snps,dwc3";
@@ -2969,7 +2955,7 @@
 					clock-names = "ref\0bus_early\0suspend";
 					clocks = <0x16 0x141 0x16 0xfc 0x16 0x141>;
 					resets = <0x16 0x41>;
-					phys = <0x81 0x82 0x04>;
+					phys = <0x83 0x84 0x04>;
 					phy-names = "usb2-phy\0usb3-phy";
 					wakeup-source;
 					maximum-speed = "super-speed";
@@ -2981,12 +2967,12 @@
 					snps,dis_u3_susphy_quirk;
 					snps,dis_enblslpm_quirk;
 					snps,dis-tx-ipgap-linecheck-quirk;
-					phandle = <0x13e>;
+					phandle = <0x142>;
 
 					port {
 
 						endpoint {
-							remote-endpoint = <0x83>;
+							remote-endpoint = <0x85>;
 							phandle = <0x34>;
 						};
 					};
@@ -3003,12 +2989,12 @@
 				clock-names = "core";
 				resets = <0x16 0x67>;
 				reset-names = "pcie";
-				phys = <0x82 0x02>;
+				phys = <0x84 0x02>;
 				phy-names = "pcie-phy";
 				access-controllers = <0x1b 0x44>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x13f>;
+				phandle = <0x143>;
 			};
 
 			pcie@48400000 {
@@ -3031,13 +3017,13 @@
 				clock-names = "core";
 				resets = <0x16 0x67>;
 				reset-names = "pcie";
-				phys = <0x82 0x02>;
+				phys = <0x84 0x02>;
 				phy-names = "pcie-phy";
-				msi-parent = <0x84>;
+				msi-parent = <0x86>;
 				access-controllers = <0x1b 0x44>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x140>;
+				phandle = <0x144>;
 			};
 
 			can@402d0000 {
@@ -3052,7 +3038,10 @@
 				access-controllers = <0x1b 0x38>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x141>;
+				pinctrl-names = "default\0sleep";
+				pinctrl-0 = <0x87>;
+				pinctrl-1 = <0x88>;
+				phandle = <0x145>;
 			};
 
 			can@402e0000 {
@@ -3067,7 +3056,7 @@
 				access-controllers = <0x1b 0x38>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x142>;
+				phandle = <0x146>;
 			};
 
 			can@402f0000 {
@@ -3082,7 +3071,7 @@
 				access-controllers = <0x1b 0x38>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x143>;
+				phandle = <0x147>;
 			};
 
 			eth2@482d0000 {
@@ -3098,37 +3087,37 @@
 				snps,pbl = <0x02>;
 				snps,txqos = <0x07>;
 				snps,rxqos = <0x07>;
-				snps,axi-config = <0x85>;
+				snps,axi-config = <0x89>;
 				snps,tso;
 				access-controllers = <0x1b 0x3d>;
 				power-domains = <0x0c>;
 				wakeup-source;
 				status = "okay";
-				snps,mtl-rx-config = <0x86>;
-				snps,mtl-tx-config = <0x87>;
-				pinctrl-0 = <0x88>;
-				pinctrl-1 = <0x89>;
+				snps,mtl-rx-config = <0x8a>;
+				snps,mtl-tx-config = <0x8b>;
+				pinctrl-0 = <0x8c>;
+				pinctrl-1 = <0x8d>;
 				pinctrl-names = "default\0sleep";
 				phy-mode = "rgmii-id";
 				max-speed = <0x3e8>;
-				phy-handle = <0x8a>;
+				phy-handle = <0x8e>;
 				st,eth-ptp-from-rcc;
-				st,ext-phyclk = <0x8b>;
+				st,ext-phyclk = <0x8f>;
 				st,phy-reset-gpios = <0x37 0x02 0x00>;
 				st,reset-assert-us = <0x3a98>;
 				st,reset-deassert-us = <0x3a98>;
-				phandle = <0x144>;
+				phandle = <0x148>;
 
 				stmmac-axi-config {
 					snps,wr_osr_lmt = <0x07>;
 					snps,rd_osr_lmt = <0x07>;
 					snps,blen = <0x00 0x00 0x00 0x00 0x10 0x08 0x04>;
-					phandle = <0x85>;
+					phandle = <0x89>;
 				};
 
 				rx-queues-config {
 					snps,rx-queues-to-use = <0x02>;
-					phandle = <0x86>;
+					phandle = <0x8a>;
 
 					queue0 {
 					};
@@ -3139,7 +3128,7 @@
 
 				tx-queues-config {
 					snps,tx-queues-to-use = <0x04>;
-					phandle = <0x87>;
+					phandle = <0x8b>;
 
 					queue0 {
 					};
@@ -3162,7 +3151,7 @@
 					ethernet-phy@5 {
 						ytphy_delay_cfg = <0x4f8>;
 						reg = <0x05>;
-						phandle = <0x8a>;
+						phandle = <0x8e>;
 					};
 				};
 			};
@@ -3178,9 +3167,9 @@
 				access-controllers = <0x1b 0x51>;
 				power-domains = <0x0c>;
 				status = "okay";
-				vdd-supply = <0x61>;
-				vdda18-supply = <0x4d>;
-				phandle = <0x94>;
+				vdd-supply = <0x63>;
+				vdda18-supply = <0x4f>;
+				phandle = <0x98>;
 
 				ports {
 					#address-cells = <0x01>;
@@ -3190,8 +3179,8 @@
 						reg = <0x00>;
 
 						endpoint {
-							remote-endpoint = <0x8c>;
-							phandle = <0x5f>;
+							remote-endpoint = <0x90>;
+							phandle = <0x61>;
 						};
 					};
 
@@ -3199,7 +3188,7 @@
 						reg = <0x01>;
 
 						endpoint {
-							remote-endpoint = <0x8d>;
+							remote-endpoint = <0x91>;
 							phandle = <0x39>;
 						};
 					};
@@ -3217,9 +3206,9 @@
 				power-domains = <0x0c>;
 				status = "okay";
 				default-on;
-				vdd-supply = <0x61>;
-				vdda18-supply = <0x4d>;
-				phandle = <0x5d>;
+				vdd-supply = <0x63>;
+				vdda18-supply = <0x4f>;
+				phandle = <0x5f>;
 
 				ports {
 					#address-cells = <0x01>;
@@ -3229,8 +3218,8 @@
 						reg = <0x00>;
 
 						endpoint {
-							remote-endpoint = <0x8e>;
-							phandle = <0x60>;
+							remote-endpoint = <0x92>;
+							phandle = <0x62>;
 						};
 					};
 
@@ -3238,8 +3227,8 @@
 						reg = <0x01>;
 
 						endpoint {
-							remote-endpoint = <0x8f>;
-							phandle = <0xbc>;
+							remote-endpoint = <0x93>;
+							phandle = <0xc0>;
 						};
 					};
 				};
@@ -3253,7 +3242,7 @@
 				clocks = <0x16 0xd8>;
 				access-controllers = <0x1b 0x59>;
 				power-domains = <0x0c>;
-				phandle = <0x145>;
+				phandle = <0x149>;
 			};
 
 			venc@480e0000 {
@@ -3264,7 +3253,7 @@
 				clocks = <0x16 0xd9>;
 				access-controllers = <0x1b 0x5a>;
 				power-domains = <0x0c>;
-				phandle = <0x146>;
+				phandle = <0x14a>;
 			};
 
 			gpu@48280000 {
@@ -3274,12 +3263,12 @@
 				resets = <0x16 0x4b>;
 				clock-names = "bus\0core";
 				clocks = <0x16 0x5b 0x16 0x154>;
-				power-domains = <0x90 0x00 0x0c>;
+				power-domains = <0x94 0x00 0x0c>;
 				access-controllers = <0x1b 0x4f>;
 				status = "okay";
 				throttle,max_state = <0x06>;
 				#cooling-cells = <0x02>;
-				contiguous-area = <0x91>;
+				contiguous-area = <0x95>;
 				phandle = <0x14>;
 			};
 
@@ -3294,17 +3283,17 @@
 				access-controllers = <0x1b 0x46>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				pinctrl-0 = <0x7a 0x92>;
+				pinctrl-0 = <0x7c 0x96>;
 				pinctrl-names = "default";
 				phy-mode = "rgmii";
 				st,ethsw-internal-125;
-				phandle = <0x147>;
+				phandle = <0x14b>;
 
 				deip-sw@4c000000 {
 					compatible = "ttt,deip-sw";
 					reg = <0x4c000000 0x2000000>;
 					interrupts = <0x00 0xfa 0x04>;
-					phandle = <0x93>;
+					phandle = <0x97>;
 				};
 
 				acm@4b000000 {
@@ -3312,7 +3301,7 @@
 					reg = <0x4b000000 0x400 0x4b010000 0x10000 0x4b030000 0x10000 0x4b050000 0x10000 0x4b060000 0x20000 0x4b080000 0x40000>;
 					reg-names = "CommonRegister\0Bypass1\0Bypass0\0Redundancy\0Scheduler\0Messagebuffer";
 					buffers = <0x20>;
-					ptp_worker = <0x93>;
+					ptp_worker = <0x97>;
 				};
 			};
 
@@ -3327,7 +3316,7 @@
 				access-controllers = <0x1b 0x60>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x148>;
+				phandle = <0x14c>;
 			};
 
 			crypto@42040000 {
@@ -3341,7 +3330,7 @@
 				access-controllers = <0x1b 0x61>;
 				power-domains = <0x0c>;
 				status = "disabled";
-				phandle = <0x149>;
+				phandle = <0x14d>;
 			};
 		};
 
@@ -3350,7 +3339,7 @@
 			reg = <0x420a0000 0x1000>;
 			clocks = <0x16 0x6c>;
 			st,mem-map = <0x00 0x42000000 0x00 0x2000>;
-			phandle = <0x14a>;
+			phandle = <0x14e>;
 		};
 
 		risaf@420d0000 {
@@ -3358,7 +3347,7 @@
 			reg = <0x420d0000 0x1000>;
 			clocks = <0x16 0xf9>;
 			st,mem-map = <0x00 0x80000000 0x01 0x00>;
-			phandle = <0x14b>;
+			phandle = <0x14f>;
 		};
 
 		risab@420f0000 {
@@ -3367,7 +3356,7 @@
 			clocks = <0x07 0x40>;
 			st,mem-map = <0xa000000 0x20000>;
 			#access-controller-cells = <0x01>;
-			phandle = <0x14c>;
+			phandle = <0x150>;
 		};
 
 		risab@42100000 {
@@ -3376,7 +3365,7 @@
 			clocks = <0x07 0x40>;
 			st,mem-map = <0xa020000 0x20000>;
 			#access-controller-cells = <0x01>;
-			phandle = <0x14d>;
+			phandle = <0x151>;
 		};
 
 		risab@42110000 {
@@ -3385,7 +3374,7 @@
 			clocks = <0x07 0x40>;
 			st,mem-map = <0xa040000 0x20000>;
 			#access-controller-cells = <0x01>;
-			phandle = <0x14e>;
+			phandle = <0x152>;
 		};
 
 		risab@42120000 {
@@ -3394,7 +3383,7 @@
 			clocks = <0x07 0x40>;
 			st,mem-map = <0xa060000 0x20000>;
 			#access-controller-cells = <0x01>;
-			phandle = <0x14f>;
+			phandle = <0x153>;
 		};
 
 		risab@42130000 {
@@ -3403,7 +3392,7 @@
 			clocks = <0x07 0x40>;
 			st,mem-map = <0xa080000 0x20000>;
 			#access-controller-cells = <0x01>;
-			phandle = <0x150>;
+			phandle = <0x154>;
 		};
 
 		risab@42140000 {
@@ -3413,7 +3402,7 @@
 			st,mem-map = <0xa0a0000 0x20000>;
 			#access-controller-cells = <0x01>;
 			status = "disabled";
-			phandle = <0x151>;
+			phandle = <0x155>;
 		};
 
 		efuse@44000000 {
@@ -3421,7 +3410,7 @@
 			reg = <0x44000000 0x1000>;
 			#address-cells = <0x01>;
 			#size-cells = <0x01>;
-			phandle = <0x152>;
+			phandle = <0x156>;
 
 			part_number_otp@24 {
 				reg = <0x24 0x04>;
@@ -3429,7 +3418,7 @@
 
 			vrefin-cal@1b8 {
 				reg = <0x1b8 0x02>;
-				phandle = <0x4f>;
+				phandle = <0x51>;
 			};
 
 			package_otp@1e8 {
@@ -3453,7 +3442,7 @@
 			reg = <0x44090000 0x400>;
 			clocks = <0x16 0xcb>;
 			status = "disabled";
-			phandle = <0x153>;
+			phandle = <0x157>;
 		};
 
 		clock-controller@44200000 {
@@ -3462,7 +3451,7 @@
 			#clock-cells = <0x01>;
 			#reset-cells = <0x01>;
 			#access-controller-cells = <0x01>;
-			clocks = <0x07 0x41 0x07 0x43 0x07 0x45 0x07 0x42 0x07 0x44 0x07 0x46 0x07 0x00 0x07 0x40 0x07 0x01 0x07 0x02 0x07 0x03 0x07 0x04 0x07 0x05 0x07 0x06 0x07 0x07 0x07 0x08 0x07 0x09 0x07 0x0a 0x07 0x0b 0x07 0x0c 0x07 0x0d 0x07 0x0e 0x07 0x0f 0x07 0x10 0x07 0x11 0x07 0x12 0x07 0x13 0x07 0x14 0x07 0x15 0x07 0x16 0x07 0x17 0x07 0x18 0x07 0x19 0x07 0x1a 0x07 0x1b 0x07 0x1c 0x07 0x1d 0x07 0x1e 0x07 0x1f 0x07 0x20 0x07 0x21 0x07 0x22 0x07 0x23 0x07 0x24 0x07 0x25 0x07 0x26 0x07 0x27 0x07 0x28 0x07 0x29 0x07 0x2a 0x07 0x2b 0x07 0x2c 0x07 0x2d 0x07 0x2e 0x07 0x2f 0x07 0x30 0x07 0x31 0x07 0x32 0x07 0x33 0x07 0x34 0x07 0x35 0x07 0x36 0x07 0x37 0x07 0x38 0x07 0x39 0x07 0x3a 0x07 0x3b 0x07 0x3c 0x07 0x3d 0x07 0x3e 0x07 0x3f 0x07 0x4d 0x07 0x4e 0x07 0x4f 0x07 0x50 0x07 0x51 0x07 0x52 0x07 0x53 0x07 0x4a 0x94 0x07 0x7d 0x07 0x7e 0x07 0x7f>;
+			clocks = <0x07 0x41 0x07 0x43 0x07 0x45 0x07 0x42 0x07 0x44 0x07 0x46 0x07 0x00 0x07 0x40 0x07 0x01 0x07 0x02 0x07 0x03 0x07 0x04 0x07 0x05 0x07 0x06 0x07 0x07 0x07 0x08 0x07 0x09 0x07 0x0a 0x07 0x0b 0x07 0x0c 0x07 0x0d 0x07 0x0e 0x07 0x0f 0x07 0x10 0x07 0x11 0x07 0x12 0x07 0x13 0x07 0x14 0x07 0x15 0x07 0x16 0x07 0x17 0x07 0x18 0x07 0x19 0x07 0x1a 0x07 0x1b 0x07 0x1c 0x07 0x1d 0x07 0x1e 0x07 0x1f 0x07 0x20 0x07 0x21 0x07 0x22 0x07 0x23 0x07 0x24 0x07 0x25 0x07 0x26 0x07 0x27 0x07 0x28 0x07 0x29 0x07 0x2a 0x07 0x2b 0x07 0x2c 0x07 0x2d 0x07 0x2e 0x07 0x2f 0x07 0x30 0x07 0x31 0x07 0x32 0x07 0x33 0x07 0x34 0x07 0x35 0x07 0x36 0x07 0x37 0x07 0x38 0x07 0x39 0x07 0x3a 0x07 0x3b 0x07 0x3c 0x07 0x3d 0x07 0x3e 0x07 0x3f 0x07 0x4d 0x07 0x4e 0x07 0x4f 0x07 0x50 0x07 0x51 0x07 0x52 0x07 0x53 0x07 0x4a 0x98 0x07 0x7d 0x07 0x7e 0x07 0x7f>;
 			access-controllers = <0x1b 0x9c>;
 			phandle = <0x16>;
 		};
@@ -3470,7 +3459,7 @@
 		syscon@44210000 {
 			compatible = "st,stm32mp25-pwr\0syscon";
 			reg = <0x44210000 0x400>;
-			phandle = <0xa9>;
+			phandle = <0xad>;
 		};
 
 		interrupt-controller@44220000 {
@@ -3496,9 +3485,9 @@
 			compatible = "st,stm32mp257-pinctrl";
 			ranges = <0x00 0x44240000 0xa0400>;
 			interrupt-parent = <0x1e>;
-			interrupts-extended = <0x1e 0x00 0x00 0x1e 0x01 0x00 0x1e 0x02 0x00 0x1e 0x03 0x00 0x1e 0x04 0x00 0x1e 0x05 0x00 0x1e 0x06 0x00 0x1e 0x07 0x00 0x1e 0x08 0x00 0x1e 0x09 0x00 0x1e 0x0a 0x00 0x1e 0x0b 0x00 0x1e 0x0c 0x00 0x1e 0x0d 0x00 0x1e 0x0e 0x00 0x1e 0x0f 0x00 0x54 0x00 0x00 0x54 0x01 0x00 0x54 0x02 0x00 0x54 0x03 0x00 0x54 0x04 0x00 0x54 0x05 0x00 0x54 0x06 0x00 0x54 0x07 0x00 0x54 0x08 0x00 0x54 0x09 0x00 0x54 0x0a 0x00 0x54 0x0b 0x00 0x54 0x0c 0x00 0x54 0x0d 0x00 0x54 0x0e 0x00 0x54 0x0f 0x00>;
+			interrupts-extended = <0x1e 0x00 0x00 0x1e 0x01 0x00 0x1e 0x02 0x00 0x1e 0x03 0x00 0x1e 0x04 0x00 0x1e 0x05 0x00 0x1e 0x06 0x00 0x1e 0x07 0x00 0x1e 0x08 0x00 0x1e 0x09 0x00 0x1e 0x0a 0x00 0x1e 0x0b 0x00 0x1e 0x0c 0x00 0x1e 0x0d 0x00 0x1e 0x0e 0x00 0x1e 0x0f 0x00 0x56 0x00 0x00 0x56 0x01 0x00 0x56 0x02 0x00 0x56 0x03 0x00 0x56 0x04 0x00 0x56 0x05 0x00 0x56 0x06 0x00 0x56 0x07 0x00 0x56 0x08 0x00 0x56 0x09 0x00 0x56 0x0a 0x00 0x56 0x0b 0x00 0x56 0x0c 0x00 0x56 0x0d 0x00 0x56 0x0e 0x00 0x56 0x0f 0x00>;
 			st,package = <0x400>;
-			phandle = <0x95>;
+			phandle = <0x99>;
 
 			gpio@44240000 {
 				gpio-controller;
@@ -3510,8 +3499,8 @@
 				st,bank-name = "GPIOA";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x00 0x10>;
-				phandle = <0x154>;
+				gpio-ranges = <0x99 0x00 0x00 0x10>;
+				phandle = <0x158>;
 			};
 
 			gpio@44250000 {
@@ -3524,7 +3513,7 @@
 				st,bank-name = "GPIOB";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x10 0x10>;
+				gpio-ranges = <0x99 0x00 0x10 0x10>;
 				phandle = <0x37>;
 			};
 
@@ -3538,8 +3527,8 @@
 				st,bank-name = "GPIOC";
 				status = "okay";
 				ngpios = <0x0e>;
-				gpio-ranges = <0x95 0x00 0x20 0x0e>;
-				phandle = <0x155>;
+				gpio-ranges = <0x99 0x00 0x20 0x0e>;
+				phandle = <0x159>;
 			};
 
 			gpio@44270000 {
@@ -3552,8 +3541,8 @@
 				st,bank-name = "GPIOD";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x30 0x10>;
-				phandle = <0x5b>;
+				gpio-ranges = <0x99 0x00 0x30 0x10>;
+				phandle = <0x5d>;
 			};
 
 			gpio@44280000 {
@@ -3566,8 +3555,8 @@
 				st,bank-name = "GPIOE";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x40 0x10>;
-				phandle = <0x156>;
+				gpio-ranges = <0x99 0x00 0x40 0x10>;
+				phandle = <0x15a>;
 			};
 
 			gpio@44290000 {
@@ -3580,8 +3569,8 @@
 				st,bank-name = "GPIOF";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x50 0x10>;
-				phandle = <0x157>;
+				gpio-ranges = <0x99 0x00 0x50 0x10>;
+				phandle = <0x15b>;
 			};
 
 			gpio@442a0000 {
@@ -3594,8 +3583,8 @@
 				st,bank-name = "GPIOG";
 				status = "okay";
 				ngpios = <0x10>;
-				gpio-ranges = <0x95 0x00 0x60 0x10>;
-				phandle = <0x158>;
+				gpio-ranges = <0x99 0x00 0x60 0x10>;
+				phandle = <0x15c>;
 			};
 
 			gpio@442b0000 {
@@ -3608,8 +3597,8 @@
 				st,bank-name = "GPIOH";
 				status = "okay";
 				ngpios = <0x0c>;
-				gpio-ranges = <0x95 0x02 0x72 0x0c>;
-				phandle = <0xb9>;
+				gpio-ranges = <0x99 0x02 0x72 0x0c>;
+				phandle = <0xbd>;
 			};
 
 			gpio@442c0000 {
@@ -3622,7 +3611,7 @@
 				st,bank-name = "GPIOI";
 				status = "okay";
 				ngpios = <0x0c>;
-				gpio-ranges = <0x95 0x00 0x80 0x0c>;
+				gpio-ranges = <0x99 0x00 0x80 0x0c>;
 				phandle = <0x38>;
 			};
 
@@ -3635,7 +3624,7 @@
 				clocks = <0x07 0x62>;
 				st,bank-name = "GPIOJ";
 				status = "disabled";
-				phandle = <0x159>;
+				phandle = <0x15d>;
 			};
 
 			gpio@442e0000 {
@@ -3647,11 +3636,11 @@
 				clocks = <0x07 0x63>;
 				st,bank-name = "GPIOK";
 				status = "disabled";
-				phandle = <0x15a>;
+				phandle = <0x15e>;
 			};
 
 			eth1-mdio-0 {
-				phandle = <0x7b>;
+				phandle = <0x7d>;
 
 				pins1 {
 					pinmux = <0x500b>;
@@ -3669,7 +3658,7 @@
 			};
 
 			eth1-mdio-sleep-0 {
-				phandle = <0x7d>;
+				phandle = <0x7f>;
 
 				pins1 {
 					pinmux = <0x5011 0x5211>;
@@ -3677,7 +3666,7 @@
 			};
 
 			eth1-rgmii-0 {
-				phandle = <0x7a>;
+				phandle = <0x7c>;
 
 				pins1 {
 					pinmux = <0xf0b 0x210b 0x7a0b 0x7b0b 0xd0b>;
@@ -3709,7 +3698,7 @@
 			};
 
 			eth1-rgmii-sleep-0 {
-				phandle = <0x7c>;
+				phandle = <0x7e>;
 
 				pins {
 					pinmux = <0xf11 0x2111 0x7a11 0x7b11 0xd11 0x7911 0x2011 0x5111 0x2211 0x7c11 0x7d11 0xb11 0xe11>;
@@ -3717,7 +3706,7 @@
 			};
 
 			eth1-rgmii-1 {
-				phandle = <0x15b>;
+				phandle = <0x15f>;
 
 				pins1 {
 					pinmux = <0xf0b 0x210b 0x7a0b 0x7b0b 0xd0b>;
@@ -3749,7 +3738,7 @@
 			};
 
 			eth1-rgmii-sleep-1 {
-				phandle = <0x15c>;
+				phandle = <0x160>;
 
 				pins {
 					pinmux = <0xf11 0x2111 0x7a11 0x7b11 0xd11 0x7911 0x2011 0x911 0xa11 0x5111 0x2211 0x7c11 0x7d11 0xb11 0xe0b>;
@@ -3757,7 +3746,7 @@
 			};
 
 			eth2-rgmii-0 {
-				phandle = <0x88>;
+				phandle = <0x8c>;
 
 				pins1 {
 					pinmux = <0x270b 0x280b 0x290b 0x2a0b 0x240b>;
@@ -3796,7 +3785,7 @@
 			};
 
 			eth2-rgmii-sleep-0 {
-				phandle = <0x89>;
+				phandle = <0x8d>;
 
 				pins {
 					pinmux = <0x2711 0x2811 0x2911 0x2a11 0x2411 0x5811 0x5711 0x2611 0x2511 0x6011 0x2c11 0x5911 0x2b11 0x2311 0x5611>;
@@ -3804,7 +3793,7 @@
 			};
 
 			eth3-rgmii-0 {
-				phandle = <0x92>;
+				phandle = <0x96>;
 
 				pins1 {
 					pinmux = <0x60f 0x70f 0x760f 0x730f 0x30f>;
@@ -3837,7 +3826,7 @@
 			};
 
 			eth3-rgmii-sleep-0 {
-				phandle = <0x15d>;
+				phandle = <0x161>;
 
 				pins1 {
 					pinmux = <0x611 0x711 0x7611 0x7311 0x311 0x7211 0x911 0xa11 0x7711 0x7811 0x211 0x511>;
@@ -3864,7 +3853,7 @@
 			};
 
 			i2c2-1 {
-				phandle = <0x15e>;
+				phandle = <0x162>;
 
 				pins {
 					pinmux = <0x520a 0x500a>;
@@ -3875,7 +3864,7 @@
 			};
 
 			i2c2-sleep-1 {
-				phandle = <0x15f>;
+				phandle = <0x163>;
 
 				pins {
 					pinmux = <0x5211 0x5011>;
@@ -3902,7 +3891,7 @@
 			};
 
 			i2s2-1 {
-				phandle = <0x160>;
+				phandle = <0x164>;
 
 				pins {
 					pinmux = <0x1203 0x1303 0x1003>;
@@ -3913,7 +3902,7 @@
 			};
 
 			i2s2-sleep-1 {
-				phandle = <0x161>;
+				phandle = <0x165>;
 
 				pins {
 					pinmux = <0x1211 0x1311 0x1011>;
@@ -3921,7 +3910,7 @@
 			};
 
 			m-can1-0 {
-				phandle = <0x162>;
+				phandle = <0x166>;
 
 				pins1 {
 					pinmux = <0x6b08>;
@@ -3937,7 +3926,7 @@
 			};
 
 			m-can1-sleep-0 {
-				phandle = <0x163>;
+				phandle = <0x167>;
 
 				pins {
 					pinmux = <0x6b11 0x6c11>;
@@ -3945,7 +3934,7 @@
 			};
 
 			m-can3-0 {
-				phandle = <0x164>;
+				phandle = <0x168>;
 
 				pins1 {
 					pinmux = <0x9e08>;
@@ -3961,7 +3950,7 @@
 			};
 
 			m-can3-sleep-0 {
-				phandle = <0x165>;
+				phandle = <0x169>;
 
 				pins {
 					pinmux = <0x9e11 0x8c11>;
@@ -3969,7 +3958,7 @@
 			};
 
 			mdf-cck0-0 {
-				phandle = <0x166>;
+				phandle = <0x16a>;
 
 				pins1 {
 					pinmux = <0x706>;
@@ -3980,7 +3969,7 @@
 			};
 
 			mdf-cck0-sleep-0 {
-				phandle = <0x167>;
+				phandle = <0x16b>;
 
 				pins {
 					pinmux = <0x711>;
@@ -3988,7 +3977,7 @@
 			};
 
 			mdf-sdi6-0 {
-				phandle = <0x168>;
+				phandle = <0x16c>;
 
 				pins1 {
 					pinmux = <0x606>;
@@ -3999,7 +3988,7 @@
 			};
 
 			mdf-sdi6-sleep-0 {
-				phandle = <0x169>;
+				phandle = <0x16d>;
 
 				pins {
 					pinmux = <0x611>;
@@ -4007,7 +3996,7 @@
 			};
 
 			ospi-port1-clk-0 {
-				phandle = <0x16a>;
+				phandle = <0x16e>;
 
 				pins {
 					pinmux = <0x300b>;
@@ -4018,7 +4007,7 @@
 			};
 
 			ospi-port1-clk-sleep-0 {
-				phandle = <0x16b>;
+				phandle = <0x16f>;
 
 				pins {
 					pinmux = <0x3011>;
@@ -4026,7 +4015,7 @@
 			};
 
 			ospi-port1-cs0-0 {
-				phandle = <0x16c>;
+				phandle = <0x170>;
 
 				pins {
 					pinmux = <0x330b>;
@@ -4037,7 +4026,7 @@
 			};
 
 			ospi-port1-cs0-sleep-0 {
-				phandle = <0x16d>;
+				phandle = <0x171>;
 
 				pins {
 					pinmux = <0x3311>;
@@ -4045,7 +4034,7 @@
 			};
 
 			ospi-port1-io03-0 {
-				phandle = <0x16e>;
+				phandle = <0x172>;
 
 				pins {
 					pinmux = <0x340b 0x350b 0x360b 0x370b>;
@@ -4056,7 +4045,7 @@
 			};
 
 			ospi-port1-io03-sleep-0 {
-				phandle = <0x16f>;
+				phandle = <0x173>;
 
 				pins {
 					pinmux = <0x3411 0x3511 0x3611 0x3711>;
@@ -4064,7 +4053,7 @@
 			};
 
 			pcie-0 {
-				phandle = <0x170>;
+				phandle = <0x174>;
 
 				pins {
 					pinmux = <0x9005>;
@@ -4073,7 +4062,7 @@
 			};
 
 			pcie-init-0 {
-				phandle = <0x171>;
+				phandle = <0x175>;
 
 				pins {
 					pinmux = <0x9000>;
@@ -4082,7 +4071,7 @@
 			};
 
 			pcie-sleep-0 {
-				phandle = <0x172>;
+				phandle = <0x176>;
 
 				pins {
 					pinmux = <0x9011>;
@@ -4090,7 +4079,7 @@
 			};
 
 			rtc-out2-rmp-pins-0 {
-				phandle = <0x173>;
+				phandle = <0x177>;
 
 				pins {
 					pinmux = <0x8811>;
@@ -4098,7 +4087,7 @@
 			};
 
 			sai1a-0 {
-				phandle = <0x174>;
+				phandle = <0x178>;
 
 				pins1 {
 					pinmux = <0x3904 0x3804 0x3a04>;
@@ -4116,7 +4105,7 @@
 			};
 
 			sai1a-sleep-0 {
-				phandle = <0x175>;
+				phandle = <0x179>;
 
 				pins {
 					pinmux = <0x3911 0x3811 0x3a11 0x3b11>;
@@ -4124,7 +4113,7 @@
 			};
 
 			sai1b-0 {
-				phandle = <0x176>;
+				phandle = <0x17a>;
 
 				pins {
 					pinmux = <0x3405>;
@@ -4135,7 +4124,7 @@
 			};
 
 			sai1b-sleep-0 {
-				phandle = <0x177>;
+				phandle = <0x17b>;
 
 				pins {
 					pinmux = <0x3411>;
@@ -4143,7 +4132,7 @@
 			};
 
 			sdmmc1-b4-0 {
-				phandle = <0x178>;
+				phandle = <0x17c>;
 
 				pins1 {
 					pinmux = <0x440b 0x450b 0x400b 0x410b 0x420b>;
@@ -4161,7 +4150,7 @@
 			};
 
 			sdmmc1-b4-1 {
-				phandle = <0x65>;
+				phandle = <0x67>;
 
 				pins1 {
 					pinmux = <0x440b 0x450b 0x400b 0x410b 0x420b>;
@@ -4179,7 +4168,7 @@
 			};
 
 			sdmmc1-b4-od-0 {
-				phandle = <0x179>;
+				phandle = <0x17d>;
 
 				pins1 {
 					pinmux = <0x440b 0x450b 0x400b 0x410b>;
@@ -4204,7 +4193,7 @@
 			};
 
 			sdmmc1-b4-od-1 {
-				phandle = <0x66>;
+				phandle = <0x68>;
 
 				pins1 {
 					pinmux = <0x440b 0x450b 0x400b 0x410b>;
@@ -4229,7 +4218,7 @@
 			};
 
 			sdmmc1-b4-sleep-0 {
-				phandle = <0x67>;
+				phandle = <0x69>;
 
 				pins {
 					pinmux = <0x4411 0x4511 0x4011 0x4111 0x4311 0x4211>;
@@ -4237,7 +4226,7 @@
 			};
 
 			sdmmc2-b4-0 {
-				phandle = <0x6a>;
+				phandle = <0x6c>;
 
 				pins1 {
 					pinmux = <0x4d0d 0x4b0d 0x480d 0x4c0d 0x4f0d>;
@@ -4255,7 +4244,7 @@
 			};
 
 			sdmmc2-b4-od-0 {
-				phandle = <0x6c>;
+				phandle = <0x6e>;
 
 				pins1 {
 					pinmux = <0x4d0d 0x4b0d 0x480d 0x4c0d>;
@@ -4280,7 +4269,7 @@
 			};
 
 			sdmmc2-b4-sleep-0 {
-				phandle = <0x6d>;
+				phandle = <0x6f>;
 
 				pins {
 					pinmux = <0x4d11 0x4b11 0x4811 0x4c11 0x4e11 0x4f11>;
@@ -4288,7 +4277,7 @@
 			};
 
 			sdmmc2-d47-0 {
-				phandle = <0x6b>;
+				phandle = <0x6d>;
 
 				pins {
 					pinmux = <0x4a0d 0x490d 0x460d 0x470d>;
@@ -4299,7 +4288,7 @@
 			};
 
 			sdmmc2-d47-sleep-0 {
-				phandle = <0x6e>;
+				phandle = <0x70>;
 
 				pins {
 					pinmux = <0x4a11 0x4911 0x4611 0x4711>;
@@ -4307,7 +4296,7 @@
 			};
 
 			sdmmc3-b4-0 {
-				phandle = <0x71>;
+				phandle = <0x73>;
 
 				pins1 {
 					pinmux = <0x1e0b 0x3d0b 0x1c0b 0x8b0b 0x3c0b>;
@@ -4325,7 +4314,7 @@
 			};
 
 			sdmmc3-b4-od-0 {
-				phandle = <0x72>;
+				phandle = <0x74>;
 
 				pins1 {
 					pinmux = <0x1e0b 0x3d0b 0x1c0b 0x8b0b>;
@@ -4350,7 +4339,7 @@
 			};
 
 			sdmmc3-b4-sleep-0 {
-				phandle = <0x73>;
+				phandle = <0x75>;
 
 				pins {
 					pinmux = <0x1e11 0x3d11 0x1c11 0x8b11 0x1d11 0x3c11>;
@@ -4382,7 +4371,7 @@
 			};
 
 			spi6-0 {
-				phandle = <0x17a>;
+				phandle = <0x17e>;
 
 				pins1 {
 					pinmux = <0x5704 0x2704>;
@@ -4398,7 +4387,7 @@
 			};
 
 			spi6-sleep-0 {
-				phandle = <0x17b>;
+				phandle = <0x17f>;
 
 				pins1 {
 					pinmux = <0x5711 0x2711 0x2411>;
@@ -4531,10 +4520,35 @@
 			};
 
 			pinctrl_usdhc1_gpio {
-				phandle = <0x17c>;
+				phandle = <0x180>;
 
 				pins {
 					pinmux = <0x350b>;
+				};
+			};
+
+			fdcan1_mx-0 {
+				phandle = <0x87>;
+
+				pins1 {
+					pinmux = <0x1b08>;
+					bias-disable;
+					drive-push-pull;
+				};
+
+				pins2 {
+					pinmux = <0x1908>;
+					bias-disable;
+					drive-push-pull;
+					slew-rate = <0x00>;
+				};
+			};
+
+			fdcan1_sleep_mx-0 {
+				phandle = <0x88>;
+
+				pins {
+					pinmux = <0x1911 0x1b11>;
 				};
 			};
 
@@ -4635,18 +4649,15 @@
 				phandle = <0x500>;
 
 				pins {
-					pinmux = <0x1404>,		/* PB4 = SAI4_FS_B (AF4) */
-					         <0x1504>,		/* PB5 = SAI4_SD_B (AF4) */
-					         <0x1604>;		/* PB6 = SAI4_SCK_B (AF4) */
+					pinmux = <0x1405 0x1505 0x1605>;
 					bias-disable;
 					drive-push-pull;
 					slew-rate = <0x01>;
 				};
 			};
 
-
 			uart8-0 {
-				phandle = <0x48>;
+				phandle = <0x4a>;
 
 				pins1 {
 					pinmux = <0x5a07>;
@@ -4662,7 +4673,7 @@
 			};
 
 			uart8-idle-0 {
-				phandle = <0x49>;
+				phandle = <0x4b>;
 
 				pins1 {
 					pinmux = <0x5a11>;
@@ -4675,7 +4686,7 @@
 			};
 
 			uart8-sleep-0 {
-				phandle = <0x4a>;
+				phandle = <0x4c>;
 
 				pins {
 					pinmux = <0x5a11 0x5b11>;
@@ -4738,6 +4749,30 @@
 				};
 			};
 
+			spi7-0 {
+				phandle = <0x48>;
+
+				pins1 {
+					pinmux = <0x6d03 0x6b03>;
+					drive-push-pull;
+					bias-disable;
+					slew-rate = <0x01>;
+				};
+
+				pins2 {
+					pinmux = <0x6c03>;
+					bias-disable;
+				};
+			};
+
+			spi7-sleep-0 {
+				phandle = <0x49>;
+
+				pins1 {
+					pinmux = <0x6d11 0x6b11 0x6c11>;
+				};
+			};
+
 			i2s3-0 {
 				phandle = <0x21>;
 
@@ -4758,7 +4793,7 @@
 			};
 
 			adc_12_mx-0 {
-				phandle = <0x4b>;
+				phandle = <0x4d>;
 
 				pins {
 					pinmux = <0x6311 0x6411>;
@@ -4766,7 +4801,7 @@
 			};
 
 			adc_12_sleep_mx-0 {
-				phandle = <0x4c>;
+				phandle = <0x4e>;
 
 				pins {
 					pinmux = <0x6311 0x6411>;
@@ -4779,9 +4814,9 @@
 			reg = <0x46000000 0x400>;
 			clocks = <0x07 0x4b 0x07 0x4c>;
 			clock-names = "pclk\0rtc_ck";
-			interrupts-extended = <0x54 0x11 0x04>;
+			interrupts-extended = <0x56 0x11 0x04>;
 			status = "disabled";
-			phandle = <0x17d>;
+			phandle = <0x181>;
 		};
 
 		tamp@46010000 {
@@ -4790,12 +4825,12 @@
 			#size-cells = <0x01>;
 			reg = <0x46010000 0x400>;
 			ranges;
-			phandle = <0x17e>;
+			phandle = <0x182>;
 
 			nvram@46010100 {
 				compatible = "st,stm32mp25-tamp-nvram";
 				reg = <0x46010100 0x200>;
-				phandle = <0x17f>;
+				phandle = <0x183>;
 
 				nvmem-layout {
 					compatible = "fixed-layout";
@@ -4804,24 +4839,24 @@
 
 					tamp-bkp@180 {
 						reg = <0x180 0x04>;
-						phandle = <0x96>;
+						phandle = <0x9a>;
 					};
 
 					tamp-bkp@184 {
 						reg = <0x184 0x04>;
-						phandle = <0xaa>;
+						phandle = <0xae>;
 					};
 
 					tamp-bkp@188 {
 						reg = <0x188 0x04>;
-						phandle = <0xab>;
+						phandle = <0xaf>;
 					};
 				};
 			};
 
 			reboot-mode {
 				compatible = "nvmem-reboot-mode";
-				nvmem-cells = <0x96>;
+				nvmem-cells = <0x9a>;
 				nvmem-cell-names = "reboot-mode";
 				mode-normal = <0x00>;
 				mode-fastboot = <0x01>;
@@ -4831,7 +4866,7 @@
 				mode-ums_mmc1 = <0x11>;
 				mode-ums_mmc2 = <0x12>;
 				mode-romcode_serial = <0xff>;
-				phandle = <0x180>;
+				phandle = <0x184>;
 			};
 		};
 
@@ -4841,7 +4876,7 @@
 			compatible = "st,stm32mp257-z-pinctrl";
 			ranges = <0x00 0x46200000 0x400>;
 			interrupt-parent = <0x1e>;
-			phandle = <0x97>;
+			phandle = <0x9b>;
 
 			gpio@46200000 {
 				gpio-controller;
@@ -4854,12 +4889,12 @@
 				st,bank-ioport = <0x0b>;
 				status = "okay";
 				ngpios = <0x0a>;
-				gpio-ranges = <0x97 0x00 0x190 0x0a>;
+				gpio-ranges = <0x9b 0x00 0x190 0x0a>;
 				phandle = <0x33>;
 			};
 
 			i2c8-0 {
-				phandle = <0x58>;
+				phandle = <0x5a>;
 
 				pins {
 					pinmux = <0x19409 0x19909>;
@@ -4870,7 +4905,7 @@
 			};
 
 			i2c8-sleep-0 {
-				phandle = <0x59>;
+				phandle = <0x5b>;
 
 				pins {
 					pinmux = <0x19411 0x19911>;
@@ -4878,7 +4913,7 @@
 			};
 
 			i3c4-0 {
-				phandle = <0x181>;
+				phandle = <0x185>;
 
 				pins {
 					pinmux = <0x1940c 0x1930c>;
@@ -4889,7 +4924,7 @@
 			};
 
 			i3c4-init-0 {
-				phandle = <0x182>;
+				phandle = <0x186>;
 
 				pins1 {
 					pinmux = <0x1940c>;
@@ -4907,7 +4942,7 @@
 			};
 
 			i3c4-sleep-0 {
-				phandle = <0x183>;
+				phandle = <0x187>;
 
 				pins {
 					pinmux = <0x19411 0x19311>;
@@ -4915,7 +4950,7 @@
 			};
 
 			lpuart1-0 {
-				phandle = <0x55>;
+				phandle = <0x57>;
 
 				pins1 {
 					pinmux = <0x19707 0x19507>;
@@ -4931,7 +4966,7 @@
 			};
 
 			lpuart1-idle-0 {
-				phandle = <0x56>;
+				phandle = <0x58>;
 
 				pins1 {
 					pinmux = <0x19711 0x19611>;
@@ -4951,7 +4986,7 @@
 			};
 
 			lpuart1-sleep-0 {
-				phandle = <0x57>;
+				phandle = <0x59>;
 
 				pins {
 					pinmux = <0x19711 0x19511 0x19611 0x19811>;
@@ -4959,7 +4994,7 @@
 			};
 
 			spi8-0 {
-				phandle = <0x52>;
+				phandle = <0x54>;
 
 				pins1 {
 					pinmux = <0x19204 0x19004>;
@@ -4975,7 +5010,7 @@
 			};
 
 			spi8-sleep-0 {
-				phandle = <0x53>;
+				phandle = <0x55>;
 
 				pins1 {
 					pinmux = <0x19211 0x19011 0x19111>;
@@ -4989,7 +5024,7 @@
 			#interrupt-cells = <0x02>;
 			reg = <0x46230000 0x400>;
 			interrupts-extended = <0x06 0x00 0x11 0x04 0x06 0x00 0x12 0x04 0x06 0x00 0x13 0x04 0x06 0x00 0x14 0x04 0x06 0x00 0x15 0x04 0x06 0x00 0x16 0x04 0x06 0x00 0x17 0x04 0x06 0x00 0x18 0x04 0x06 0x00 0x19 0x04 0x06 0x00 0x1a 0x04 0x06 0x00 0x1b 0x04 0x06 0x00 0x1c 0x04 0x06 0x00 0x1d 0x04 0x06 0x00 0x1e 0x04 0x06 0x00 0x1f 0x04 0x06 0x00 0x20 0x04 0x06 0x00 0x0c 0x04 0x06 0x00 0x0d 0x04 0x00 0x00 0x00 0x06 0x00 0x0e 0x04 0x06 0x00 0x0f 0x04 0x00 0x00 0x06 0x00 0xd4 0x04 0x06 0x00 0x97 0x04 0x06 0x00 0x9c 0x04 0x00 0x06 0x00 0xd8 0x04 0x06 0x00 0xd9 0x04 0x06 0x00 0xda 0x04 0x00 0x06 0x00 0xcf 0x04 0x06 0x00 0xaf 0x04 0x00 0x00 0x06 0x00 0xb1 0x04 0x00 0x00 0x06 0x00 0xc7 0x04 0x00 0x00 0x06 0x00 0xc8 0x04 0x00 0x00 0x06 0x00 0x0b 0x04 0x00 0x06 0x00 0x05 0x04 0x06 0x00 0x04 0x04 0x06 0x00 0x06 0x04 0x06 0x00 0x07 0x04 0x06 0x00 0x02 0x04 0x06 0x00 0x03 0x04 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x06 0x00 0xdd 0x04 0x06 0x00 0xf6 0x04 0x00 0x06 0x00 0xf7 0x04 0x06 0x00 0xf8 0x04 0x06 0x00 0xf9 0x04 0x06 0x00 0x100 0x04 0x00 0x00 0x06 0x00 0xd5 0x04>;
-			phandle = <0x54>;
+			phandle = <0x56>;
 		};
 
 		mailbox@46250000 {
@@ -4997,12 +5032,12 @@
 			#mbox-cells = <0x01>;
 			reg = <0x46250000 0x400>;
 			st,proc-id = <0x01>;
-			interrupts-extended = <0x54 0x22 0x00 0x06 0x00 0xb0 0x04>;
+			interrupts-extended = <0x56 0x22 0x00 0x06 0x00 0xb0 0x04>;
 			interrupt-names = "rx\0tx";
 			clocks = <0x07 0x6a>;
 			wakeup-source;
 			status = "okay";
-			phandle = <0xb5>;
+			phandle = <0xb9>;
 		};
 
 		perf@48041000 {
@@ -5010,7 +5045,7 @@
 			reg = <0x48041000 0x400>;
 			access-controllers = <0x16 0x68>;
 			status = "disabled";
-			phandle = <0x184>;
+			phandle = <0x188>;
 		};
 
 		memory-controller@48200000 {
@@ -5023,7 +5058,7 @@
 			resets = <0x1d 0x04>;
 			power-domains = <0x0c>;
 			status = "disabled";
-			phandle = <0x185>;
+			phandle = <0x189>;
 
 			nand-controller@4,0 {
 				compatible = "st,stm32mp25-fmc2-nfc";
@@ -5041,7 +5076,7 @@
 			compatible = "st,stm32mp25-a35ss-syscfg\0syscon";
 			reg = <0x48802000 0xac>;
 			status = "okay";
-			phandle = <0xb4>;
+			phandle = <0xb8>;
 		};
 
 		funnel@4a020000 {
@@ -5050,7 +5085,7 @@
 			clocks = <0x07 0x78>;
 			clock-names = "apb_pclk";
 			status = "okay";
-			phandle = <0x186>;
+			phandle = <0x18a>;
 
 			in-ports {
 				#address-cells = <0x01>;
@@ -5060,8 +5095,8 @@
 					reg = <0x00>;
 
 					endpoint {
-						remote-endpoint = <0x98>;
-						phandle = <0xa6>;
+						remote-endpoint = <0x9c>;
+						phandle = <0xaa>;
 					};
 				};
 
@@ -5069,8 +5104,8 @@
 					reg = <0x02>;
 
 					endpoint {
-						remote-endpoint = <0x99>;
-						phandle = <0xa0>;
+						remote-endpoint = <0x9d>;
+						phandle = <0xa4>;
 					};
 				};
 
@@ -5078,8 +5113,8 @@
 					reg = <0x01>;
 
 					endpoint {
-						remote-endpoint = <0x9a>;
-						phandle = <0xa8>;
+						remote-endpoint = <0x9e>;
+						phandle = <0xac>;
 					};
 				};
 			};
@@ -5089,8 +5124,8 @@
 				port {
 
 					endpoint {
-						remote-endpoint = <0x9b>;
-						phandle = <0x9c>;
+						remote-endpoint = <0x9f>;
+						phandle = <0xa0>;
 					};
 				};
 			};
@@ -5102,15 +5137,15 @@
 			clocks = <0x07 0x78>;
 			clock-names = "apb_pclk";
 			status = "okay";
-			phandle = <0xa2>;
+			phandle = <0xa6>;
 
 			in-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0x9c>;
-						phandle = <0x9b>;
+						remote-endpoint = <0xa0>;
+						phandle = <0x9f>;
 					};
 				};
 			};
@@ -5120,7 +5155,7 @@
 				port {
 
 					endpoint {
-						remote-endpoint = <0x9d>;
+						remote-endpoint = <0xa1>;
 						phandle = <0x08>;
 					};
 				};
@@ -5135,14 +5170,14 @@
 			arm,max-burst-size = <0x03>;
 			arm,scatter-gather;
 			status = "okay";
-			phandle = <0xa1>;
+			phandle = <0xa5>;
 
 			in-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0x9e>;
+						remote-endpoint = <0xa2>;
 						phandle = <0x09>;
 					};
 				};
@@ -5155,14 +5190,14 @@
 			clocks = <0x07 0x77 0x07 0x76>;
 			clock-names = "apb_pclk\0atclk";
 			status = "okay";
-			phandle = <0xa3>;
+			phandle = <0xa7>;
 
 			in-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0x9f>;
+						remote-endpoint = <0xa3>;
 						phandle = <0x0a>;
 					};
 				};
@@ -5176,15 +5211,15 @@
 			clocks = <0x07 0x7a 0x07 0x7b>;
 			clock-names = "apb_pclk\0atclk";
 			status = "okay";
-			phandle = <0xa4>;
+			phandle = <0xa8>;
 
 			out-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0xa0>;
-						phandle = <0x99>;
+						remote-endpoint = <0xa4>;
+						phandle = <0x9d>;
 					};
 				};
 			};
@@ -5198,7 +5233,7 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			status = "okay";
-			phandle = <0x187>;
+			phandle = <0x18b>;
 
 			trig-conns@0 {
 				reg = <0x00>;
@@ -5206,7 +5241,7 @@
 				arm,trig-in-types = <0x0c 0x0d>;
 				arm,trig-out-sigs = <0x00 0x01>;
 				arm,trig-out-types = <0x0f 0x10>;
-				arm,cs-dev-assoc = <0xa1>;
+				arm,cs-dev-assoc = <0xa5>;
 			};
 
 			trig-conns@1 {
@@ -5215,21 +5250,21 @@
 				arm,trig-in-types = <0x0c 0x0d>;
 				arm,trig-out-sigs = <0x02 0x03>;
 				arm,trig-out-types = <0x0f 0x10>;
-				arm,cs-dev-assoc = <0xa2>;
+				arm,cs-dev-assoc = <0xa6>;
 			};
 
 			trig-conns@2 {
 				reg = <0x02>;
 				arm,trig-out-sigs = <0x04 0x05>;
 				arm,trig-out-types = <0x0f 0x10>;
-				arm,cs-dev-assoc = <0xa3>;
+				arm,cs-dev-assoc = <0xa7>;
 			};
 
 			trig-conns@3 {
 				reg = <0x03>;
 				arm,trig-in-sigs = <0x04 0x05 0x06 0x07>;
 				arm,trig-in-types = <0x12 0x13 0x14 0x11>;
-				arm,cs-dev-assoc = <0xa4>;
+				arm,cs-dev-assoc = <0xa8>;
 			};
 		};
 
@@ -5241,7 +5276,7 @@
 			#address-cells = <0x01>;
 			#size-cells = <0x00>;
 			status = "okay";
-			phandle = <0x188>;
+			phandle = <0x18c>;
 
 			trig-conns@0 {
 				reg = <0x00>;
@@ -5256,7 +5291,7 @@
 				reg = <0x01>;
 				arm,trig-out-sigs = <0x01 0x02>;
 				arm,trig-out-types = <0x15 0x15>;
-				arm,cs-dev-assoc = <0xa4>;
+				arm,cs-dev-assoc = <0xa8>;
 			};
 		};
 
@@ -5266,7 +5301,7 @@
 			clocks = <0x07 0x77>;
 			clock-names = "apb_pclk";
 			status = "okay";
-			phandle = <0x189>;
+			phandle = <0x18d>;
 		};
 
 		cti@4a220000 {
@@ -5275,9 +5310,9 @@
 			clocks = <0x07 0x77>;
 			clock-names = "apb_pclk";
 			cpu = <0x04>;
-			arm,cs-dev-assoc = <0xa5>;
+			arm,cs-dev-assoc = <0xa9>;
 			status = "okay";
-			phandle = <0x18a>;
+			phandle = <0x18e>;
 		};
 
 		etm@4a240000 {
@@ -5287,15 +5322,15 @@
 			clock-names = "apb_pclk\0atclk";
 			cpu = <0x04>;
 			status = "okay";
-			phandle = <0xa5>;
+			phandle = <0xa9>;
 
 			out-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0xa6>;
-						phandle = <0x98>;
+						remote-endpoint = <0xaa>;
+						phandle = <0x9c>;
 					};
 				};
 			};
@@ -5308,7 +5343,7 @@
 			clock-names = "apb_pclk";
 			cpu = <0x05>;
 			status = "okay";
-			phandle = <0x18b>;
+			phandle = <0x18f>;
 		};
 
 		cti@4a320000 {
@@ -5317,9 +5352,9 @@
 			clocks = <0x07 0x77>;
 			clock-names = "apb_pclk";
 			cpu = <0x05>;
-			arm,cs-dev-assoc = <0xa7>;
+			arm,cs-dev-assoc = <0xab>;
 			status = "okay";
-			phandle = <0x18c>;
+			phandle = <0x190>;
 		};
 
 		etm@4a340000 {
@@ -5329,15 +5364,15 @@
 			clock-names = "apb_pclk\0atclk";
 			cpu = <0x05>;
 			status = "okay";
-			phandle = <0xa7>;
+			phandle = <0xab>;
 
 			out-ports {
 
 				port {
 
 					endpoint {
-						remote-endpoint = <0xa8>;
-						phandle = <0x9a>;
+						remote-endpoint = <0xac>;
+						phandle = <0x9e>;
 					};
 				};
 			};
@@ -5350,24 +5385,24 @@
 		#size-cells = <0x01>;
 		ranges = <0x00 0x00 0x00 0xfffffffc>;
 		dma-ranges = <0x00 0x00 0x00 0xfffffffc>;
-		phandle = <0x18d>;
+		phandle = <0x191>;
 
 		m33@0 {
 			compatible = "st,stm32mp2-m33";
 			reg = <0x00 0x00>;
 			resets = <0x1d 0x01 0x1d 0x03>;
 			reset-names = "mcu_rst\0hold_boot";
-			st,syscfg-cm-state = <0xa9 0x204 0x0c>;
+			st,syscfg-cm-state = <0xad 0x204 0x0c>;
 			interrupt-parent = <0x06>;
 			interrupts = <0x00 0x04 0x04>;
-			nvmem-cells = <0xaa 0xab>;
+			nvmem-cells = <0xae 0xaf>;
 			nvmem-cell-names = "rsc-tbl-addr\0rsc-tbl-size";
 			status = "okay";
-			mboxes = <0xac 0x100 0xac 0x101 0xac 0x02>;
+			mboxes = <0xb0 0x100 0xb0 0x101 0xb0 0x02>;
 			mbox-names = "vq0\0vq1\0shutdown";
-			memory-region = <0xad 0xae 0xaf 0xb0 0xb1 0xb2 0xb3>;
-			st,syscfg-nsvtor = <0xb4 0xa8 0xffffff80>;
-			phandle = <0x18e>;
+			memory-region = <0xb1 0xb2 0xb3 0xb4 0xb5 0xb6 0xb7>;
+			st,syscfg-nsvtor = <0xb8 0xa8 0xffffff80>;
+			phandle = <0x192>;
 		};
 	};
 
@@ -5377,7 +5412,7 @@
 		#size-cells = <0x01>;
 		ranges = <0x00 0x00 0x00 0xfffffffc>;
 		dma-ranges = <0x00 0x00 0x00 0xfffffffc>;
-		phandle = <0x18f>;
+		phandle = <0x193>;
 
 		m0@0 {
 			compatible = "st,stm32mp2-m0";
@@ -5388,20 +5423,20 @@
 			interrupt-parent = <0x06>;
 			interrupts = <0x00 0x07 0x04>;
 			status = "okay";
-			mboxes = <0xb5 0x00 0xb5 0x01 0xb5 0x02>;
+			mboxes = <0xb9 0x00 0xb9 0x01 0xb9 0x02>;
 			mbox-names = "rx\0tx\0shutdown";
-			memory-region = <0xb6 0xb7>;
-			phandle = <0x190>;
+			memory-region = <0xba 0xbb>;
+			phandle = <0x194>;
 		};
 
 		mailbox-client@1 {
 			compatible = "mbox-cdev";
 			reg = <0x01 0x00>;
-			memory-region = <0xb8>;
-			mboxes = <0xb5 0x00>;
+			memory-region = <0xbc>;
+			mboxes = <0xb9 0x00>;
 			mbox-names = "rx-tx";
 			status = "okay";
-			phandle = <0x191>;
+			phandle = <0x195>;
 		};
 	};
 
@@ -5443,11 +5478,11 @@
 		regulator-min-microvolt = <0x325aa0>;
 		regulator-max-microvolt = <0x325aa0>;
 		regulator-enable-ramp-delay = <0x3e8>;
-		gpio = <0x5b 0x01 0x00>;
+		gpio = <0x5d 0x01 0x00>;
 		enable-active-high;
 		regulator-boot-on;
 		regulator-always-on;
-		phandle = <0x192>;
+		phandle = <0x196>;
 	};
 
 	bt-reg {
@@ -5456,11 +5491,11 @@
 		regulator-min-microvolt = <0x325aa0>;
 		regulator-max-microvolt = <0x325aa0>;
 		regulator-enable-ramp-delay = <0x3e8>;
-		gpio = <0x5b 0x07 0x00>;
+		gpio = <0x5d 0x07 0x00>;
 		enable-active-high;
 		regulator-boot-on;
 		regulator-always-on;
-		phandle = <0x193>;
+		phandle = <0x197>;
 	};
 
 	gpio-keys {
@@ -5477,10 +5512,18 @@
 	gpio-leds {
 		compatible = "gpio-leds";
 
+		led-blue {
+			function = "heartbeat";
+			color = <0x03>;
+			gpios = <0x33 0x05 0x01>;
+			linux,default-trigger = "heartbeat";
+			default-state = "off";
+		};
+
 		led-green {
 			function = "heartbeat";
 			color = <0x02>;
-			gpios = <0xb9 0x04 0x01>;
+			gpios = <0xbd 0x04 0x01>;
 			linux,default-trigger = "heartbeat";
 			default-state = "off";
 		};
@@ -5490,12 +5533,12 @@
 		compatible = "hdmi-connector";
 		label = "hdmi";
 		type = "a";
-		phandle = <0x194>;
+		phandle = <0x198>;
 
 		port {
 
 			endpoint {
-				remote-endpoint = <0xba>;
+				remote-endpoint = <0xbe>;
 				phandle = <0x3a>;
 			};
 		};
@@ -5507,7 +5550,7 @@
 		regulator-min-microvolt = <0x2c4020>;
 		regulator-max-microvolt = <0x2c4020>;
 		regulator-always-on;
-		phandle = <0x195>;
+		phandle = <0x199>;
 	};
 
 	imx335-1v8 {
@@ -5516,7 +5559,7 @@
 		regulator-min-microvolt = <0x1b7740>;
 		regulator-max-microvolt = <0x1b7740>;
 		regulator-always-on;
-		phandle = <0x196>;
+		phandle = <0x19a>;
 	};
 
 	imx335-1v2 {
@@ -5525,7 +5568,7 @@
 		regulator-min-microvolt = <0x124f80>;
 		regulator-max-microvolt = <0x124f80>;
 		regulator-always-on;
-		phandle = <0x197>;
+		phandle = <0x19b>;
 	};
 
 	memory@80000000 {
@@ -5535,7 +5578,7 @@
 
 	bcmdhd_wlan {
 		compatible = "android,bcmdhd_wlan";
-		gpio_wl_reg_on = <0x5b 0x05 0x00>;
+		gpio_wl_reg_on = <0x5d 0x05 0x00>;
 		gpio_wl_host_wake = <0x33 0x06 0x00>;
 	};
 
@@ -5545,18 +5588,18 @@
 		default-on;
 		default-brightness-level = <0x00>;
 		status = "disabled";
-		phandle = <0x198>;
+		phandle = <0x19c>;
 	};
 
 	panel-lvds {
 		compatible = "myd-ld25x-070-panel\0panel-lvds";
-		backlight = <0xbb>;
+		backlight = <0xbf>;
 		default-on;
 		status = "okay";
 		width-mm = <0x9c>;
 		height-mm = <0x5c>;
 		data-mapping = "vesa-24";
-		phandle = <0x199>;
+		phandle = <0x19d>;
 
 		panel-timing {
 			clock-frequency = <0x3197500>;
@@ -5573,56 +5616,82 @@
 		port {
 
 			endpoint {
-				remote-endpoint = <0xbc>;
-				phandle = <0x8f>;
+				remote-endpoint = <0xc0>;
+				phandle = <0x93>;
 			};
 		};
 	};
 
 	panel-lvds-backlight {
 		compatible = "gpio-backlight";
-		gpios = <0xb9 0x05 0x00>;
+		gpios = <0xbd 0x05 0x00>;
 		default-on;
 		default-brightness-level = <0x01>;
 		status = "okay";
-		phandle = <0xbb>;
+		phandle = <0xbf>;
 	};
 
 	HDMI-Sound {
 		compatible = "audio-graph-card";
 		label = "HDMI-SOUND-CARD";
-		dais = <0xbd>;
+		dais = <0xc1>;
 		status = "okay";
 	};
 
 	ES8388-Sound {
-		status = "okay";
+		status = "disabled";
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,name = "ES8388-SOUND-CARD";
 		simple-audio-card,mclk-fs = <0x100>;
-		simple-audio-card,bitclock-master = <0xbe>;
-		simple-audio-card,frame-master = <0xbe>;
+		simple-audio-card,bitclock-master = <0xc2>;
+		simple-audio-card,frame-master = <0xc2>;
 		simple-audio-card,widgets = "Headphone\0Headphone Jack\0Microphone\0Mic Jack";
 		simple-audio-card,routing = "Headphone Jack\0LOUT1\0Headphone Jack\0ROUT1\0LINPUT1\0Mic Jack\0RINPUT1\0Mic Jack";
 
 		simple-audio-card,cpu {
 			system-clock-frequency = <0xac4400>;
 			sound-dai = <0x31>;
-			phandle = <0xbe>;
+			phandle = <0xc2>;
 		};
 
 		simple-audio-card,codec {
-			sound-dai = <0xbf>;
+			sound-dai = <0xc3>;
 			system-clock-frequency = <0xac4400>;
-			phandle = <0x19a>;
+			phandle = <0x19e>;
+		};
+	};
+
+	max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0x00>;
+		status = "okay";
+		phandle = <0x501>;
+	};
+
+	sound {
+		compatible = "simple-audio-card";
+		label = "MAX98357A";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <0x100>;
+
+		simple-audio-card,cpu {
+			sound-dai = <0x10f>;
+			bitclock-master;
+			frame-master;
+			dai-tdm-slot-num = <0x02>;
+			dai-tdm-slot-width = <0x20>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <0x501>;
 		};
 	};
 
 	usdhc1_pwrseq {
 		compatible = "mmc-pwrseq-simple";
-		reset-gpios = <0x5b 0x05 0x01>;
-		phandle = <0x75>;
+		reset-gpios = <0x5d 0x05 0x01>;
+		phandle = <0x77>;
 	};
 
 	reserved-memory {
@@ -5633,7 +5702,7 @@
 		tfa-bl31@a000000 {
 			reg = <0x00 0xa000000 0x00 0x20000>;
 			no-map;
-			phandle = <0x19b>;
+			phandle = <0x19f>;
 		};
 
 		hpdma1-lli@a020000 {
@@ -5642,8 +5711,8 @@
 			phandle = <0x18>;
 		};
 
-		hpdma2-lli@a030000 {
-			reg = <0x00 0xa030000 0x00 0xe000>;
+		hpdma2-lli@a02f0f0 {
+			reg = <0x00 0xa02f0f0 0x00 0xf0f0>;
 			no-map;
 			phandle = <0x19>;
 		};
@@ -5657,158 +5726,158 @@
 		bsec-mirror@a040000 {
 			reg = <0x00 0xa040000 0x00 0x1000>;
 			no-map;
-			phandle = <0x19c>;
+			phandle = <0x1a0>;
 		};
 
 		cm33-sram1@a041000 {
 			reg = <0x00 0xa041000 0x00 0x1f000>;
 			no-map;
-			phandle = <0x19d>;
+			phandle = <0x1a1>;
 		};
 
 		cm33-sram2@a060000 {
 			reg = <0x00 0xa060000 0x00 0x20000>;
 			no-map;
-			phandle = <0xb3>;
+			phandle = <0xb7>;
 		};
 
 		cm33-retram@a080000 {
 			reg = <0x00 0xa080000 0x00 0x1f000>;
 			no-map;
-			phandle = <0x19e>;
+			phandle = <0x1a2>;
 		};
 
 		ddr-param@a09f000 {
 			reg = <0x00 0xa09f000 0x00 0x1000>;
 			no-map;
-			phandle = <0x19f>;
+			phandle = <0x1a3>;
 		};
 
 		cm0-cube-fw@200C0000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x200c0000 0x00 0x4000>;
 			no-map;
-			phandle = <0xb6>;
+			phandle = <0xba>;
 		};
 
 		cm0-cube-data@200C4000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x200c4000 0x00 0x2000>;
 			no-map;
-			phandle = <0xb7>;
+			phandle = <0xbb>;
 		};
 
 		ipc-shmem-2@200C6000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x200c6000 0x00 0x2000>;
 			no-map;
-			phandle = <0xb8>;
+			phandle = <0xbc>;
 		};
 
 		bl31-lowpower@42000000 {
 			reg = <0x00 0x42000000 0x00 0x1000>;
 			no-map;
-			phandle = <0x1a0>;
+			phandle = <0x1a4>;
 		};
 
 		tfm-its@42001000 {
 			reg = <0x00 0x42001000 0x00 0x1000>;
 			no-map;
-			phandle = <0x1a1>;
+			phandle = <0x1a5>;
 		};
 
 		mm-ospi@60000000 {
 			reg = <0x00 0x60000000 0x00 0x10000000>;
 			no-map;
-			phandle = <0x1a2>;
+			phandle = <0x1a6>;
 		};
 
 		tfm-code@80000000 {
 			reg = <0x00 0x80000000 0x00 0x100000>;
 			no-map;
-			phandle = <0x1a3>;
+			phandle = <0x1a7>;
 		};
 
 		cm33-cube-fw@80100000 {
 			reg = <0x00 0x80100000 0x00 0x800000>;
 			no-map;
-			phandle = <0xad>;
+			phandle = <0xb1>;
 		};
 
 		tfm-data@80900000 {
 			reg = <0x00 0x80900000 0x00 0x100000>;
 			no-map;
-			phandle = <0x1a4>;
+			phandle = <0x1a8>;
 		};
 
 		cm33-cube-data@80a00000 {
 			reg = <0x00 0x80a00000 0x00 0x800000>;
 			no-map;
-			phandle = <0xae>;
+			phandle = <0xb2>;
 		};
 
 		ipc-shmem-1@81200000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x81200000 0x00 0xf8000>;
 			no-map;
-			phandle = <0xaf>;
+			phandle = <0xb3>;
 		};
 
 		vdev0vring0@812f8000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x812f8000 0x00 0x1000>;
 			no-map;
-			phandle = <0xb0>;
+			phandle = <0xb4>;
 		};
 
 		vdev0vring1@812f9000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x812f9000 0x00 0x1000>;
 			no-map;
-			phandle = <0xb1>;
+			phandle = <0xb5>;
 		};
 
 		vdev0buffer@812fa000 {
 			compatible = "shared-dma-pool";
 			reg = <0x00 0x812fa000 0x00 0x6000>;
 			no-map;
-			phandle = <0xb2>;
+			phandle = <0xb6>;
 		};
 
 		spare1@81300000 {
 			reg = <0x00 0x81300000 0x00 0xcc0000>;
 			no-map;
-			phandle = <0x1a5>;
+			phandle = <0x1a9>;
 		};
 
 		bl31-context@81fc0000 {
 			reg = <0x00 0x81fc0000 0x00 0x40000>;
 			no-map;
-			phandle = <0x1a6>;
+			phandle = <0x1aa>;
 		};
 
 		op-tee@82000000 {
 			reg = <0x00 0x82000000 0x00 0x2000000>;
 			no-map;
-			phandle = <0x1a7>;
+			phandle = <0x1ab>;
 		};
 
 		gpu-reserved@fa800000 {
 			reg = <0x00 0xfa800000 0x00 0x4000000>;
 			no-map;
-			phandle = <0x91>;
+			phandle = <0x95>;
 		};
 
 		ltdc-sec-layer@fe800000 {
 			reg = <0x00 0xfe800000 0x00 0x800000>;
 			no-map;
-			phandle = <0x1a8>;
+			phandle = <0x1ac>;
 		};
 
 		ltdc-sec-rotation@ff000000 {
 			reg = <0x00 0xff000000 0x00 0x1000000>;
 			no-map;
-			phandle = <0x5e>;
+			phandle = <0x60>;
 		};
 
 		linux,cma {
@@ -6130,6 +6199,8 @@
 		usart6_idle_pins_a = "/soc@0/pinctrl@44240000/usart6-idle-0";
 		usart6_sleep_pins_a = "/soc@0/pinctrl@44240000/usart6-sleep-0";
 		pinctrl_usdhc1_gpio = "/soc@0/pinctrl@44240000/pinctrl_usdhc1_gpio";
+		fdcan1_pins_mx = "/soc@0/pinctrl@44240000/fdcan1_mx-0";
+		fdcan1_sleep_pins_mx = "/soc@0/pinctrl@44240000/fdcan1_sleep_mx-0";
 		i2c3_pins_a = "/soc@0/pinctrl@44240000/i2c3-0";
 		i2c3_sleep_pins_a = "/soc@0/pinctrl@44240000/i2c3-sleep-0";
 		usart3_pins_a = "/soc@0/pinctrl@44240000/usart3-0";
@@ -6146,6 +6217,8 @@
 		uart9_sleep_pins_a = "/soc@0/pinctrl@44240000/uart9-sleep-0";
 		i2s1_pins_a = "/soc@0/pinctrl@44240000/i2s1-0";
 		i2s1_sleep_pins_a = "/soc@0/pinctrl@44240000/i2s1-sleep-0";
+		spi7_pins_a = "/soc@0/pinctrl@44240000/spi7-0";
+		spi7_sleep_pins_a = "/soc@0/pinctrl@44240000/spi7-sleep-0";
 		i2s3_pins_a = "/soc@0/pinctrl@44240000/i2s3-0";
 		i2s3_sleep_pins_a = "/soc@0/pinctrl@44240000/i2s3-sleep-0";
 		adc_12_pins_mx = "/soc@0/pinctrl@44240000/adc_12_mx-0";
@@ -6219,7 +6292,7 @@
 		usdhc1_pwrseq = "/usdhc1_pwrseq";
 		tfa_bl31 = "/reserved-memory/tfa-bl31@a000000";
 		hpdma1_lli = "/reserved-memory/hpdma1-lli@a020000";
-		hpdma2_lli = "/reserved-memory/hpdma2-lli@a030000";
+		hpdma2_lli = "/reserved-memory/hpdma2-lli@a02f0f0";
 		hpdma3_lli = "/reserved-memory/hpdma3-lli@a03e1e0";
 		bsec_mirror = "/reserved-memory/bsec-mirror@a040000";
 		cm33_sram1 = "/reserved-memory/cm33-sram1@a041000";
