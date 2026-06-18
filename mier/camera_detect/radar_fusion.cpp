@@ -1,0 +1,1088 @@
+/**
+ * radar_fusion.cpp - 雷达 + 摄像头 NPU 融合 + DVR 行车记录
+ *
+ * 功能:
+ *   1. 雷达 BSD 目标检测 + 摄像头 NPU 道路用户验证
+ *   2. PD11 LED 告警闪烁
+ *   3. DVR 行车记录:
+ *      - TARGET_ON → 开始缓冲 MJPEG 帧到 TF 卡
+ *      - COLLISION + NPU 确认 → 保存前后各 15 秒为 MP4
+ *      - TARGET_OFF → 清理缓冲(无触发时)
+ *
+ * 编译: make radar-fusion CC=... CXX=...
+ * 运行: ./radar_fusion [-d /dev/video7] [-u /dev/ttySTM1] [-c 0.60]
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/time.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <pthread.h>
+#include <setjmp.h>
+#include <time.h>
+#include <dirent.h>
+
+#include <linux/gpio.h>
+#include <jpeglib.h>
+
+#include "camera.h"
+#include "npu_detect.h"
+
+/* ======================== 配置常量 ======================== */
+#define UART_DEVICE            "/dev/ttySTM1"
+#define BAUDRATE               921600
+#define TTC_THRESHOLD          10.0f
+#define DIST_THRESHOLD         3
+#define HEAD_CMD               0x58
+#define HEAD_REPLY             0x59
+#define HEAD_REPORT            0x5A
+#define TYPE_BSD               7
+#define ROAD_USER_CLASSES      {1,2,3,4,6,7,8}
+#define NPU_CONFIRM_FRAMES     2
+#define NPU_DENY_FRAMES        3
+#define TARGET_TIMEOUT_S       3
+
+/* LED */
+#define GPIO_CHIP_DEV          "/dev/gpiochip3"
+#define GPIO_LED_LINE          11
+#define LED_BLINK_ON_MS        200
+#define LED_BLINK_OFF_MS       200
+
+/* DVR */
+#define DVR_BASE_DIR           "/run/media/mmcblk0p1/dvr"
+#define DVR_BUFFER_DIR         "/run/media/mmcblk0p1/dvr/.buffer"
+#define DVR_SAVE_BEFORE_SEC    15
+#define DVR_SAVE_AFTER_SEC     15
+#define DVR_CAPTURE_FPS        25
+#define DVR_CAPTURE_INTERVAL_US (1000000 / DVR_CAPTURE_FPS)
+
+/* ======================== 雷达协议结构体 ======================== */
+#pragma pack(push, 1)
+typedef struct { int8_t range_val, angle_val, velo_val, objId; } bsd_obj_t;
+typedef struct { uint16_t obj_num, reserved; bsd_obj_t obj[8]; } bsd_det_t;
+#pragma pack(pop)
+
+/* ======================== DVR 帧记录 ======================== */
+typedef struct {
+    uint64_t timestamp_us;   /* 从启动开始的时间戳 */
+    off_t     file_offset;   /* 在帧文件中的偏移 */
+    uint32_t  jpeg_size;     /* JPEG 数据大小 */
+    uint32_t  frame_index;   /* 帧序号 */
+} dvr_frame_entry_t;
+
+#define DVR_MAX_FRAMES (DVR_SAVE_BEFORE_SEC * DVR_CAPTURE_FPS * 2)
+
+/* ======================== 全局状态 ======================== */
+static volatile int g_running    = 1;
+static volatile int g_led_alert  = 0;
+static int g_led_fd              = -1;
+
+/* ======================== 信号处理 ======================== */
+static void sig_handler(int sig) { (void)sig; g_running = 0; }
+
+/* ======================== GPIO LED (字符设备 API) ======================== */
+static int gpio_init(void) {
+    int chip_fd = open(GPIO_CHIP_DEV, O_RDONLY);
+    if (chip_fd < 0) {
+        fprintf(stderr, "[LED] Cannot open %s: %s\n", GPIO_CHIP_DEV, strerror(errno));
+        return -1;
+    }
+    struct gpiohandle_request req;
+    memset(&req, 0, sizeof(req));
+    req.lineoffsets[0] = GPIO_LED_LINE;
+    req.flags = GPIOHANDLE_REQUEST_OUTPUT;
+    req.default_values[0] = 0;
+    req.lines = 1;
+    strncpy(req.consumer_label, "radar_fusion", sizeof(req.consumer_label) - 1);
+    if (ioctl(chip_fd, GPIO_GET_LINEHANDLE_IOCTL, &req) < 0) {
+        fprintf(stderr, "[LED] GPIO line request failed: %s\n", strerror(errno));
+        close(chip_fd);
+        return -1;
+    }
+    close(chip_fd);
+    g_led_fd = req.fd;
+    printf("[LED] GPIO PD11 ready\n");
+    return 0;
+}
+
+static void gpio_set(int val) {
+    if (g_led_fd < 0) return;
+    struct gpiohandle_data data;
+    data.values[0] = (uint8_t)(val ? 1 : 0);
+    ioctl(g_led_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+}
+
+static void gpio_deinit(void) {
+    if (g_led_fd >= 0) { gpio_set(0); close(g_led_fd); g_led_fd = -1; }
+}
+
+static void *led_thread(void *arg) {
+    (void)arg;
+    while (g_running) {
+        if (g_led_alert) {
+            gpio_set(1); usleep(LED_BLINK_ON_MS  * 1000);
+            gpio_set(0); usleep(LED_BLINK_OFF_MS * 1000);
+        } else {
+            gpio_set(0);
+            usleep(100000);
+        }
+    }
+    gpio_set(0);
+    return NULL;
+}
+
+/* ======================== 设备冲突清理 ======================== */
+static void kill_device_holders(const char *device) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "fuser -k %s 2>/dev/null", device);
+    if (system(cmd) == 0) {
+        printf("[CLEANUP] Killed processes holding %s\n", device);
+        usleep(500000);
+    }
+}
+
+/* ======================== 串口 ======================== */
+static int set_uart(int fd, int baudrate) {
+    struct termios tty;
+    if (tcgetattr(fd, &tty) != 0) { perror("tcgetattr"); return -1; }
+    speed_t speed;
+    switch (baudrate) {
+        case 9600: speed = B9600; break;
+        case 115200: speed = B115200; break;
+        case 921600: speed = B921600; break;
+        default: fprintf(stderr, "Unsupported baudrate: %d\n", baudrate); return -1;
+    }
+    cfsetospeed(&tty, speed); cfsetispeed(&tty, speed);
+    tty.c_cflag &= ~(PARENB | CSTOPB | CSIZE | CRTSCTS);
+    tty.c_cflag |= CS8 | CREAD | CLOCAL;
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
+    tty.c_oflag &= ~OPOST & ~ONLCR;
+    tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    tty.c_cc[VMIN] = 0; tty.c_cc[VTIME] = 1;
+    if (tcsetattr(fd, TCSANOW, &tty) != 0) { perror("tcsetattr"); return -1; }
+    tcflush(fd, TCIOFLUSH);
+    return 0;
+}
+
+static uint16_t calc_sum16(const uint8_t *data, int len) {
+    uint32_t sum = 0;
+    for (int i = 0; i < len; i++) sum += data[i];
+    return (uint16_t)(sum & 0xFFFF);
+}
+
+static uint8_t calc_sum8(const uint8_t *data, int len) {
+    uint32_t sum = 0;
+    for (int i = 0; i < len; i++) sum += data[i];
+    return (uint8_t)(sum & 0xFF);
+}
+
+static int send_cmd(int fd, uint8_t group, uint8_t cmd, const uint8_t *params, int param_len) {
+    uint8_t frame[64];
+    int idx = 0;
+    frame[idx++] = HEAD_CMD;
+    frame[idx++] = (group << 5) | (cmd & 0x1F);
+    frame[idx++] = (uint8_t)param_len;
+    if (params && param_len > 0) { memcpy(&frame[idx], params, param_len); idx += param_len; }
+    uint16_t csum = calc_sum16(frame, idx);
+    frame[idx++] = (uint8_t)(csum & 0xFF);
+    frame[idx++] = (uint8_t)((csum >> 8) & 0xFF);
+    int written = write(fd, frame, idx);
+    if (written != idx) { fprintf(stderr, "radar write failed: %s\n", strerror(errno)); return -1; }
+    tcdrain(fd);
+    return 0;
+}
+
+static void flush_rx(int fd) { uint8_t tmp[256]; int n; while ((n = read(fd, tmp, sizeof(tmp))) > 0); }
+
+/* ======================== JPEG 解码 (静默) ======================== */
+struct my_jpeg_error { struct jpeg_error_mgr pub; jmp_buf setjmp_buf; };
+static void my_jpeg_emit_message(j_common_ptr cinfo, int msg_level) { (void)cinfo; (void)msg_level; }
+static void my_jpeg_error_exit(j_common_ptr cinfo) {
+    struct my_jpeg_error *myerr = (struct my_jpeg_error *)cinfo->err;
+    longjmp(myerr->setjmp_buf, 1);
+}
+static int jpeg_decode_rgb_silent(const unsigned char *jpeg_data, unsigned long jpeg_size,
+                                   unsigned char *out_rgb, int *out_width, int *out_height) {
+    struct jpeg_decompress_struct cinfo;
+    struct my_jpeg_error jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = my_jpeg_error_exit;
+    jerr.pub.emit_message = my_jpeg_emit_message;
+    if (setjmp(jerr.setjmp_buf)) { jpeg_destroy_decompress(&cinfo); return -1; }
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, jpeg_data, jpeg_size);
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) { jpeg_destroy_decompress(&cinfo); return -1; }
+    cinfo.out_color_space = JCS_RGB;
+    jpeg_start_decompress(&cinfo);
+    *out_width = cinfo.output_width;
+    *out_height = cinfo.output_height;
+    int row_stride = cinfo.output_width * cinfo.output_components;
+    unsigned char *row_ptr = out_rgb;
+    while (cinfo.output_scanline < cinfo.output_height) {
+        unsigned char *buf[1] = { row_ptr };
+        jpeg_read_scanlines(&cinfo, buf, 1);
+        row_ptr += row_stride;
+    }
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    return 0;
+}
+
+static void resize_rgb(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw, int dh) {
+    for (int y = 0; y < dh; y++) {
+        int sy = y * sh / dh;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * sw / dw;
+            int si = (sy * sw + sx) * 3;
+            int di = (y * dw + x) * 3;
+            dst[di]=src[si]; dst[di+1]=src[si+1]; dst[di+2]=src[si+2];
+        }
+    }
+}
+
+static int is_road_user(int class_index) {
+    static const int road_classes[] = ROAD_USER_CLASSES;
+    static const int count = sizeof(road_classes) / sizeof(road_classes[0]);
+    for (int i = 0; i < count; i++) if (class_index == road_classes[i]) return 1;
+    return 0;
+}
+
+/* ======================== 雷达协议处理 ======================== */
+typedef struct {
+    int has_target; int obj_count; int min_distance;
+    int approaching; float min_ttc; int should_alert;
+} radar_result_t;
+
+static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
+    radar_result_t result = {0};
+    int obj_count = bsd->obj_num;
+    if (obj_count > 8) obj_count = 8;
+    result.obj_count = obj_count;
+    result.has_target = (obj_count > 0);
+    result.min_distance = 999;
+    result.min_ttc = 9999.0f;
+    for (int i = 0; i < obj_count; i++) {
+        const bsd_obj_t *o = &bsd->obj[i];
+        if (o->range_val > 0 && o->range_val < result.min_distance)
+            result.min_distance = o->range_val;
+        if (o->velo_val < 0 && o->range_val > 0) {
+            float ttc = (float)o->range_val / (float)(-o->velo_val);
+            if (ttc < result.min_ttc) result.min_ttc = ttc;
+            result.approaching = 1;
+        }
+    }
+    if (result.approaching && result.min_ttc < TTC_THRESHOLD)
+        result.should_alert = 1;
+    else if (obj_count > 0 && result.min_distance <= DIST_THRESHOLD)
+        result.should_alert = 1;
+    return result;
+}
+
+static int process_radar_frame(const uint8_t *frame, int frame_len, radar_result_t *out) {
+    if (frame_len < 4) return -1;
+    uint8_t head = frame[0];
+    if (head == HEAD_REPORT) {
+        uint8_t len = frame[1];
+        if (2 + len + 1 > frame_len) return -1;
+        if (calc_sum8(frame, 2 + len) != frame[2 + len]) return -1;
+        const uint8_t *payload = &frame[2];
+        if (payload[0] != TYPE_BSD) return 0;
+        int data_len = len;
+        const uint8_t *data = payload + 1;
+        if (data_len < 4) return 0;
+        bsd_det_t bsd; memset(&bsd, 0, sizeof(bsd));
+        bsd.obj_num = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+        int oc = bsd.obj_num; if (oc > 8) oc = 8;
+        int expected = 4 + oc * (int)sizeof(bsd_obj_t);
+        if (data_len < expected) oc = (data_len - 4) / (int)sizeof(bsd_obj_t);
+        for (int i = 0; i < oc; i++) {
+            int off = 4 + i * (int)sizeof(bsd_obj_t);
+            if (off + (int)sizeof(bsd_obj_t) <= data_len)
+                memcpy(&bsd.obj[i], &data[off], sizeof(bsd_obj_t));
+        }
+        *out = process_bsd_report(&bsd);
+        return 1;
+    }
+    return 0;
+}
+
+/* ======================== 雷达初始化 ======================== */
+static int radar_init(int fd) {
+    printf("[RADAR] Initializing...\n"); fflush(stdout);
+    uint8_t rx_buf[512];
+    auto wait_reply = [&](int timeout_ms) {
+        struct timeval start, now;
+        gettimeofday(&start, NULL);
+        while (g_running) {
+            gettimeofday(&now, NULL);
+            int elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000;
+            if (elapsed >= timeout_ms) break;
+            int remain = timeout_ms - elapsed;
+            struct timeval tv = { remain / 1000, (remain % 1000) * 1000 };
+            fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
+            if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) break;
+            (void)read(fd, rx_buf, sizeof(rx_buf));
+        }
+    };
+    flush_rx(fd);
+    send_cmd(fd, 7, 0x1E, NULL, 0); wait_reply(1000); usleep(200000);
+    flush_rx(fd);
+    { uint8_t p = 0x01; send_cmd(fd, 6, 0x11, &p, 1); } wait_reply(1000); usleep(200000);
+    flush_rx(fd);
+    { uint8_t p = 0x00; send_cmd(fd, 0, 0x02, &p, 1); } wait_reply(1000); usleep(200000);
+    flush_rx(fd);
+    { uint8_t p[2] = {0x88, 0x13}; send_cmd(fd, 6, 0x12, p, 2); } wait_reply(1000); usleep(200000);
+    printf("[RADAR] Initialized OK\n");
+    return 0;
+}
+
+/* ======================== DVR 模块 ======================== */
+static int dvr_recording = 0;
+static int dvr_save_triggered = 0;
+static int dvr_encoding = 0;
+static pid_t dvr_encoder_pid = 0;
+static uint64_t dvr_trigger_time_us = 0;
+static int dvr_frame_count = 0;
+static dvr_frame_entry_t dvr_frames[DVR_MAX_FRAMES];
+static FILE *dvr_raw_file = NULL;
+static char dvr_raw_path[512];
+static char dvr_buffer_dir[512];
+static int dvr_tf_ok = 0;
+static int dvr_has_ffmpeg = 0;
+
+/* 生成输出文件名 */
+static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
+    time_t t = time(NULL);
+    struct tm *tm = localtime(&t);
+    snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d.mp4",
+             DVR_BASE_DIR, prefix,
+             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+             tm->tm_hour, tm->tm_min, tm->tm_sec);
+}
+
+/* 启动 DVR 录制 */
+static int dvr_start(void) {
+    if (dvr_recording) return 0;
+    if (!dvr_tf_ok) {
+        printf("[DVR] TF card not available, recording disabled\n");
+        return -1;
+    }
+
+    /* 创建目录 */
+    snprintf(dvr_buffer_dir, sizeof(dvr_buffer_dir), "%s", DVR_BUFFER_DIR);
+    mkdir(DVR_BASE_DIR, 0777);
+    mkdir(dvr_buffer_dir, 0777);
+
+    /* 打开原始帧文件 */
+    snprintf(dvr_raw_path, sizeof(dvr_raw_path), "%s/dvr_raw.bin", dvr_buffer_dir);
+    dvr_raw_file = fopen(dvr_raw_path, "wb");
+    if (!dvr_raw_file) {
+        fprintf(stderr, "[DVR] Cannot create raw file: %s\n", strerror(errno));
+        return -1;
+    }
+
+    dvr_frame_count = 0;
+    dvr_save_triggered = 0;
+    dvr_encoding = 0;
+    dvr_recording = 1;
+    printf("[DVR] Recording started (buffer: %s)\n", dvr_buffer_dir);
+    return 0;
+}
+
+/* 保存一帧到 DVR 缓冲 */
+static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_t timestamp_us) {
+    if (!dvr_recording || dvr_encoding || !dvr_raw_file) return;
+
+    /* 记录帧信息 */
+    if (dvr_frame_count < DVR_MAX_FRAMES) {
+        dvr_frames[dvr_frame_count].timestamp_us = timestamp_us;
+        dvr_frames[dvr_frame_count].file_offset = ftello(dvr_raw_file);
+        dvr_frames[dvr_frame_count].jpeg_size = jpeg_size;
+        dvr_frames[dvr_frame_count].frame_index = dvr_frame_count;
+    } else {
+        /* 环形覆盖: 移动数组 */
+        memmove(dvr_frames, dvr_frames + 1, (DVR_MAX_FRAMES - 1) * sizeof(dvr_frame_entry_t));
+        dvr_frames[DVR_MAX_FRAMES - 1].timestamp_us = timestamp_us;
+        dvr_frames[DVR_MAX_FRAMES - 1].file_offset = ftello(dvr_raw_file);
+        dvr_frames[DVR_MAX_FRAMES - 1].jpeg_size = jpeg_size;
+        dvr_frames[DVR_MAX_FRAMES - 1].frame_index = dvr_frame_count;
+    }
+
+    /* 写入帧: [4B size][8B timestamp][JPEG data] */
+    uint32_t frame_size = jpeg_size + 12;
+    fwrite(&frame_size, 4, 1, dvr_raw_file);
+    fwrite(&timestamp_us, 8, 1, dvr_raw_file);
+    fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file);
+    fflush(dvr_raw_file);
+
+    dvr_frame_count++;
+}
+
+/* 触发 DVR 保存 */
+static void dvr_trigger_save(uint64_t trigger_time_us) {
+    if (!dvr_recording || dvr_save_triggered) return;
+    dvr_save_triggered = 1;
+    dvr_trigger_time_us = trigger_time_us;
+    printf("[DVR] Save triggered! (pre=%ds, post=%ds)\n",
+           DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+}
+
+/* 停止 DVR 录制 */
+static void dvr_stop(void) {
+    if (!dvr_recording) return;
+    dvr_recording = 0;
+
+    if (dvr_raw_file) {
+        fclose(dvr_raw_file);
+        dvr_raw_file = NULL;
+    }
+
+    if (!dvr_save_triggered) {
+        /* 无触发: 清理缓冲 */
+        printf("[DVR] No trigger event, cleaning up buffer\n");
+        unlink(dvr_raw_path);
+        rmdir(dvr_buffer_dir);
+    }
+}
+
+/* 子进程: 将缓冲帧编码为 MP4 (异步, 不阻塞主循环) */
+static int dvr_encode_mp4(void) {
+    if (dvr_encoding) return -1;
+    if (dvr_frame_count == 0) return -1;
+    if (!dvr_has_ffmpeg) {
+        printf("[DVR] ffmpeg not available, skipping encode\n");
+        /* 清理缓冲 */
+        unlink(dvr_raw_path);
+        rmdir(dvr_buffer_dir);
+        return -1;
+    }
+
+    dvr_encoding = 1;
+
+    /* 找触发前 15 秒的起始帧 */
+    int active_frames = dvr_frame_count < DVR_MAX_FRAMES ? dvr_frame_count : DVR_MAX_FRAMES;
+    int start_idx = 0;
+    int end_idx = active_frames - 1;
+
+    if (dvr_save_triggered && dvr_trigger_time_us > 0) {
+        uint64_t before_us = dvr_trigger_time_us - (uint64_t)DVR_SAVE_BEFORE_SEC * 1000000ULL;
+        for (int i = 0; i < active_frames; i++) {
+            if (dvr_frames[i].timestamp_us >= before_us) {
+                start_idx = i;
+                break;
+            }
+        }
+        uint64_t after_us = dvr_trigger_time_us + (uint64_t)DVR_SAVE_AFTER_SEC * 1000000ULL;
+        for (int i = active_frames - 1; i >= 0; i--) {
+            if (dvr_frames[i].timestamp_us <= after_us) {
+                end_idx = i;
+                break;
+            }
+        }
+    }
+
+    int total = end_idx - start_idx + 1;
+    if (total < 2) {
+        printf("[DVR] Too few frames (%d), skipping encode\n", total);
+        dvr_encoding = 0;
+        return -1;
+    }
+
+    printf("[DVR] Encoding %d frames (%d→%d) to MP4 (async)...\n", total, start_idx, end_idx);
+
+    /* 计算帧率 */
+    float fps = (float)DVR_CAPTURE_FPS;
+    if (total >= 2) {
+        uint64_t duration_us = dvr_frames[end_idx].timestamp_us - dvr_frames[start_idx].timestamp_us;
+        if (duration_us > 0)
+            fps = (float)(total - 1) * 1000000.0f / (float)duration_us;
+    }
+    if (fps < 1) fps = 1;
+    if (fps > 30) fps = 30;
+
+    printf("[DVR] FPS: %.1f, Frames: %d\n", fps, total);
+
+    /* 生成输出文件名 */
+    char output_path[512];
+    dvr_make_filename(output_path, sizeof(output_path), "emergency");
+
+    /* 复制必要数据到堆上 (fork 后子进程使用) */
+    char *heap_raw_path = strdup(dvr_raw_path);
+    char *heap_buffer_dir = strdup(dvr_buffer_dir);
+    char *heap_output_path = strdup(output_path);
+    float heap_fps = fps;
+    int heap_total = total;
+    int heap_start_idx = start_idx;
+
+    /* fork 子进程做编码, 父进程立即返回 */
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* ========== 子进程: 编码 + 清理 ========== */
+        char work_dir[512];
+        snprintf(work_dir, sizeof(work_dir), "%s/.encode", heap_buffer_dir);
+        mkdir(work_dir, 0777);
+
+        char list_path[512];
+        snprintf(list_path, sizeof(list_path), "%s/filelist.txt", heap_buffer_dir);
+
+        FILE *raw = fopen(heap_raw_path, "rb");
+        if (!raw) {
+            fprintf(stderr, "[DVR] Child: cannot open raw file\n");
+            free(heap_raw_path); free(heap_buffer_dir); free(heap_output_path);
+            exit(1);
+        }
+
+        FILE *list = fopen(list_path, "w");
+        if (!list) { fclose(raw); free(heap_raw_path); free(heap_buffer_dir); free(heap_output_path); exit(1); }
+
+        int frame_idx = 0;
+        for (int i = heap_start_idx; i <= heap_start_idx + heap_total - 1; i++) {
+            char jpg_path[512];
+            snprintf(jpg_path, sizeof(jpg_path), "%s/frame_%06d.jpg", work_dir, frame_idx);
+
+            fseeko(raw, dvr_frames[i].file_offset, SEEK_SET);
+            uint32_t frame_size;
+            uint64_t ts;
+            if (fread(&frame_size, 4, 1, raw) != 1) break;
+            if (fread(&ts, 8, 1, raw) != 1) break;
+            uint32_t jpeg_size = frame_size - 12;
+
+            uint8_t *jpeg_data = (uint8_t *)malloc(jpeg_size);
+            if (!jpeg_data) break;
+            if (fread(jpeg_data, 1, jpeg_size, raw) != jpeg_size) {
+                free(jpeg_data);
+                break;
+            }
+
+            FILE *jpg = fopen(jpg_path, "wb");
+            if (jpg) {
+                fwrite(jpeg_data, 1, jpeg_size, jpg);
+                fclose(jpg);
+                fprintf(list, "file '%s'\n", jpg_path);
+            }
+            free(jpeg_data);
+            frame_idx++;
+        }
+        fclose(list);
+        fclose(raw);
+
+        printf("[DVR] Child: extracted %d frames, running ffmpeg...\n", frame_idx);
+
+        char fps_str[32];
+        snprintf(fps_str, sizeof(fps_str), "%.2f", heap_fps);
+
+        /* 先尝试 ffmpeg, 失败则用 avconv 或直接拷贝 jpg */
+        pid_t ff_pid = fork();
+        if (ff_pid == 0) {
+            /* 孙进程: 重定向 stdout/stderr 到 /dev/null, 避免刷屏 */
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+            /* 运行 ffmpeg */
+            execlp("ffmpeg", "ffmpeg",
+                   "-f", "concat", "-safe", "0",
+                   "-r", fps_str,
+                   "-i", list_path,
+                   "-c:v", "mpeg4", "-q:v", "5",
+                   "-pix_fmt", "yuv420p",
+                   "-y", heap_output_path,
+                   NULL);
+            /* ffmpeg 不可用, 尝试 avconv */
+            execlp("avconv", "avconv",
+                   "-f", "concat", "-safe", "0",
+                   "-r", fps_str,
+                   "-i", list_path,
+                   "-c:v", "mpeg4", "-q:v", "5",
+                   "-pix_fmt", "yuv420p",
+                   "-y", heap_output_path,
+                   NULL);
+            exit(1);
+        } else if (ff_pid > 0) {
+            int ff_status;
+            waitpid(ff_pid, &ff_status, 0);
+            if (WIFEXITED(ff_status) && WEXITSTATUS(ff_status) == 0) {
+                printf("[DVR] Child: Saved %s\n", heap_output_path);
+            } else {
+                printf("[DVR] Child: ffmpeg/avconv failed (exit=%d), saving JPEGs only\n",
+                       WEXITSTATUS(ff_status));
+                /* 保留 jpg 文件作为备份 */
+            }
+        }
+
+        /* 清理临时文件 */
+        unlink(list_path);
+        DIR *d = opendir(work_dir);
+        if (d) {
+            struct dirent *ent;
+            char path[512];
+            while ((ent = readdir(d)) != NULL) {
+                if (ent->d_name[0] == '.') continue;
+                snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
+                unlink(path);
+            }
+            closedir(d);
+        }
+        rmdir(work_dir);
+
+        /* 清理原始缓冲 */
+        unlink(heap_raw_path);
+        rmdir(heap_buffer_dir);
+
+        free(heap_raw_path);
+        free(heap_buffer_dir);
+        free(heap_output_path);
+
+        printf("[DVR] Child: cleanup done, exiting\n");
+        exit(0);
+    }
+
+    /* ========== 父进程: 记录 pid, 立即返回 ========== */
+    free(heap_raw_path);
+    free(heap_buffer_dir);
+    free(heap_output_path);
+
+    if (pid > 0) {
+        dvr_encoder_pid = pid;
+        printf("[DVR] Async encoding started (pid=%d)\n", pid);
+    } else {
+        fprintf(stderr, "[DVR] fork failed: %s\n", strerror(errno));
+        dvr_encoding = 0;
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ======================== 主函数 ======================== */
+int main(int argc, char *argv[]) {
+    const char *camera_dev  = "/dev/video7";
+    const char *uart_dev    = UART_DEVICE;
+    const char *model_path  = "models/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb";
+    const char *labels_path = "models/labels_coco_dataset_80.txt";
+    float confidence = 0.60f;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-d") == 0 && i + 1 < argc) camera_dev = argv[++i];
+        else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) uart_dev = argv[++i];
+        else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) confidence = atof(argv[++i]);
+        else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) model_path = argv[++i];
+        else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) labels_path = argv[++i];
+        else if (strcmp(argv[i], "-h") == 0) {
+            printf("Usage: %s [-d camera] [-u uart] [-c conf] [-h]\n", argv[0]);
+            return 0;
+        }
+    }
+
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    printf("========================================\n");
+    printf(" Radar + Camera NPU Fusion + DVR (v4)\n");
+    printf("========================================\n");
+    printf("Radar:    %s @ %d bps\n", uart_dev, BAUDRATE);
+    printf("Camera:   %s\n", camera_dev);
+    printf("Model:    %s\n", model_path);
+    printf("Conf:     %.2f\n", confidence);
+    printf("LED:      PD11 via %s\n", GPIO_CHIP_DEV);
+    printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+    printf("========================================\n\n");
+
+    /* 0. 检查 DVR 依赖: ffmpeg + TF 卡 */
+    printf("[DVR] Checking dependencies...\n");
+    dvr_has_ffmpeg = (system("which ffmpeg >/dev/null 2>&1") == 0);
+    if (!dvr_has_ffmpeg) {
+        printf("[DVR] WARNING: ffmpeg not found! Video encoding will be disabled.\n");
+        printf("[DVR] Install: apt-get install ffmpeg\n");
+    } else {
+        printf("[DVR] ffmpeg: OK\n");
+    }
+
+    struct stat st;
+    dvr_tf_ok = (stat(DVR_BASE_DIR, &st) == 0 && S_ISDIR(st.st_mode));
+    if (!dvr_tf_ok) {
+        /* 尝试创建 */
+        if (mkdir(DVR_BASE_DIR, 0777) == 0) {
+            dvr_tf_ok = 1;
+            printf("[DVR] Created: %s\n", DVR_BASE_DIR);
+        } else {
+            printf("[DVR] WARNING: TF card not available at %s (%s)\n", DVR_BASE_DIR, strerror(errno));
+            printf("[DVR] DVR recording will be disabled until TF card is inserted.\n");
+        }
+    } else {
+        printf("[DVR] TF card: OK (%s)\n", DVR_BASE_DIR);
+    }
+
+    /* 1. GPIO LED */
+    if (gpio_init() != 0)
+        fprintf(stderr, "[LED] init failed, LED disabled\n");
+
+    pthread_t led_tid;
+    pthread_create(&led_tid, NULL, led_thread, NULL);
+
+    /* 2. 雷达 */
+    kill_device_holders(uart_dev);
+    int radar_fd = open(uart_dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (radar_fd < 0) {
+        fprintf(stderr, "Cannot open radar %s: %s\n", uart_dev, strerror(errno));
+        g_running = 0; pthread_join(led_tid, NULL); gpio_deinit();
+        return 1;
+    }
+    if (set_uart(radar_fd, BAUDRATE) != 0) {
+        close(radar_fd); g_running = 0; pthread_join(led_tid, NULL); gpio_deinit();
+        return 1;
+    }
+    radar_init(radar_fd);
+
+    /* 3. 摄像头 + NPU */
+    kill_device_holders(camera_dev);
+    camera_t cam;
+    NpuDetector *detector = NULL;
+    int camera_ok = 0;
+    uint8_t *rgb_full = NULL, *rgb_nn = NULL;
+    int nn_w = 0, nn_h = 0;
+
+    if (camera_open(&cam, camera_dev, 1280, 720) == 0) {
+        if (camera_start(&cam) == 0) {
+            detector = new NpuDetector(model_path, labels_path, confidence, 0.45f);
+            nn_w = detector->get_input_width();
+            nn_h = detector->get_input_height();
+            rgb_full = (uint8_t *)malloc(cam.width * cam.height * 3);
+            rgb_nn = (uint8_t *)malloc(nn_w * nn_h * 3);
+            if (rgb_full && rgb_nn) {
+                camera_ok = 1;
+                printf("[FUSION] Camera + NPU enabled\n");
+            } else {
+                printf("[FUSION] NPU buffer alloc failed\n");
+                camera_stop(&cam); camera_close(&cam);
+                delete detector; detector = NULL;
+            }
+        } else {
+            printf("[FUSION] Camera start failed\n");
+            camera_close(&cam);
+        }
+    } else {
+        printf("[FUSION] Camera not available, radar-only mode\n");
+    }
+    if (!camera_ok) printf("[FUSION] Running in RADAR-ONLY mode (no DVR)\n");
+
+    printf("\n[FUSION] Running... Press Ctrl+C to stop.\n\n");
+
+    /* 4. 主循环 */
+    uint8_t rx_buf[512];
+    int rx_len = 0;
+    int poll_cnt = 0;
+    int npu_frame_count = 0;
+
+    int target_active   = 0;
+    int npu_has_target  = 0;   /* NPU 当前看到道路用户 (控制缓冲) */
+    int npu_confirm_cnt = 0;
+    int npu_deny_cnt    = 0;
+    int npu_confirmed   = 0;
+    int npu_denied      = 0;
+
+    struct timeval t_start, t_last_bsd, t_last_capture;
+    gettimeofday(&t_start, NULL);
+    t_last_bsd = t_start;
+    t_last_capture = t_start;
+
+    while (g_running) {
+        /* 回收异步编码子进程 */
+        if (dvr_encoder_pid > 0) {
+            int enc_status;
+            pid_t reaped = waitpid(dvr_encoder_pid, &enc_status, WNOHANG);
+            if (reaped == dvr_encoder_pid) {
+                if (WIFEXITED(enc_status)) {
+                    printf("[DVR] Encoder finished (exit=%d)\n", WEXITSTATUS(enc_status));
+                }
+                dvr_encoder_pid = 0;
+                dvr_encoding = 0;
+                dvr_save_triggered = 0;
+                dvr_trigger_time_us = 0;
+                /* 重置 NPU 状态，准备下一轮触发 */
+                npu_confirm_cnt = 0;
+                npu_deny_cnt = 0;
+                npu_confirmed = 0;
+                npu_denied = 0;
+                printf("[DVR] State reset, ready for next trigger\n");
+            } else if (reaped < 0) {
+                dvr_encoder_pid = 0;
+                dvr_encoding = 0;
+            }
+        }
+
+        /* 计算下一次捕获的时间 */
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        long elapsed_us = (tv_now.tv_sec - t_last_capture.tv_sec) * 1000000L +
+                          (tv_now.tv_usec - t_last_capture.tv_usec);
+        long wait_us = DVR_CAPTURE_INTERVAL_US - elapsed_us;
+        if (wait_us < 0) wait_us = 0;
+        if (wait_us > 500000) wait_us = 500000; /* 最多等 500ms */
+
+        struct timeval tv = { wait_us / 1000000, wait_us % 1000000 };
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(radar_fd, &rfds);
+        int ret = select(radar_fd + 1, &rfds, NULL, NULL, &tv);
+
+        gettimeofday(&tv_now, NULL);
+        long since_capture_us = (tv_now.tv_sec - t_last_capture.tv_sec) * 1000000L +
+                                (tv_now.tv_usec - t_last_capture.tv_usec);
+
+        /* 固定频率捕获帧 (用于 DVR 和 NPU) */
+        if (camera_ok && detector && since_capture_us >= DVR_CAPTURE_INTERVAL_US) {
+            uint8_t *jpeg_buf;
+            unsigned int jpeg_len;
+            if (camera_capture(&cam, &jpeg_buf, &jpeg_len) == 0) {
+                t_last_capture = tv_now;
+                uint64_t ts_us = (uint64_t)(tv_now.tv_sec - t_start.tv_sec) * 1000000ULL +
+                                 (uint64_t)tv_now.tv_usec;
+
+                /* DVR: 保存帧 */
+                if (dvr_recording && !dvr_encoding) {
+                    dvr_save_frame(jpeg_buf, jpeg_len, ts_us);
+                }
+
+                /* DVR: 触发后继续录制 post 秒数 */
+                if (dvr_save_triggered && dvr_recording && !dvr_encoding) {
+                    uint64_t elapsed = ts_us - dvr_trigger_time_us;
+                    if (elapsed > (uint64_t)DVR_SAVE_AFTER_SEC * 1000000ULL) {
+                        printf("[DVR] Post-trigger recording complete (%llu ms)\n",
+                               (unsigned long long)(elapsed / 1000));
+                        /* 停止录制并编码 */
+                        dvr_stop();
+                        dvr_encode_mp4();
+                    }
+                }
+
+                /* NPU: 每 5 帧推理一次 (始终运行) */
+                npu_frame_count++;
+                if (npu_frame_count % 5 == 0) {
+                    int dec_w, dec_h;
+                    if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len, rgb_full, &dec_w, &dec_h) == 0) {
+                        resize_rgb(rgb_full, dec_w, dec_h, rgb_nn, nn_w, nn_h);
+                        frame_results_t results = detector->detect(rgb_nn);
+
+                        int has_road = 0;
+                        const char *best_label = "";
+                        float best_score = 0;
+                        for (size_t i = 0; i < results.objects.size(); i++) {
+                            if (is_road_user(results.objects[i].class_index)) {
+                                has_road = 1;
+                                if (results.objects[i].score > best_score) {
+                                    best_score = results.objects[i].score;
+                                    best_label = detector->get_label(results.objects[i].class_index).c_str();
+                                }
+                            }
+                        }
+
+                        double t = (tv_now.tv_sec - t_start.tv_sec) +
+                                   (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+
+                        /* === NPU 目标状态跟踪 (控制缓冲) === */
+                        if (has_road) {
+                            if (!npu_has_target) {
+                                npu_has_target = 1;
+                                /* 新目标出现: 重置所有状态 */
+                                npu_denied = 0;
+                                npu_confirmed = 0;
+                                npu_confirm_cnt = 0;
+                                npu_deny_cnt = 0;
+                                printf("[%6.1fs] NPU: ROAD USER DETECTED (%s %.2f)\n", t, best_label, best_score);
+                                /* 开始 DVR 缓冲 */
+                                if (camera_ok && !dvr_recording && !dvr_encoding) {
+                                    dvr_start();
+                                }
+                            }
+                            npu_confirm_cnt++;
+                            npu_deny_cnt = 0;
+                            if (npu_confirm_cnt >= NPU_CONFIRM_FRAMES && !npu_confirmed && !npu_denied) {
+                                npu_confirmed = 1;
+                                printf("[%6.1fs] *** NPU CONFIRMED: Real road user! ***\n", t);
+                            }
+                        } else {
+                            npu_deny_cnt++;
+                            npu_confirm_cnt = 0;
+                            if (npu_deny_cnt >= NPU_DENY_FRAMES) {
+                                if (npu_has_target) {
+                                    npu_has_target = 0;
+                                    printf("[%6.1fs] *** NPU LOST TARGET ***\n", t);
+                                    /* 停止缓冲 (如果没有触发保存) */
+                                    if (!dvr_save_triggered && dvr_recording && !dvr_encoding) {
+                                        dvr_stop();
+                                    }
+                                }
+                                if (!npu_denied) {
+                                    npu_denied = 1;
+                                    npu_confirmed = 0;
+                                    printf("[%6.1fs] *** NPU DENIED: Radar false trigger ***\n", t);
+                                }
+                            }
+                        }
+
+                        /* === 显示 NPU 结果 (NPU 看到目标或雷达激活时) === */
+                        if (npu_has_target || target_active) {
+                            printf("[%6.1fs] NPU(%dms): %zu objects, road_user=%s",
+                                   t, (int)results.inference_time_ms, results.objects.size(),
+                                   has_road ? "YES" : "no");
+                            if (has_road) {
+                                printf(" (%s %.2f)", best_label, best_score);
+                            }
+                            printf("\n");
+                        }
+
+                        /* 注意: DVR 保存触发和 LED 控制在雷达段处理,
+                           确保只有 radar.should_alert + NPU 确认才触发 */
+                    }
+                }
+            }
+        }
+
+        /* 雷达轮询 */
+        poll_cnt++;
+        if (poll_cnt >= 60) { poll_cnt = 0; send_cmd(radar_fd, 1, 0x10, NULL, 0); }
+
+        /* 目标消失检测 */
+        if (target_active) {
+            gettimeofday(&tv_now, NULL);
+            double elapsed = (tv_now.tv_sec - t_last_bsd.tv_sec) +
+                             (tv_now.tv_usec - t_last_bsd.tv_usec) / 1000000.0;
+            if (elapsed > TARGET_TIMEOUT_S) {
+                double t = (tv_now.tv_sec - t_start.tv_sec) +
+                           (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+                printf("[%6.1fs] TARGET GONE (%.1fs timeout)\n", t, elapsed);
+                target_active   = 0;
+                g_led_alert     = 0;
+
+                /* 注意: 不在这里停止 DVR!
+                   post-trigger 15s 由帧捕获部分的定时器控制,
+                   NPU 丢失目标后由 NPU 逻辑处理缓冲停止 */
+            }
+        }
+
+        /* 处理雷达数据 */
+        if (ret > 0 && FD_ISSET(radar_fd, &rfds)) {
+            int n = read(radar_fd, rx_buf + rx_len, sizeof(rx_buf) - rx_len);
+            if (n > 0) rx_len += n;
+
+            while (rx_len >= 4) {
+                uint8_t head = rx_buf[0];
+                int frame_total = -1;
+                if (head == HEAD_REPORT) {
+                    if (rx_len < 3) break;
+                    frame_total = 2 + rx_buf[1] + 1;
+                } else if (head == HEAD_REPLY) {
+                    if (rx_len < 3) break;
+                    frame_total = 5 + rx_buf[2];
+                } else {
+                    int i = 1;
+                    for (; i < rx_len; i++)
+                        if (rx_buf[i] == HEAD_REPORT || rx_buf[i] == HEAD_REPLY) break;
+                    memmove(rx_buf, rx_buf + i, rx_len - i);
+                    rx_len -= i;
+                    continue;
+                }
+                if (frame_total > (int)sizeof(rx_buf) || frame_total > rx_len) break;
+
+                uint8_t frame[512];
+                memcpy(frame, rx_buf, frame_total);
+                radar_result_t radar;
+                if (process_radar_frame(frame, frame_total, &radar) == 1) {
+                    gettimeofday(&t_last_bsd, NULL);
+
+                    gettimeofday(&tv_now, NULL);
+                    double t = (tv_now.tv_sec - t_start.tv_sec) +
+                               (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+
+                    printf("[%6.1fs] RADAR: %d targets, dist=%dm, TTC=%.1fs, alert=%s\n",
+                           t, radar.obj_count, radar.min_distance,
+                           radar.min_ttc < 999 ? radar.min_ttc : -1.0f,
+                           radar.should_alert ? "YES" : "no");
+
+                    if (!target_active) {
+                        printf("  >>> TARGET ON <<<\n");
+                        target_active = 1;
+                        /* NPU 状态由 NPU 推理逻辑独立管理，不在此重置 */
+                    }
+
+                    /* LED + DVR: 雷达告警 + NPU 确认 → 触发 */
+                    if (camera_ok) {
+                        if (radar.should_alert && npu_confirmed && !npu_denied) {
+                            /* 雷达告警 + NPU 确认 → 真正碰撞风险 */
+                            g_led_alert = 1;
+                            if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
+                                printf("  >>> ALERT: COLLISION RISK - NPU CONFIRMED <<<\n");
+                                dvr_trigger_save((uint64_t)(tv_now.tv_sec - t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec);
+                            }
+                        } else {
+                            g_led_alert = 0;
+                        }
+                    } else {
+                        /* 纯雷达模式 (无摄像头) */
+                        if (radar.should_alert) {
+                            printf("  >>> ALERT: COLLISION RISK (radar-only) <<<\n");
+                            g_led_alert = 1;
+                        } else {
+                            g_led_alert = 0;
+                        }
+                    }
+                }
+                memmove(rx_buf, rx_buf + frame_total, rx_len - frame_total);
+                rx_len -= frame_total;
+            }
+            if (rx_len >= (int)sizeof(rx_buf)) rx_len = 0;
+        }
+    }
+
+    printf("\n[FUSION] Stopping...\n");
+
+    /* DVR 清理 */
+    if (dvr_recording && !dvr_encoding) {
+        dvr_stop();
+        if (dvr_save_triggered && dvr_frame_count > 0) {
+            dvr_encode_mp4();
+        }
+    }
+    /* 如果 post-trigger 录制中就被打断, 也编码 */
+    if (dvr_save_triggered && dvr_frame_count > 0 && !dvr_encoding && dvr_encoder_pid == 0) {
+        dvr_encode_mp4();
+    }
+
+    /* 等待异步编码完成 */
+    if (dvr_encoder_pid > 0) {
+        printf("[DVR] Waiting for encoder (pid=%d)...\n", dvr_encoder_pid);
+        int enc_status;
+        waitpid(dvr_encoder_pid, &enc_status, 0);
+        dvr_encoder_pid = 0;
+        dvr_encoding = 0;
+    }
+
+    g_led_alert = 0;
+    pthread_join(led_tid, NULL);
+    gpio_deinit();
+
+    if (camera_ok) {
+        camera_stop(&cam);
+        camera_close(&cam);
+        free(rgb_full);
+        free(rgb_nn);
+        delete detector;
+    }
+    close(radar_fd);
+
+    printf("[FUSION] Done.\n");
+    return 0;
+}
