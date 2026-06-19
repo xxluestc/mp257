@@ -1,140 +1,185 @@
-# 电动车BSD雷达 + 行车记录 + NPU融合系统
+# 电动车 BSD + NPU 目标识别 + DVR 行车记录融合系统
 
 ## 系统概述
 
-基于米尔 myd-ld25x (STM32MP257F) 开发板的电动车BSD雷达 + 行车记录一体化系统。雷达检测到目标后，通过摄像头NPU验证是否为道路用户，确认后录制视频并保存到TF卡。
+基于米尔 myd-ld25x (STM32MP257F) 开发板的一体化系统：
 
-## 系统架构
+- **摄像头 NPU**：负责目标识别（人、自行车、汽车等道路用户）
+- **毫米波雷达**：负责目标测距、测速、TTC 碰撞时间估计
+- **融合决策**：雷达告警时参考 NPU 结果，确认真实道路用户才触发保存
+- **DVR 行车记录**：检测到目标后先缓冲，碰撞确认后保存前后 15 秒视频到 TF 卡
+- **LED 告警**：PD11 引脚闪烁告警
+
+## 当前融合逻辑
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        开发板 myd-ld25x                           │
-│                                                                   │
-│  ┌──────────────┐           ┌──────────────────────────────────┐ │
-│  │  radar_link   │           │  DVR (dvr) + NPU Fusion         │ │
-│  │  (雷达进程)    │  管道     │  (行车记录进程)                    │ │
-│  │               │  事件      │                                  │ │
-│  │ /dev/ttySTM1  │──TARGET_ON─→│ /dev/video6 (USB摄像头, 独占)      │ │
-│  │ (UART, 921600)│──COLLISION─→│                                  │ │
-│  │               │──TARGET_OFF→│ 状态机: IDLE → BUFFERING → SAVING │ │
-│  │ TTC < 10s     │           │                                  │ │
-│  │ → LED 闪烁     │           │ 环形缓冲 → TP卡 (前后15s)          │ │
-│  └──────────────┘           │                                  │ │
-│                              │ NPU: SSD MobileNet V2             │ │
-│  ┌──────────────┐           │ 道路用户检测: person/bicycle/      │ │
-│  │  audio        │           │ car/motorcycle/bus/truck          │ │
-│  │  (音频模块)    │           │ 连续2帧确认 → 信任雷达             │ │
-│  │ (暂未联调)     │           │ 连续3帧否认 → 雷达误触发           │ │
-│  └──────────────┘           └──────────────────────────────────┘ │
-│                                                                   │
-│  存储: /run/media/mmcblk0p1/dvr/ (TF卡)                           │
-└──────────────────────────────────────────────────────────────────┘
+摄像头始终采集 (25fps)
+    │
+    ├─ NPU 推理 (每 5 帧)
+    │   ├─ 检测到道路用户 → 开始 DVR 缓冲
+    │   ├─ 连续 N 帧确认 → npu_confirmed = 1
+    │   └─ 丢失目标 → 无触发则清理缓冲
+    │
+    ├─ 雷达数据 (目标距离/速度/TTC)
+    │   ├─ 检测到目标 → target_active
+    │   └─ 目标消失 3s → target_active = 0
+    │
+    └─ 触发条件: radar.should_alert AND npu_confirmed
+        │
+        ├─ LED 闪烁告警
+        ├─ DVR 保存触发 → 继续录制 15s
+        └─ fork 子进程 ffmpeg 编码 MP4 (异步)
 ```
+
+**关键设计变化**: 与早期版本不同，现在由 **摄像头 NPU 掌管目标是否出现**，雷达只负责提供距离/TTC 信息用于最终触发判断。
 
 ## 目录结构
 
 ```
 mier/
-├── pro/                   # 联调程序 (部署到 /xxl/pro/)
-│   ├── radar_link.c       # 雷达程序 (UART + TTC + 管道事件)
-│   ├── npu_detector.hpp/cpp   # NPU检测器 (参考文件)
-│   ├── Makefile           # 编译脚本
-│   └── start_pro.sh       # 联调启动脚本
-├── dvr/                   # 行车记录 DVR
-│   ├── src/               # 源码
-│   │   ├── dvr_main.c     # 主入口
-│   │   ├── dvr_engine.c   # 核心引擎 (状态机 + NPU融合)
-│   │   ├── dvr_types.h    # 数据类型
-│   │   ├── usb_camera.c   # USB摄像头 V4L2
-│   │   ├── ring_buffer.c  # 环形缓冲
-│   │   ├── trigger_receiver.c # 命名管道触发
-│   │   ├── frame_decoder.c    # 帧解码 (MJPEG/YUYV → RGB)
-│   │   ├── npu_fusion.cpp     # NPU融合 C API
-│   │   └── npu_detector.cpp   # NPU检测器
-│   ├── scripts/           # 测试脚本
-│   ├── docs/              # 开发文档
-│   └── Makefile           # 编译脚本
-├── radar/                 # 雷达模块
-│   ├── radar_init.c       # 原始雷达测试程序
-│   ├── RADAR_COMMANDS.md  # 雷达命令参考
-│   └── README.md          # 雷达模块文档
-├── audio/                 # 音频模块 (暂未联调)
+├── camera_detect/          # 当前主程序: 雷达+NPU+DVR 融合
+│   ├── radar_fusion.cpp    # 主程序入口
+│   ├── camera.c/h          # USB 摄像头 V4L2 采集
+│   ├── npu_detect.cpp/h    # NPU 推理 (SSD MobileNet V2)
+│   ├── jpeg_decoder.c      # JPEG 解码
+│   ├── stai_mpu/           # 正点原子 NPU 库 (libstai_mpu.so)
+│   └── Makefile
+│
+├── dvr/                    # 早期独立 DVR 引擎 (已不用于主流程)
+│   ├── src/                # DVR 状态机、环形缓冲、触发接收
+│   ├── scripts/
 │   └── docs/
-│       └── README.md
-└── dts/                   # 设备树
-    └── myb-stm32mp257x-2GB.dts
+│
+├── pro/                    # 独立雷达程序 (参考/备用)
+│   ├── radar_link.c        # 雷达串口解析 + TTC 计算
+│   └── Makefile
+│
+├── radar/                  # 雷达模块文档
+│   ├── radar_init.c
+│   ├── RADAR_COMMANDS.md
+│   └── README.md
+│
+├── audio/                  # 音频模块 (暂未联调)
+├── dts/                    # 设备树
+└── docs/
+    └── debug_notes.md      # 完整调试经验记录
 ```
 
 ## 硬件接口
 
 | 组件 | 开发板接口 | 设备节点 | 说明 |
 |------|-----------|---------|------|
-| 雷达 | PG14/PG15 (USART1) | `/dev/ttySTM1` | 921600bps |
+| 雷达 | USART1 | `/dev/ttySTM1` | 921600bps |
 | 摄像头 | USB 2.0 Host | `/dev/video6` | MJPEG 1280x720 |
-| LED | GPIO | `gpio_led` | 雷达告警闪烁 |
-| TF卡 | SDMMC | `/run/media/mmcblk0p1/dvr/` | 视频存储 |
+| LED | GPIO PD11 | `/dev/gpiochip3` line 11 | 告警闪烁 |
+| TF 卡 | SDMMC | `/run/media/mmcblk0p1/dvr/` | 视频存储 |
 
 ## 快速开始
 
-### 1. 编译 (在虚拟机上)
+### 1. 交叉编译 (虚拟机)
 
 ```bash
-# 雷达程序
-cd /home/alientek/dvr_project/mier/pro
-export PATH=/home/alientek/Phytium_syscode/GCC编译器/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin:$PATH
-make
-
-# DVR 程序
-cd /home/alientek/dvr_project/mier/dvr
-make CC=aarch64-none-linux-gnu-gcc CXX=aarch64-none-linux-gnu-g++
+cd /home/alientek/dvr_project/mier/camera_detect
+make clean
+make radar-fusion CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
 ```
 
 ### 2. 部署到开发板
 
 ```bash
-cd /home/alientek/dvr_project/mier/pro && make deploy
-cd /home/alientek/dvr_project/mier/dvr && make deploy
+scp radar_fusion root@192.168.88.10:/xxl/camera_detect/
+# NPU 库已包含在 camera_detect/stai_mpu/ 中, 随程序一起部署
 ```
 
-### 3. 在开发板上运行
+### 3. 开发板运行
 
 ```bash
 ssh root@192.168.88.10
-cd /xxl/pro
-./start_pro.sh              # 启动雷达 + DVR联调
-./start_pro.sh stop         # 停止
+cd /xxl/camera_detect
+
+# 方式 1: 系统目录已有 libstai_mpu
+LD_LIBRARY_PATH=/usr/lib:/vendor/lib ./radar_fusion
+
+# 方式 2: 如果系统目录没有 NPU 库
+LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion
 ```
 
 ### 4. 运行模式
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
-| 联调 (雷达+DVR) | `./start_pro.sh` | 雷达触发 → DVR录制 + NPU验证 |
+| 摄像头 + 雷达融合 | `./radar_fusion` | 主程序, NPU 缓冲 + 雷达确认触发 |
 | 纯雷达 | `./radar_link` | 仅雷达数据解析 |
-| DVR 无NPU | `./dvr -d /dev/video6` | 信任雷达直接触发 |
-| DVR + NPU | `./dvr --npu-model ...` | 摄像头AI验证雷达目标 |
-| 自动测试 | `./dvr --auto` | 自动模拟目标→碰撞流程 |
+| 旧版联调 | `pro/start_pro.sh` | 早期雷达 + DVR 管道方案 (不推荐) |
 
 ## 触发逻辑
 
-| 雷达事件 | 管道命令 | DVR 响应 |
-|----------|---------|---------|
-| 目标出现 | `TARGET_ON` | 开始缓冲录制 + NPU验证 |
-| TTC < 10s | `COLLISION` | NPU确认后 → 保存前后15s视频 |
-| 目标消失 | `TARGET_OFF` | 停止录制 |
+| 来源 | 事件 | 当前响应 |
+|------|------|---------|
+| 摄像头 NPU | 检测到道路用户 | 开始 DVR 缓冲 |
+| 摄像头 NPU | 连续确认道路用户 | `npu_confirmed = 1` |
+| 雷达 | TTC < 阈值 / 距离过近 | `radar.should_alert = 1` |
+| 融合 | `radar.should_alert AND npu_confirmed` | 触发保存、LED 闪烁 |
+| 雷达 | 目标消失 3s | `target_active = 0` |
+| NPU | 目标丢失 | 无触发则清理缓冲 |
 
-## 编译说明
+> 注：早期通过 `TARGET_ON` / `COLLISION` / `TARGET_OFF` 管道事件触发 DVR，当前主程序已改为内部直接调用，不再依赖管道。
 
-| 编译目标 | 命令 | 平台 |
-|---------|------|------|
-| DVR (VM) | `cd dvr && make` | x86_64 VM |
-| DVR (交叉编译) | `cd dvr && make CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++` | x86_64 → aarch64 |
-| DVR (开发板含NPU) | `cd dvr && make board CC=gcc CXX=g++ HAS_LIBJPEG=1` | aarch64 开发板 |
-| 雷达 (交叉编译) | `cd pro && make` | x86_64 → aarch64 |
+## DVR 录像流程
+
+| 阶段 | 操作 | 是否编码 |
+|------|------|---------|
+| 缓冲 | 摄像头 MJPEG 帧写入 `dvr_raw.bin` | 否, 原始 JPEG |
+| 索引 | 帧大小/偏移写入 `dvr_index.bin` | 否 |
+| 触发 | 继续缓冲 15s post-trigger | 否 |
+| 保存 | 从 bin 提取 JPEG 帧，生成 filelist | 否 |
+| 编码 | ffmpeg 将 JPEG 序列编码为 MP4 (mpeg4) | **是** |
+
+**ffmpeg 作用**: 仅在触发保存后运行，把缓冲的 JPEG 帧序列压缩成 MP4 视频文件，与主进程并行（fork 子进程），不阻塞检测。
+
+## 关键配置
+
+```cpp
+#define DVR_BASE_DIR           "/run/media/mmcblk0p1/dvr"
+#define DVR_BUFFER_DIR         "/run/media/mmcblk0p1/dvr/.buffer"
+#define DVR_SAVE_BEFORE_SEC    15      // 触发前保存 15s
+#define DVR_SAVE_AFTER_SEC     15      // 触发后保存 15s
+#define DVR_CAPTURE_FPS        25      // 25fps 采集
+#define NPU_CONFIRM_FRAMES     2       // NPU 连续 2 帧确认
+#define NPU_DENY_FRAMES        3       // NPU 连续 3 帧否认
+```
+
+## 视频存储位置
+
+```
+/run/media/mmcblk0p1/dvr/
+├── .buffer/                          # 临时缓冲 (触发后清理)
+│   ├── dvr_raw.bin
+│   ├── dvr_index.bin
+│   └── filelist.txt
+└── emergency_YYYYMMDD_HHMMSS.mp4    # 保存的紧急视频
+```
 
 ## 各模块文档
 
-- [雷达模块](radar/README.md) — 雷达硬件接口、协议、联调
-- [DVR开发日志](dvr/docs/DEVELOPMENT_LOG.md) — 行车记录开发历程和NPU融合
+- [调试经验记录](docs/debug_notes.md) — 完整 Bug 记录、调试过程、排错方法
+- [雷达模块](radar/README.md) — 雷达硬件接口、协议
+- [DVR 开发日志](dvr/docs/DEVELOPMENT_LOG.md) — 早期 DVR 开发历程
 - [音频模块](audio/docs/README.md) — 音频输出 (暂未联调)
 - [设备树](dts/README.md) — 设备树配置说明
+
+## 开发板 NPU 库位置
+
+运行时依赖的动态库:
+
+| 库 | 开发板路径 | 来源 |
+|---|-----------|------|
+| `libstai_mpu.so.6` | `/xxl/camera_detect/stai_mpu/` 或 `/usr/lib/` | 正点原子 rootfs |
+| `libstai_mpu_ovx.so.6` | `/xxl/camera_detect/stai_mpu/` 或 `/usr/lib/` | 正点原子 rootfs |
+| `libjpeg.so.62` | `/xxl/camera_detect/stai_mpu/` | 正点原子 rootfs |
+
+如果下电重启后运行失败，优先检查:
+```bash
+ls -la /usr/lib/libstai_mpu.so* /vendor/lib/libstai_mpu.so*
+# 如不存在, 使用 LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu
+```
