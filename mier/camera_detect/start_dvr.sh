@@ -17,6 +17,8 @@ LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
 RADAR_PID=0
+READER_PID=0
+FIFO=""
 
 # -------------------------- 用法 --------------------------
 usage() {
@@ -57,6 +59,11 @@ cleanup() {
         sleep 2
         kill -0 "$RADAR_PID" 2>/dev/null && kill -KILL "$RADAR_PID" 2>/dev/null || true
     fi
+    if [ "$READER_PID" -gt 0 ] 2>/dev/null && kill -0 "$READER_PID" 2>/dev/null; then
+        kill -TERM "$READER_PID" 2>/dev/null || true
+        wait "$READER_PID" 2>/dev/null || true
+    fi
+    [ -n "$FIFO" ] && [ -e "$FIFO" ] && rm -f "$FIFO"
     log "停止 M33 固件..."
     (
         cd "$FW_DIR" || exit 1
@@ -146,15 +153,37 @@ fi
 
 log "启动 radar_fusion..."
 log "命令: LD_LIBRARY_PATH=/usr/lib:/vendor/lib:${CAMERA_DIR}/stai_mpu ${RADAR_FUSION} ${ARGS}"
+log "完整日志: ${LOG_FILE}"
+log "终端只显示关键事件，完整日志请查看上方文件"
+
+# 关键日志过滤规则
+KEY_PATTERN='ROAD USER DETECTED|NPU CONFIRMED|ALERT:|FALL DETECTED|Save triggered|Recording started|Post-trigger|Child: Saved|Encoder finished|TARGET ON|TARGET GONE|Playing .* alert|V2X_ALERT|RPMsg ready|DVR] TF card|DVR] ffmpeg'
+
+# 后台实时过滤并打印关键日志（从当前日志末尾开始，不打印历史）
+tail -n 0 -f "$LOG_FILE" 2>/dev/null | stdbuf -oL grep --line-buffered -E "$KEY_PATTERN" | \
+stdbuf -oL awk '
+BEGIN { yellow="\033[1;33m"; cyan="\033[1;36m"; reset="\033[0m" }
+/FALL DETECTED|ALERT:/ { print yellow "[关键] " $0 reset; next }
+/Child: Saved/         { print cyan "[保存] " $0 reset; next }
+                        { print "[关键] " $0 }
+' &
+READER_PID=$!
 
 export LD_LIBRARY_PATH="/usr/lib:/vendor/lib:${CAMERA_DIR}/stai_mpu"
 "$RADAR_FUSION" $ARGS >> "$LOG_FILE" 2>&1 &
 RADAR_PID=$!
-log "radar_fusion 已启动，pid=${RADAR_PID}"
+log "radar_fusion 已启动，pid=${RADAR_PID}，过滤进程 pid=${READER_PID}"
 
 # 等待 radar_fusion 结束
 wait "$RADAR_PID"
 RADAR_PID=0
+
+# 关闭过滤进程
+if [ "$READER_PID" -gt 0 ] 2>/dev/null && kill -0 "$READER_PID" 2>/dev/null; then
+    kill -TERM "$READER_PID" 2>/dev/null || true
+    wait "$READER_PID" 2>/dev/null || true
+fi
+READER_PID=0
 
 log "radar_fusion 已退出，执行清理..."
 (
