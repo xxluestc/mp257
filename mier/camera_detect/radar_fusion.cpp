@@ -41,8 +41,8 @@
 /* ======================== 配置常量 ======================== */
 #define UART_DEVICE            "/dev/ttySTM1"
 #define BAUDRATE               921600
-#define TTC_THRESHOLD          10.0f
-#define DIST_THRESHOLD         3
+#define TTC_THRESHOLD_DEFAULT  2.5f
+#define DIST_THRESHOLD_DEFAULT 3
 #define HEAD_CMD               0x58
 #define HEAD_REPLY             0x59
 #define HEAD_REPORT            0x5A
@@ -101,6 +101,10 @@ static volatile uint64_t g_imu_fall_time_us = 0;
 static int g_led_fd              = -1;
 static int g_camera_ok_global    = 0;        /* 供 RPMsg 线程使用 */
 static struct timeval g_t_start;             /* 程序启动时间 (全局) */
+
+/* 可在命令行调整的雷达阈值 */
+static float g_ttc_threshold  = TTC_THRESHOLD_DEFAULT;
+static int   g_dist_threshold = DIST_THRESHOLD_DEFAULT;
 
 /* ======================== 信号处理 ======================== */
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
@@ -296,9 +300,9 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
             result.approaching = 1;
         }
     }
-    if (result.approaching && result.min_ttc < TTC_THRESHOLD)
+    if (result.approaching && result.min_ttc < g_ttc_threshold)
         result.should_alert = 1;
-    else if (obj_count > 0 && result.min_distance <= DIST_THRESHOLD)
+    else if (obj_count > 0 && result.min_distance <= g_dist_threshold)
         result.should_alert = 1;
     return result;
 }
@@ -852,8 +856,12 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) model_path = argv[++i];
         else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) labels_path = argv[++i];
         else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) g_test_fall_delay_sec = atoi(argv[++i]);
+        else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) g_ttc_threshold = atof(argv[++i]);
+        else if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) g_dist_threshold = atoi(argv[++i]);
         else if (strcmp(argv[i], "-h") == 0) {
-            printf("Usage: %s [-d camera] [-u uart] [-c conf] [-t fall_delay_sec] [-h]\n", argv[0]);
+            printf("Usage: %s [-d camera] [-u uart] [-c conf] [-T ttc_threshold] [-D dist_threshold] [-t fall_delay_sec] [-h]\n", argv[0]);
+            printf("  Defaults: TTC threshold = %.1f s, distance threshold = %d m\n",
+                   TTC_THRESHOLD_DEFAULT, DIST_THRESHOLD_DEFAULT);
             return 0;
         }
     }
@@ -868,6 +876,8 @@ int main(int argc, char *argv[]) {
     printf("Camera:   %s\n", camera_dev);
     printf("Model:    %s\n", model_path);
     printf("Conf:     %.2f\n", confidence);
+    printf("TTC thr:  %.1f s\n", g_ttc_threshold);
+    printf("Dist thr: %d m\n", g_dist_threshold);
     printf("LED:      PD11 via %s\n", GPIO_CHIP_DEV);
     printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");

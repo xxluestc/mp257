@@ -25,19 +25,28 @@ usage() {
     echo ""
     echo "选项:"
     echo "  -t N    启动 N 秒后自动模拟一次 IMU 摔倒事件（用于测试）"
+    echo "  -T F    雷达 TTC 阈值（秒），默认 2.5（后方电动车快速靠近场景）"
+    echo "  -D M    雷达距离阈值（米），默认 3"
     echo "  -l      指定日志文件路径（默认: ${LOG_FILE}）"
     echo "  -h      显示此帮助"
     echo ""
     echo "示例:"
     echo "  $0                    # 正常启动，等待真实 IMU 摔倒或雷达告警"
     echo "  $0 -t 10              # 启动 10 秒后模拟摔倒，验证端到端流程"
+    echo "  $0 -T 5.0 -D 2        # TTC<5s 或距离<=2m 即触发雷达告警"
     echo "  $0 -t 10 -l /tmp/dvr.log"
     exit 1
 }
 
-while getopts "t:l:h" opt; do
+# 默认阈值：后方电动车快速靠近、即将追尾场景
+TTC_THRESHOLD="2.5"
+DIST_THRESHOLD="3"
+
+while getopts "t:T:D:l:h" opt; do
     case "$opt" in
         t) FALL_DELAY="$OPTARG" ;;
+        T) TTC_THRESHOLD="$OPTARG" ;;
+        D) DIST_THRESHOLD="$OPTARG" ;;
         l) LOG_FILE="$OPTARG" ;;
         h|*) usage ;;
     esac
@@ -186,8 +195,16 @@ log "RPMsg 设备已就绪: ${RPMSG_DEV}"
 # -------------------------- 启动 radar_fusion --------------------------
 ARGS=""
 if [ "$FALL_DELAY" -gt 0 ] 2>/dev/null; then
-    ARGS="-t ${FALL_DELAY}"
+    ARGS="${ARGS} -t ${FALL_DELAY}"
     log "测试模式: ${FALL_DELAY} 秒后将自动模拟 IMU 摔倒事件"
+fi
+if [ -n "$TTC_THRESHOLD" ]; then
+    ARGS="${ARGS} -T ${TTC_THRESHOLD}"
+    log "雷达 TTC 阈值: ${TTC_THRESHOLD} s"
+fi
+if [ -n "$DIST_THRESHOLD" ]; then
+    ARGS="${ARGS} -D ${DIST_THRESHOLD}"
+    log "雷达距离阈值: ${DIST_THRESHOLD} m"
 fi
 
 log "启动 radar_fusion..."

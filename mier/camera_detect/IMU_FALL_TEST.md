@@ -29,6 +29,22 @@ cd /xxl/camera_detect
 ./start_dvr.sh
 ```
 
+默认雷达阈值（不加 `-T`/`-D` 时自动使用）：
+- **TTC 阈值：2.5 秒**（针对后方电动车快速靠近、即将追尾场景）
+- **距离阈值：3 米**
+
+如果现场发现 2.5 秒太敏感或太迟钝，可以直接加参数：
+```bash
+# 把 TTC 阈值改成 1.5 秒，距离阈值保持默认
+./start_dvr.sh -T 1.5
+
+# 把距离阈值改成 2 米
+./start_dvr.sh -D 2
+
+# 同时调整两个阈值
+./start_dvr.sh -T 1.5 -D 2
+```
+
 终端会实时显示：
 - `[关键] NPU: ROAD USER DETECTED` — 出现目标
 - `[关键] *** NPU CONFIRMED: Real road user! ***` — NPU 确认

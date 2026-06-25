@@ -131,6 +131,8 @@ cd /xxl/camera_detect
 
 按 `Ctrl+C` 停止，脚本会自动清理并在 4-5 秒内退出。
 
+默认雷达阈值（针对后方电动车快速靠近、即将追尾场景）：TTC 2.5s，距离 3m。现场可通过 `./start_dvr.sh -T 1.5 -D 2` 等方式调整。
+
 ### 4. 模拟摔倒测试
 
 ```bash
@@ -168,6 +170,8 @@ scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_*.mp4 ~/
 | 雷达 | 目标消失 3s | `target_active = 0` |
 | NPU | 目标丢失 | 无触发则清理缓冲 |
 
+> 默认雷达阈值（针对后方电动车快速靠近场景）：TTC < **2.5s** 或距离 ≤ **3m** 触发告警。可通过 `./start_dvr.sh -T X -D Y` 现场调整。
+>
 > 注：早期通过 `TARGET_ON` / `COLLISION` / `TARGET_OFF` 管道事件触发 DVR，当前主程序已改为内部直接调用，不再依赖管道。
 
 ## DVR 录像流程
@@ -196,6 +200,8 @@ scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_*.mp4 ~/
 #define DVR_SAVE_BEFORE_SEC    15      // 触发前保存 15s
 #define DVR_SAVE_AFTER_SEC     15      // 触发后保存 15s
 #define DVR_CAPTURE_FPS        25      // 25fps 采集
+#define TTC_THRESHOLD_DEFAULT  2.5f    // 雷达 TTC 阈值，启动脚本可覆盖
+#define DIST_THRESHOLD_DEFAULT 3       // 雷达距离阈值，启动脚本可覆盖
 #define NPU_CONFIRM_FRAMES     2       // NPU 连续 2 帧确认
 #define NPU_DENY_FRAMES        3       // NPU 连续 3 帧否认
 ```
