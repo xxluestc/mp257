@@ -66,6 +66,16 @@
 #define DVR_CAPTURE_FPS        25
 #define DVR_CAPTURE_INTERVAL_US (1000000 / DVR_CAPTURE_FPS)
 
+/* RPMsg (M33 IMU/V2X alerts) */
+#define RPMSG_DEVICE           "/dev/ttyRPMSG0"
+#define RPMSG_READY_MSG        "v2x_imu_alert_reader_ready\n"
+#define RPMSG_BAUD             B115200
+
+/* Audio alert files */
+#define AUDIO_FALL             "/xxl/camera_detect/sounds/fall_alert.wav"
+#define AUDIO_COLLISION        "/xxl/camera_detect/sounds/collision_alert.wav"
+#define AUDIO_V2X              "/xxl/camera_detect/sounds/v2x_alert.wav"
+
 /* ======================== 雷达协议结构体 ======================== */
 #pragma pack(push, 1)
 typedef struct { int8_t range_val, angle_val, velo_val, objId; } bsd_obj_t;
@@ -85,7 +95,12 @@ typedef struct {
 /* ======================== 全局状态 ======================== */
 static volatile int g_running    = 1;
 static volatile int g_led_alert  = 0;
+static volatile int g_radar_npu_alert = 0;   /* 雷达+NPU 确认告警 */
+static volatile int g_imu_fall_alert  = 0;   /* IMU 摔倒告警 */
+static volatile uint64_t g_imu_fall_time_us = 0;
 static int g_led_fd              = -1;
+static int g_camera_ok_global    = 0;        /* 供 RPMsg 线程使用 */
+static struct timeval g_t_start;             /* 程序启动时间 (全局) */
 
 /* ======================== 信号处理 ======================== */
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
@@ -527,7 +542,12 @@ static int dvr_encode_mp4(void) {
     /* fork 子进程做编码, 父进程立即返回 */
     pid_t pid = fork();
     if (pid == 0) {
-        /* ========== 子进程: 编码 + 清理 ========== */
+        /* ========== 子进程: 编码 + 清理 ==========
+         * 子进程忽略 SIGTERM, 防止父进程被 timeout 等工具终止时
+         * 打断 ffmpeg 编码。
+         */
+        signal(SIGTERM, SIG_IGN);
+        setsid();
         char work_dir[512];
         snprintf(work_dir, sizeof(work_dir), "%s/.encode", heap_buffer_dir);
         mkdir(work_dir, 0777);
@@ -581,15 +601,18 @@ static int dvr_encode_mp4(void) {
         char fps_str[32];
         snprintf(fps_str, sizeof(fps_str), "%.2f", heap_fps);
 
+        char ffmpeg_log[512];
+        snprintf(ffmpeg_log, sizeof(ffmpeg_log), "%s/ffmpeg.log", heap_buffer_dir);
+
         /* 先尝试 ffmpeg, 失败则用 avconv 或直接拷贝 jpg */
         pid_t ff_pid = fork();
         if (ff_pid == 0) {
-            /* 孙进程: 重定向 stdout/stderr 到 /dev/null, 避免刷屏 */
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) {
-                dup2(devnull, STDOUT_FILENO);
-                dup2(devnull, STDERR_FILENO);
-                close(devnull);
+            /* 孙进程: 重定向 stdout/stderr 到日志文件 */
+            int log_fd = open(ffmpeg_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (log_fd >= 0) {
+                dup2(log_fd, STDOUT_FILENO);
+                dup2(log_fd, STDERR_FILENO);
+                close(log_fd);
             }
             /* 运行 ffmpeg */
             execlp("ffmpeg", "ffmpeg",
@@ -615,27 +638,31 @@ static int dvr_encode_mp4(void) {
             waitpid(ff_pid, &ff_status, 0);
             if (WIFEXITED(ff_status) && WEXITSTATUS(ff_status) == 0) {
                 printf("[DVR] Child: Saved %s\n", heap_output_path);
+                /* 成功后清理临时文件 */
+                unlink(list_path);
+                DIR *d = opendir(work_dir);
+                if (d) {
+                    struct dirent *ent;
+                    char path[512];
+                    while ((ent = readdir(d)) != NULL) {
+                        if (ent->d_name[0] == '.') continue;
+                        snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
+                        unlink(path);
+                    }
+                    closedir(d);
+                }
+                rmdir(work_dir);
+                unlink(ffmpeg_log);
             } else {
-                printf("[DVR] Child: ffmpeg/avconv failed (exit=%d), saving JPEGs only\n",
-                       WEXITSTATUS(ff_status));
+                printf("[DVR] Child: ffmpeg/avconv failed (exit=%d), see %s\n",
+                       WEXITSTATUS(ff_status), ffmpeg_log);
                 /* 保留 jpg 文件作为备份 */
             }
+        } else {
+            /* fork 失败也清理 */
+            unlink(list_path);
+            rmdir(work_dir);
         }
-
-        /* 清理临时文件 */
-        unlink(list_path);
-        DIR *d = opendir(work_dir);
-        if (d) {
-            struct dirent *ent;
-            char path[512];
-            while ((ent = readdir(d)) != NULL) {
-                if (ent->d_name[0] == '.') continue;
-                snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
-                unlink(path);
-            }
-            closedir(d);
-        }
-        rmdir(work_dir);
 
         /* 清理原始缓冲 */
         unlink(heap_raw_path);
@@ -666,6 +693,150 @@ static int dvr_encode_mp4(void) {
     return 0;
 }
 
+/* ======================== 音频提示 ======================== */
+static void play_alert_sound(const char *type) {
+    const char *file = NULL;
+    if (strcmp(type, "fall") == 0)       file = AUDIO_FALL;
+    else if (strcmp(type, "collision") == 0) file = AUDIO_COLLISION;
+    else if (strcmp(type, "v2x") == 0)   file = AUDIO_V2X;
+    else                                 return;
+
+    if (access(file, F_OK) != 0) {
+        printf("[AUDIO] Sound file not found: %s\n", file);
+        return;
+    }
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "aplay -q %s >/dev/null 2>&1 &", file);
+    if (system(cmd) == -1) {
+        fprintf(stderr, "[AUDIO] Failed to play %s\n", file);
+    } else {
+        printf("[AUDIO] Playing %s alert\n", type);
+    }
+}
+
+/* ======================== IMU 摔倒触发处理 ======================== */
+static void handle_fall_trigger(uint64_t trigger_time_us) {
+    if (g_imu_fall_alert) return;  /* 已触发, 忽略重复 */
+    g_imu_fall_alert = 1;
+    g_imu_fall_time_us = trigger_time_us;
+
+    printf("\n[IMU] *** FALL DETECTED! *** Triggering emergency save\n\n");
+    play_alert_sound("fall");
+
+    /* 若摄像头可用但未在缓冲, 立即启动缓冲 (从摔倒瞬间开始) */
+    if (g_camera_ok_global && !dvr_recording && !dvr_encoding) {
+        if (dvr_start() == 0) {
+            printf("[DVR] Fall-triggered recording started (no pre-buffer)\n");
+        }
+    }
+
+    /* 触发保存 (若已在缓冲则保留 pre 15s, 否则从当前开始) */
+    if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
+        dvr_trigger_save(trigger_time_us);
+    }
+}
+
+/* ======================== 测试模式: 模拟 IMU 摔倒触发 ======================== */
+static int g_test_fall_delay_sec = 0;
+static void *test_fall_thread(void *arg) {
+    (void)arg;
+    if (g_test_fall_delay_sec <= 0) return NULL;
+    printf("[TEST] Simulating IMU fall after %d seconds...\n", g_test_fall_delay_sec);
+    for (int i = 0; i < g_test_fall_delay_sec && g_running; i++) sleep(1);
+    if (!g_running) return NULL;
+
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
+                     (uint64_t)tv_now.tv_usec;
+    printf("[TEST] Injecting simulated FALL event\n");
+    handle_fall_trigger(ts_us);
+    return NULL;
+}
+
+/* ======================== RPMsg 接收线程 (M33 alerts) ======================== */
+static void *rpmsg_thread(void *arg) {
+    (void)arg;
+
+    int fd = open(RPMSG_DEVICE, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        fprintf(stderr, "[IMU] Cannot open %s: %s\n", RPMSG_DEVICE, strerror(errno));
+        return NULL;
+    }
+
+    struct termios tty;
+    memset(&tty, 0, sizeof(tty));
+    cfsetospeed(&tty, RPMSG_BAUD);
+    cfsetispeed(&tty, RPMSG_BAUD);
+    tty.c_cflag &= ~(PARENB | CSTOPB | CSIZE | CRTSCTS);
+    tty.c_cflag |= CS8 | CREAD | CLOCAL;
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
+    tty.c_oflag &= ~OPOST & ~ONLCR;
+    tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 1;
+    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+        fprintf(stderr, "[IMU] tcsetattr failed: %s\n", strerror(errno));
+        close(fd);
+        return NULL;
+    }
+    tcflush(fd, TCIOFLUSH);
+
+    /* M33 需要收到 ready 消息后才开始发送告警 */
+    sleep(1);
+    if (write(fd, RPMSG_READY_MSG, strlen(RPMSG_READY_MSG)) < 0) {
+        fprintf(stderr, "[IMU] Failed to send ready message: %s\n", strerror(errno));
+    } else {
+        tcdrain(fd);
+        printf("[IMU] RPMsg ready message sent to M33\n");
+    }
+
+    char line[512];
+    int idx = 0;
+    while (g_running) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        struct timeval tv = { 0, 50000 };  /* 50ms timeout */
+        int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
+
+        if (ret > 0 && FD_ISSET(fd, &rfds)) {
+            char c;
+            int n = read(fd, &c, 1);
+            if (n > 0) {
+                if (c == '\n' || c == '\r') {
+                    if (idx > 0) {
+                        line[idx] = '\0';
+
+                        /* 解析 IMU 摔倒告警: IMU_ALERT ... type=fall */
+                        if (strstr(line, "IMU_ALERT") != NULL &&
+                            strstr(line, "type=fall") != NULL) {
+                            struct timeval tv_now;
+                            gettimeofday(&tv_now, NULL);
+                            uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
+                                             (uint64_t)tv_now.tv_usec;
+                            handle_fall_trigger(ts_us);
+                        }
+                        /* 其他 IMU/V2X 告警可在此扩展 */
+                        else if (strstr(line, "V2X_ALERT") != NULL) {
+                            printf("[V2X] %s\n", line);
+                        }
+
+                        idx = 0;
+                    }
+                } else if (idx < (int)sizeof(line) - 1) {
+                    line[idx++] = c;
+                }
+            }
+        }
+    }
+
+    close(fd);
+    printf("[IMU] RPMsg thread stopped\n");
+    return NULL;
+}
+
 /* ======================== 主函数 ======================== */
 int main(int argc, char *argv[]) {
     const char *camera_dev  = "/dev/video7";
@@ -680,8 +851,9 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) confidence = atof(argv[++i]);
         else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) model_path = argv[++i];
         else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) labels_path = argv[++i];
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) g_test_fall_delay_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "-h") == 0) {
-            printf("Usage: %s [-d camera] [-u uart] [-c conf] [-h]\n", argv[0]);
+            printf("Usage: %s [-d camera] [-u uart] [-c conf] [-t fall_delay_sec] [-h]\n", argv[0]);
             return 0;
         }
     }
@@ -777,10 +949,21 @@ int main(int argc, char *argv[]) {
         printf("[FUSION] Camera not available, radar-only mode\n");
     }
     if (!camera_ok) printf("[FUSION] Running in RADAR-ONLY mode (no DVR)\n");
+    g_camera_ok_global = camera_ok;
 
     printf("\n[FUSION] Running... Press Ctrl+C to stop.\n\n");
 
-    /* 4. 主循环 */
+    /* 4. 启动 RPMsg 接收线程 (M33 IMU/V2X alerts) */
+    pthread_t rpmsg_tid;
+    pthread_create(&rpmsg_tid, NULL, rpmsg_thread, NULL);
+
+    /* 5. 启动测试线程 (如果指定了 -t) */
+    pthread_t test_fall_tid;
+    if (g_test_fall_delay_sec > 0) {
+        pthread_create(&test_fall_tid, NULL, test_fall_thread, NULL);
+    }
+
+    /* 5. 主循环 */
     uint8_t rx_buf[512];
     int rx_len = 0;
     int poll_cnt = 0;
@@ -793,10 +976,10 @@ int main(int argc, char *argv[]) {
     int npu_confirmed   = 0;
     int npu_denied      = 0;
 
-    struct timeval t_start, t_last_bsd, t_last_capture;
-    gettimeofday(&t_start, NULL);
-    t_last_bsd = t_start;
-    t_last_capture = t_start;
+    struct timeval t_last_bsd, t_last_capture;
+    gettimeofday(&g_t_start, NULL);
+    t_last_bsd = g_t_start;
+    t_last_capture = g_t_start;
 
     while (g_running) {
         /* 回收异步编码子进程 */
@@ -811,7 +994,10 @@ int main(int argc, char *argv[]) {
                 dvr_encoding = 0;
                 dvr_save_triggered = 0;
                 dvr_trigger_time_us = 0;
-                /* 重置 NPU 状态，准备下一轮触发 */
+                /* 重置告警状态，准备下一轮触发 */
+                g_radar_npu_alert = 0;
+                g_imu_fall_alert = 0;
+                g_imu_fall_time_us = 0;
                 npu_confirm_cnt = 0;
                 npu_deny_cnt = 0;
                 npu_confirmed = 0;
@@ -848,7 +1034,7 @@ int main(int argc, char *argv[]) {
             unsigned int jpeg_len;
             if (camera_capture(&cam, &jpeg_buf, &jpeg_len) == 0) {
                 t_last_capture = tv_now;
-                uint64_t ts_us = (uint64_t)(tv_now.tv_sec - t_start.tv_sec) * 1000000ULL +
+                uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
                                  (uint64_t)tv_now.tv_usec;
 
                 /* DVR: 保存帧 */
@@ -889,8 +1075,8 @@ int main(int argc, char *argv[]) {
                             }
                         }
 
-                        double t = (tv_now.tv_sec - t_start.tv_sec) +
-                                   (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+                        double t = (tv_now.tv_sec - g_t_start.tv_sec) +
+                                   (tv_now.tv_usec - g_t_start.tv_usec) / 1000000.0;
 
                         /* === NPU 目标状态跟踪 (控制缓冲) === */
                         if (has_road) {
@@ -961,8 +1147,8 @@ int main(int argc, char *argv[]) {
             double elapsed = (tv_now.tv_sec - t_last_bsd.tv_sec) +
                              (tv_now.tv_usec - t_last_bsd.tv_usec) / 1000000.0;
             if (elapsed > TARGET_TIMEOUT_S) {
-                double t = (tv_now.tv_sec - t_start.tv_sec) +
-                           (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+                double t = (tv_now.tv_sec - g_t_start.tv_sec) +
+                           (tv_now.tv_usec - g_t_start.tv_usec) / 1000000.0;
                 printf("[%6.1fs] TARGET GONE (%.1fs timeout)\n", t, elapsed);
                 target_active   = 0;
                 g_led_alert     = 0;
@@ -1004,8 +1190,8 @@ int main(int argc, char *argv[]) {
                     gettimeofday(&t_last_bsd, NULL);
 
                     gettimeofday(&tv_now, NULL);
-                    double t = (tv_now.tv_sec - t_start.tv_sec) +
-                               (tv_now.tv_usec - t_start.tv_usec) / 1000000.0;
+                    double t = (tv_now.tv_sec - g_t_start.tv_sec) +
+                               (tv_now.tv_usec - g_t_start.tv_usec) / 1000000.0;
 
                     printf("[%6.1fs] RADAR: %d targets, dist=%dm, TTC=%.1fs, alert=%s\n",
                            t, radar.obj_count, radar.min_distance,
@@ -1018,25 +1204,26 @@ int main(int argc, char *argv[]) {
                         /* NPU 状态由 NPU 推理逻辑独立管理，不在此重置 */
                     }
 
-                    /* LED + DVR: 雷达告警 + NPU 确认 → 触发 */
+                    /* DVR + 告警状态: 雷达告警 + NPU 确认 → 触发 */
                     if (camera_ok) {
                         if (radar.should_alert && npu_confirmed && !npu_denied) {
                             /* 雷达告警 + NPU 确认 → 真正碰撞风险 */
-                            g_led_alert = 1;
+                            g_radar_npu_alert = 1;
                             if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
                                 printf("  >>> ALERT: COLLISION RISK - NPU CONFIRMED <<<\n");
-                                dvr_trigger_save((uint64_t)(tv_now.tv_sec - t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec);
+                                dvr_trigger_save((uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec);
+                                play_alert_sound("collision");
                             }
                         } else {
-                            g_led_alert = 0;
+                            g_radar_npu_alert = 0;
                         }
                     } else {
                         /* 纯雷达模式 (无摄像头) */
                         if (radar.should_alert) {
                             printf("  >>> ALERT: COLLISION RISK (radar-only) <<<\n");
-                            g_led_alert = 1;
+                            g_radar_npu_alert = 1;
                         } else {
-                            g_led_alert = 0;
+                            g_radar_npu_alert = 0;
                         }
                     }
                 }
@@ -1045,6 +1232,9 @@ int main(int argc, char *argv[]) {
             }
             if (rx_len >= (int)sizeof(rx_buf)) rx_len = 0;
         }
+
+        /* 统一 LED 控制: 雷达+NPU 告警 或 IMU 摔倒告警 */
+        g_led_alert = g_radar_npu_alert || g_imu_fall_alert;
     }
 
     printf("\n[FUSION] Stopping...\n");
@@ -1072,6 +1262,8 @@ int main(int argc, char *argv[]) {
 
     g_led_alert = 0;
     pthread_join(led_tid, NULL);
+    pthread_join(rpmsg_tid, NULL);
+    if (g_test_fall_delay_sec > 0) pthread_join(test_fall_tid, NULL);
     gpio_deinit();
 
     if (camera_ok) {
