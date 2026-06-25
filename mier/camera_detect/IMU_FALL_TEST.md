@@ -3,9 +3,8 @@
 ## 一、前置准备
 
 1. 开发板上电，确认 A35 Linux 已启动
-2. 确认 M33 固件已启动（/dev/ttyRPMSG0 存在）
-3. 确认摄像头 /dev/video7、雷达 /dev/ttySTM1、TF 卡 /run/media/mmcblk0p1 可用
-4. 确认告警音频文件存在：
+2. 确认摄像头 `/dev/video7`、雷达 `/dev/ttySTM1`、TF 卡 `/run/media/mmcblk0p1` 可用
+3. 确认告警音频文件存在：
    ```bash
    ls -la /xxl/camera_detect/sounds/
    # 应有 fall_alert.wav / collision_alert.wav / v2x_alert.wav
@@ -20,6 +19,8 @@
 - 启动 `radar_fusion`
 - 退出时自动停止 M33 固件
 
+终端**只显示关键事件**，完整日志写入 `/xxl/camera_detect/dvr_system.log`。
+
 ### 2.1 真实室外运行
 
 ```bash
@@ -28,7 +29,16 @@ cd /xxl/camera_detect
 ./start_dvr.sh
 ```
 
-日志保存在 `/xxl/camera_detect/dvr_system.log`，可另开终端查看：
+终端会实时显示：
+- `[关键] NPU: ROAD USER DETECTED` — 出现目标
+- `[关键] *** NPU CONFIRMED: Real road user! ***` — NPU 确认
+- `[关键] *** FALL DETECTED! ***` — IMU 摔倒
+- `[关键] [AUDIO] Playing fall alert` — 音频提示
+- `[保存] [DVR] Child: Saved /run/media/mmcblk0p1/dvr/emergency_...` — 视频保存路径
+
+按 `Ctrl+C` 停止，脚本会在几秒种内清理并停止 M33 固件。
+
+完整日志可另开终端查看：
 ```bash
 ssh root@192.168.88.10 'tail -f /xxl/camera_detect/dvr_system.log'
 ```
@@ -37,8 +47,10 @@ ssh root@192.168.88.10 'tail -f /xxl/camera_detect/dvr_system.log'
 
 ```bash
 # 启动 10 秒后自动模拟摔倒
-ssh root@192.168.88.10 'cd /xxl/camera_detect && timeout 40 ./start_dvr.sh -t 10'
+ssh root@192.168.88.10 'cd /xxl/camera_detect && ./start_dvr.sh -t 10'
 ```
+
+> 模拟模式同样会触发 LED、音频、DVR 保存，适合出门前快速验证端到端流程。
 
 ## 三、手动分步启动（调试用）
 
@@ -84,7 +96,17 @@ ssh root@192.168.88.10 'ls -lh /run/media/mmcblk0p1/dvr/emergency_*.mp4 && ffpro
 - 摔倒时无目标缓冲：约 15s（仅摔倒后 15s）
 - 缓冲不足 15s：介于 15s ~ 30s 之间（本次测试约为 19-20s）
 
-### 4.2 单独监听 M33 RPMSG 输出
+### 4.2 拷贝视频到虚拟机
+
+```bash
+# 单个文件
+scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_YYYYMMDD_HHMMSS.mp4 ~/
+
+# 当天所有视频
+scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_*.mp4 ~/dvr_videos/
+```
+
+### 4.3 单独监听 M33 RPMSG 输出
 
 ```bash
 ssh root@192.168.88.10
@@ -107,9 +129,19 @@ ssh root@192.168.88.10 'cd /home/root/project && ./fw_cortex_m33.sh stop'
 ssh root@192.168.88.10 'rm -f /run/media/mmcblk0p1/dvr/emergency_*.mp4'
 ```
 
-## 六、常见问题
+## 六、关于保存延迟的说明
 
-1. **/dev/ttyRPMSG0 不存在**：M33 固件未启动，执行 `./fw_cortex_m33.sh start`
+触发后到 MP4 文件可用，中间有固定延迟：
+
+1. **必须等待 15 秒 post-trigger 录制**（设计需求）
+2. **ffmpeg 编码耗时**（通常几秒到十几秒）
+
+正常工作时主进程不会被阻塞：编码在子进程中异步执行，主进程继续跑摄像头/NPU/雷达检测。但在编码完成前，新的 DVR 缓冲不会启动，避免多个 ffmpeg 同时运行压垮系统。
+
+## 七、常见问题
+
+1. **`/dev/ttyRPMSG0` 不存在**：M33 固件未启动，执行 `./fw_cortex_m33.sh start`
 2. **没有声音**：检查 `/xxl/camera_detect/sounds/fall_alert.wav` 是否存在，以及 `aplay -l` 能否看到 MAX98357A 声卡
 3. **没有生成 MP4**：检查 TF 卡是否挂载到 `/run/media/mmcblk0p1`，以及 `which ffmpeg` 是否有输出
-4. **程序启动失败**：确认摄像头 /dev/video7 未被其他程序占用，必要时执行 `fuser -k /dev/video7`
+4. **程序启动失败**：确认摄像头 `/dev/video7` 未被其他程序占用，必要时执行 `fuser -k /dev/video7`
+5. **`Ctrl+C` 后卡住**：旧版脚本可能出现，新版 `start_dvr.sh` 已加入 3 秒超时 + SIGKILL 强制清理，通常 4-5 秒内退出

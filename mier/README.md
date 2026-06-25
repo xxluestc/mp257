@@ -6,9 +6,13 @@
 
 - **摄像头 NPU**：负责目标识别（人、自行车、汽车等道路用户）
 - **毫米波雷达**：负责目标测距、测速、TTC 碰撞时间估计
-- **融合决策**：雷达告警时参考 NPU 结果，确认真实道路用户才触发保存
-- **DVR 行车记录**：检测到目标后先缓冲，碰撞确认后保存前后 15 秒视频到 TF 卡
+- **M33 核 IMU/V2X**：检测摔倒、急刹、路面颠簸，接收周边车辆 V2X 告警
+- **融合决策**：
+  - 雷达告警 + NPU 确认 → 触发保存
+  - M33 IMU 摔倒告警 → 触发保存
+- **DVR 行车记录**：检测到目标后先缓冲，触发后保存前后 15 秒视频到 TF 卡
 - **LED 告警**：PD11 引脚闪烁告警
+- **骨传导音频**：摔倒/碰撞/V2X 告警语音提示
 
 ## 当前融合逻辑
 
@@ -24,26 +28,47 @@
     │   ├─ 检测到目标 → target_active
     │   └─ 目标消失 3s → target_active = 0
     │
-    └─ 触发条件: radar.should_alert AND npu_confirmed
+    ├─ M33 RPMsg (IMU/V2X 告警)
+    │   └─ IMU_ALERT type=fall → g_imu_fall_alert = 1
+    │
+    └─ 触发条件:
         │
-        ├─ LED 闪烁告警
-        ├─ DVR 保存触发 → 继续录制 15s
-        └─ fork 子进程 ffmpeg 编码 MP4 (异步)
+        ├─ 雷达 TTC 危险 AND npu_confirmed
+        │       │
+        │       ├─ LED 闪烁告警
+        │       ├─ 碰撞音频提示
+        │       ├─ DVR 保存触发 → 继续录制 15s
+        │       └─ fork 子进程 ffmpeg 编码 MP4 (异步)
+        │
+        └─ IMU 摔倒告警
+                │
+                ├─ 若未缓冲 → 立即启动缓冲，从摔倒瞬间保存 15s
+                ├─ 若已缓冲 → 保存前后各 15s (约 30s)
+                ├─ LED 闪烁告警
+                ├─ 摔倒音频提示
+                └─ fork 子进程 ffmpeg 编码 MP4 (异步)
 ```
 
-**关键设计变化**: 与早期版本不同，现在由 **摄像头 NPU 掌管目标是否出现**，雷达只负责提供距离/TTC 信息用于最终触发判断。
+**关键设计变化**: 与早期版本不同，现在由 **摄像头 NPU 掌管目标是否出现**，雷达只负责提供距离/TTC 信息用于最终触发判断；M33 IMU 摔倒作为第二独立触发源。
 
 ## 目录结构
 
 ```
 mier/
-├── camera_detect/          # 当前主程序: 雷达+NPU+DVR 融合
+├── camera_detect/          # 当前主程序: 雷达+NPU+DVR+IMU 融合
 │   ├── radar_fusion.cpp    # 主程序入口
+│   ├── start_dvr.sh        # 一键启动脚本 (推荐)
+│   ├── IMU_FALL_TEST.md    # IMU 摔倒触发 DVR 测试指南
 │   ├── camera.c/h          # USB 摄像头 V4L2 采集
 │   ├── npu_detect.cpp/h    # NPU 推理 (SSD MobileNet V2)
 │   ├── jpeg_decoder.c      # JPEG 解码
 │   ├── stai_mpu/           # 正点原子 NPU 库 (libstai_mpu.so)
 │   └── Makefile
+│
+├── v2x/                    # M33 固件与 A35 接收脚本
+│   ├── 使用方式.md
+│   ├── a35_read_v2x_alerts.sh
+│   └── STM32Cube_ATK_FW_MP2_V1.0.0/...
 │
 ├── dvr/                    # 早期独立 DVR 引擎 (已不用于主流程)
 │   ├── src/                # DVR 状态机、环形缓冲、触发接收
@@ -59,7 +84,7 @@ mier/
 │   ├── RADAR_COMMANDS.md
 │   └── README.md
 │
-├── audio/                  # 音频模块 (暂未联调)
+├── audio/                  # 音频模块
 ├── dts/                    # 设备树
 └── docs/
     └── debug_notes.md      # 完整调试经验记录
@@ -70,9 +95,11 @@ mier/
 | 组件 | 开发板接口 | 设备节点 | 说明 |
 |------|-----------|---------|------|
 | 雷达 | USART1 | `/dev/ttySTM1` | 921600bps |
-| 摄像头 | USB 2.0 Host | `/dev/video6` | MJPEG 1280x720 |
+| 摄像头 | USB 2.0 Host | `/dev/video7` | MJPEG 1280x720 |
 | LED | GPIO PD11 | `/dev/gpiochip3` line 11 | 告警闪烁 |
 | TF 卡 | SDMMC | `/run/media/mmcblk0p1/dvr/` | 视频存储 |
+| M33 核 | RPMsg | `/dev/ttyRPMSG0` | IMU/V2X 告警 |
+| 音频 | I2S + MAX98357A | ALSA default | 骨传导提示音 |
 
 ## 快速开始
 
@@ -87,28 +114,45 @@ make radar-fusion CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
 ### 2. 部署到开发板
 
 ```bash
-scp radar_fusion root@192.168.88.10:/xxl/camera_detect/
-# NPU 库已包含在 camera_detect/stai_mpu/ 中, 随程序一起部署
+make deploy-radar
+# 或手动:
+# scp radar_fusion start_dvr.sh root@192.168.88.10:/xxl/camera_detect/
 ```
 
-### 3. 开发板运行
+### 3. 开发板运行（推荐一键启动）
 
 ```bash
 ssh root@192.168.88.10
 cd /xxl/camera_detect
-
-# 方式 1: 系统目录已有 libstai_mpu
-LD_LIBRARY_PATH=/usr/lib:/vendor/lib ./radar_fusion
-
-# 方式 2: 如果系统目录没有 NPU 库
-LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion
+./start_dvr.sh
 ```
 
-### 4. 运行模式
+终端只显示关键事件，完整日志写入 `/xxl/camera_detect/dvr_system.log`。
+
+按 `Ctrl+C` 停止，脚本会自动清理并在 4-5 秒内退出。
+
+### 4. 模拟摔倒测试
+
+```bash
+cd /xxl/camera_detect
+./start_dvr.sh -t 10
+```
+
+启动 10 秒后自动模拟 IMU 摔倒，验证 LED、音频、视频保存是否正常。
+
+### 5. 拷贝视频到虚拟机
+
+```bash
+scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_*.mp4 ~/
+```
+
+## 运行模式
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
+| 一键完整系统 | `./start_dvr.sh` | 推荐，自动启动 M33 + radar_fusion |
 | 摄像头 + 雷达融合 | `./radar_fusion` | 主程序, NPU 缓冲 + 雷达确认触发 |
+| 模拟摔倒测试 | `./radar_fusion -t 10` | 10 秒后自动触发摔倒 |
 | 纯雷达 | `./radar_link` | 仅雷达数据解析 |
 | 旧版联调 | `pro/start_pro.sh` | 早期雷达 + DVR 管道方案 (不推荐) |
 
@@ -119,7 +163,8 @@ LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion
 | 摄像头 NPU | 检测到道路用户 | 开始 DVR 缓冲 |
 | 摄像头 NPU | 连续确认道路用户 | `npu_confirmed = 1` |
 | 雷达 | TTC < 阈值 / 距离过近 | `radar.should_alert = 1` |
-| 融合 | `radar.should_alert AND npu_confirmed` | 触发保存、LED 闪烁 |
+| 融合 | `radar.should_alert AND npu_confirmed` | 触发保存、LED 闪烁、碰撞音频 |
+| M33 IMU | `IMU_ALERT type=fall` | 触发保存、LED 闪烁、摔倒音频 |
 | 雷达 | 目标消失 3s | `target_active = 0` |
 | NPU | 目标丢失 | 无触发则清理缓冲 |
 
@@ -136,6 +181,12 @@ LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion
 | 编码 | ffmpeg 将 JPEG 序列编码为 MP4 (mpeg4) | **是** |
 
 **ffmpeg 作用**: 仅在触发保存后运行，把缓冲的 JPEG 帧序列压缩成 MP4 视频文件，与主进程并行（fork 子进程），不阻塞检测。
+
+**关于保存延迟**: 触发后到 MP4 可用有固定延迟：
+1. 必须等待 15 秒 post-trigger 录制
+2. ffmpeg 编码耗时（通常几秒到十几秒）
+
+编码期间主进程继续跑检测，但新的 DVR 缓冲不会启动，避免多个 ffmpeg 并发压垮系统。
 
 ## 关键配置
 
@@ -162,10 +213,12 @@ LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion
 
 ## 各模块文档
 
+- [IMU 摔倒触发 DVR 测试指南](camera_detect/IMU_FALL_TEST.md) — 一键启动、测试方法、常见问题
+- [V2X/IMU 使用方式](v2x/使用方式.md) — M33 固件启动、RPMSG 监听、硬件连接
 - [调试经验记录](docs/debug_notes.md) — 完整 Bug 记录、调试过程、排错方法
 - [雷达模块](radar/README.md) — 雷达硬件接口、协议
 - [DVR 开发日志](dvr/docs/DEVELOPMENT_LOG.md) — 早期 DVR 开发历程
-- [音频模块](audio/docs/README.md) — 音频输出 (暂未联调)
+- [音频模块](audio/docs/README.md) — 音频输出
 - [设备树](dts/README.md) — 设备树配置说明
 
 ## 开发板 NPU 库位置
