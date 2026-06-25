@@ -17,8 +17,7 @@ LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
 RADAR_PID=0
-READER_PID=0
-FIFO=""
+READER_PID=0                  # 过滤进程组的 leader PID
 
 # -------------------------- 用法 --------------------------
 usage() {
@@ -51,24 +50,64 @@ log() {
 }
 
 # -------------------------- 退出清理 --------------------------
+# 安全地等待进程结束，最多 wait_sec 秒
+wait_or_kill() {
+    local pid="$1"
+    local name="$2"
+    local wait_sec="${3:-3}"
+
+    [ -z "$pid" ] || [ "$pid" -le 0 ] && return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    log "停止 ${name} (pid=${pid})..."
+    kill -TERM "$pid" 2>/dev/null || true
+
+    local i=0
+    while [ "$i" -lt "$wait_sec" ]; do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 1
+        i=$((i + 1))
+    done
+
+    if kill -0 "$pid" 2>/dev/null; then
+        log "${name} 未响应，强制结束..."
+        kill -KILL "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+}
+
 cleanup() {
+    # 防止信号重入导致清理逻辑嵌套
+    trap '' INT TERM HUP QUIT
+
     log "收到退出信号，开始清理..."
-    if [ "$RADAR_PID" -gt 0 ] 2>/dev/null && kill -0 "$RADAR_PID" 2>/dev/null; then
-        log "停止 radar_fusion (pid=${RADAR_PID})..."
-        kill -TERM "$RADAR_PID" 2>/dev/null || true
-        sleep 2
-        kill -0 "$RADAR_PID" 2>/dev/null && kill -KILL "$RADAR_PID" 2>/dev/null || true
+
+    # 1. 停止 radar_fusion
+    wait_or_kill "$RADAR_PID" "radar_fusion" 3
+    RADAR_PID=0
+
+    # 2. 停止过滤进程组（包括 tail/grep/awk）
+    if [ "$READER_PID" -gt 0 ] 2>/dev/null; then
+        log "停止日志过滤进程组 (pgid=${READER_PID})..."
+        kill -TERM -"$READER_PID" 2>/dev/null || true
+        wait_or_kill "$READER_PID" "日志过滤" 2
+        READER_PID=0
     fi
-    if [ "$READER_PID" -gt 0 ] 2>/dev/null && kill -0 "$READER_PID" 2>/dev/null; then
-        kill -TERM "$READER_PID" 2>/dev/null || true
-        wait "$READER_PID" 2>/dev/null || true
-    fi
-    [ -n "$FIFO" ] && [ -e "$FIFO" ] && rm -f "$FIFO"
+
+    # 3. 确保没有遗留子进程占用摄像头/雷达
+    pkill -9 -f "radar_fusion" 2>/dev/null || true
+
+    # 4. 停止 M33 固件（最多等 10 秒）
     log "停止 M33 固件..."
     (
         cd "$FW_DIR" || exit 1
-        ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 10 ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        else
+            ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        fi
     )
+
     log "DVR 系统已停止"
     exit 0
 }
@@ -160,13 +199,16 @@ log "终端只显示关键事件，完整日志请查看上方文件"
 KEY_PATTERN='ROAD USER DETECTED|NPU CONFIRMED|ALERT:|FALL DETECTED|Save triggered|Recording started|Post-trigger|Child: Saved|Encoder finished|TARGET ON|TARGET GONE|Playing .* alert|V2X_ALERT|RPMsg ready|DVR] TF card|DVR] ffmpeg'
 
 # 后台实时过滤并打印关键日志（从当前日志末尾开始，不打印历史）
-tail -n 0 -f "$LOG_FILE" 2>/dev/null | stdbuf -oL grep --line-buffered -E "$KEY_PATTERN" | \
-stdbuf -oL awk '
-BEGIN { yellow="\033[1;33m"; cyan="\033[1;36m"; reset="\033[0m" }
-/FALL DETECTED|ALERT:/ { print yellow "[关键] " $0 reset; next }
-/Child: Saved/         { print cyan "[保存] " $0 reset; next }
-                        { print "[关键] " $0 }
-' &
+# 使用子shell，这样 READER_PID 就是进程组 leader，cleanup 可以一次性 kill 整个管道
+(
+    tail -n 0 -f "$LOG_FILE" 2>/dev/null | stdbuf -oL grep --line-buffered -E "$KEY_PATTERN" | \
+    stdbuf -oL awk '
+    BEGIN { yellow="\033[1;33m"; cyan="\033[1;36m"; reset="\033[0m" }
+    /FALL DETECTED|ALERT:/ { print yellow "[关键] " $0 reset; next }
+    /Child: Saved/         { print cyan "[保存] " $0 reset; next }
+                            { print "[关键] " $0 }
+    '
+) &
 READER_PID=$!
 
 export LD_LIBRARY_PATH="/usr/lib:/vendor/lib:${CAMERA_DIR}/stai_mpu"
@@ -178,9 +220,10 @@ log "radar_fusion 已启动，pid=${RADAR_PID}，过滤进程 pid=${READER_PID}"
 wait "$RADAR_PID"
 RADAR_PID=0
 
-# 关闭过滤进程
-if [ "$READER_PID" -gt 0 ] 2>/dev/null && kill -0 "$READER_PID" 2>/dev/null; then
-    kill -TERM "$READER_PID" 2>/dev/null || true
+# 正常退出：关闭过滤进程组
+if [ "$READER_PID" -gt 0 ] 2>/dev/null; then
+    log "关闭日志过滤进程组..."
+    kill -TERM -"$READER_PID" 2>/dev/null || true
     wait "$READER_PID" 2>/dev/null || true
 fi
 READER_PID=0
