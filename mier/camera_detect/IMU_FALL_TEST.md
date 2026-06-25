@@ -11,7 +11,40 @@
    # 应有 fall_alert.wav / collision_alert.wav / v2x_alert.wav
    ```
 
-## 二、启动 M33 固件
+## 二、一键启动（推荐）
+
+已提供整合脚本 `start_dvr.sh`，自动完成：
+- 清理摄像头/雷达占用
+- 启动 M33 固件
+- 等待 `/dev/ttyRPMSG0` 就绪
+- 启动 `radar_fusion`
+- 退出时自动停止 M33 固件
+
+### 2.1 真实室外运行
+
+```bash
+ssh root@192.168.88.10
+cd /xxl/camera_detect
+./start_dvr.sh
+```
+
+日志保存在 `/xxl/camera_detect/dvr_system.log`，可另开终端查看：
+```bash
+ssh root@192.168.88.10 'tail -f /xxl/camera_detect/dvr_system.log'
+```
+
+### 2.2 模拟测试模式（无需物理晃动 IMU）
+
+```bash
+# 启动 10 秒后自动模拟摔倒
+ssh root@192.168.88.10 'cd /xxl/camera_detect && timeout 40 ./start_dvr.sh -t 10'
+```
+
+## 三、手动分步启动（调试用）
+
+如需单独调试某个模块，可按以下步骤手动执行：
+
+### 3.1 启动 M33 固件
 
 ```bash
 ssh root@192.168.88.10
@@ -20,25 +53,10 @@ cd /home/root/project
 ls -la /dev/ttyRPMSG0   # 确认设备节点存在
 ```
 
-## 三、启动 radar_fusion
-
-### 3.1 真实运行（等待 IMU 真实摔倒事件）
+### 3.2 启动 radar_fusion
 
 ```bash
-ssh root@192.168.88.10 'cd /xxl/camera_detect && LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion'
-```
-
-触发条件：
-- M33 检测到 IMU 摔倒（剧烈冲击 + 倾斜）后，通过 RPMSG 发送 `IMU_ALERT ... type=fall`
-- A35 收到后触发 DVR 保存
-
-### 3.2 模拟测试模式（无需物理晃动 IMU）
-
-使用 `-t N` 参数，N 秒后自动模拟一次摔倒事件：
-
-```bash
-# 5 秒后模拟摔倒触发
-ssh root@192.168.88.10 'cd /xxl/camera_detect && LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu timeout 40 ./radar_fusion -t 5'
+ssh root@192.168.88.10 'cd /xxl/camera_detect && LD_LIBRARY_PATH=/usr/lib:/vendor/lib:/xxl/camera_detect/stai_mpu ./radar_fusion -t 5'
 ```
 
 预期输出关键日志：
