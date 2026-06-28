@@ -12,7 +12,7 @@
   - M33 IMU 摔倒告警 → 触发保存
 - **DVR 行车记录**：检测到目标后先缓冲，触发后保存前后 15 秒视频到 TF 卡
 - **LED 告警**：PD11 引脚闪烁告警
-- **骨传导音频**：摔倒/碰撞/V2X 告警语音提示
+- **骨传导音频**：摔倒/碰撞/V2X 方向告警语音提示
 
 ## 当前融合逻辑
 
@@ -29,7 +29,8 @@
     │   └─ 目标消失 3s → target_active = 0
     │
     ├─ M33 RPMsg (IMU/V2X 告警)
-    │   └─ IMU_ALERT type=fall → g_imu_fall_alert = 1
+    │   ├─ IMU_ALERT type=fall → g_imu_fall_alert = 1
+    │   └─ V2X_ALERT direction=xxx → g_v2x_alert = 1, 播放方向语音
     │
     └─ 触发条件:
         │
@@ -40,13 +41,18 @@
         │       ├─ DVR 保存触发 → 继续录制 15s
         │       └─ fork 子进程 ffmpeg 编码 MP4 (异步)
         │
-        └─ IMU 摔倒告警
-                │
-                ├─ 若未缓冲 → 立即启动缓冲，从摔倒瞬间保存 15s
-                ├─ 若已缓冲 → 保存前后各 15s (约 30s)
+        ├─ IMU 摔倒告警
+        │       │
+        │       ├─ 若未缓冲 → 立即启动缓冲，从摔倒瞬间保存 15s
+        │       ├─ 若已缓冲 → 保存前后各 15s (约 30s)
+        │       ├─ LED 闪烁告警
+        │       ├─ 摔倒音频提示
+        │       └─ fork 子进程 ffmpeg 编码 MP4 (异步)
+        │
+        └─ V2X 告警
                 ├─ LED 闪烁告警
-                ├─ 摔倒音频提示
-                └─ fork 子进程 ffmpeg 编码 MP4 (异步)
+                ├─ 方向语音播报
+                └─ 若正在缓冲 → 继续保留缓冲 (DVR 可选扩展)
 ```
 
 **关键设计变化**: 与早期版本不同，现在由 **摄像头 NPU 掌管目标是否出现**，雷达只负责提供距离/TTC 信息用于最终触发判断；M33 IMU 摔倒作为第二独立触发源。
@@ -167,6 +173,7 @@ scp root@192.168.88.10:/run/media/mmcblk0p1/dvr/emergency_*.mp4 ~/
 | 雷达 | TTC < 阈值 / 距离过近 | `radar.should_alert = 1` |
 | 融合 | `radar.should_alert AND npu_confirmed` | 触发保存、LED 闪烁、碰撞音频 |
 | M33 IMU | `IMU_ALERT type=fall` | 触发保存、LED 闪烁、摔倒音频 |
+| M33 V2X | `V2X_ALERT direction=xxx` | LED 闪烁、方向语音播报 |
 | 雷达 | 目标消失 3s | `target_active = 0` |
 | NPU | 目标丢失 | 无触发则清理缓冲 |
 

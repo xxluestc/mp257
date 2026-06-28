@@ -8,6 +8,7 @@
    ```bash
    ls -la /xxl/camera_detect/sounds/
    # 应有 fall_alert.wav / collision_alert.wav / v2x_alert.wav
+   # 以及 V2X 方向提示音：v2x_nearby.wav / v2x_left_front.wav / v2x_right_front.wav / v2x_left.wav / v2x_right.wav
    ```
 
 ## 二、一键启动（推荐）
@@ -49,7 +50,9 @@ cd /xxl/camera_detect
 - `[关键] NPU: ROAD USER DETECTED` — 出现目标
 - `[关键] *** NPU CONFIRMED: Real road user! ***` — NPU 确认
 - `[关键] *** FALL DETECTED! ***` — IMU 摔倒
-- `[关键] [AUDIO] Playing fall alert` — 音频提示
+- `[关键] [AUDIO] Playing fall alert` — 摔倒音频提示
+- `[关键] [V2X] V2X_ALERT ...` — 收到 V2X 告警
+- `[关键] [AUDIO] Playing V2X alert: left_front` — V2X 方向音频提示
 - `[保存] [DVR] Child: Saved /run/media/mmcblk0p1/dvr/emergency_...` — 视频保存路径
 
 按 `Ctrl+C` 停止，脚本会在几秒种内清理并停止 M33 固件。
@@ -67,6 +70,20 @@ ssh root@192.168.88.10 'cd /xxl/camera_detect && ./start_dvr.sh -t 10'
 ```
 
 > 模拟模式同样会触发 LED、音频、DVR 保存，适合出门前快速验证端到端流程。
+
+### 2.3 V2X 告警与定向语音
+
+当 M33 检测到周围有车辆靠近时，会通过 RPMsg 发送 `V2X_ALERT`。A35 侧的 `radar_fusion` 会解析 `direction=` 字段并播放对应方向的中文提示音：
+
+| direction | 播放内容 | 音频文件 |
+|---|---|---|
+| `nearby` | 附近有来车，请注意观察 | `v2x_nearby.wav` |
+| `left_front` | 左前方有来车，请注意 | `v2x_left_front.wav` |
+| `right_front` | 右前方有来车，请注意 | `v2x_right_front.wav` |
+| `left` | 左侧有来车，请注意 | `v2x_left.wav` |
+| `right` | 右侧有来车，请注意 | `v2x_right.wav` |
+
+V2X 语音有 **2 秒防连播机制**（cooldown），避免同一事件反复触发导致语音堆叠。
 
 ## 三、手动分步启动（调试用）
 
