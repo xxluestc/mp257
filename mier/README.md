@@ -128,6 +128,7 @@ make deploy-radar
 ### 3. 开发板运行（推荐一键启动）
 
 ```bash
+ssh-keygen -f '/home/alientek/.ssh/known_hosts' -R '192.168.88.10'
 ssh root@192.168.88.10
 cd /xxl/camera_detect
 ./start_dvr.sh

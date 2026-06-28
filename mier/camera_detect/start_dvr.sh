@@ -16,6 +16,8 @@ RPMSG_DEV="/dev/ttyRPMSG0"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
+V2X_DELAY=0                   # 默认不模拟 V2X；由 -V 参数覆盖
+V2X_DIRECTION="left_front"    # 默认 V2X 方向
 RADAR_PID=0
 READER_PID=0                  # 过滤进程组的 leader PID
 
@@ -25,6 +27,8 @@ usage() {
     echo ""
     echo "选项:"
     echo "  -t N    启动 N 秒后自动模拟一次 IMU 摔倒事件（用于测试）"
+    echo "  -V N    启动 N 秒后自动模拟一次 V2X 告警（用于测试）"
+    echo "  -x DIR  模拟 V2X 方向：nearby|left_front|right_front|left|right（默认 left_front）"
     echo "  -T F    雷达 TTC 阈值（秒），默认 2.5（后方电动车快速靠近场景）"
     echo "  -D M    雷达距离阈值（米），默认 3"
     echo "  -l      指定日志文件路径（默认: ${LOG_FILE}）"
@@ -33,6 +37,7 @@ usage() {
     echo "示例:"
     echo "  $0                    # 正常启动，等待真实 IMU 摔倒或雷达告警"
     echo "  $0 -t 10              # 启动 10 秒后模拟摔倒，验证端到端流程"
+    echo "  $0 -V 5 -x right_front # 启动 5 秒后模拟右前方 V2X 告警"
     echo "  $0 -T 5.0 -D 2        # TTC<5s 或距离<=2m 即触发雷达告警"
     echo "  $0 -t 10 -l /tmp/dvr.log"
     exit 1
@@ -42,9 +47,11 @@ usage() {
 TTC_THRESHOLD="2.5"
 DIST_THRESHOLD="3"
 
-while getopts "t:T:D:l:h" opt; do
+while getopts "t:V:x:T:D:l:h" opt; do
     case "$opt" in
         t) FALL_DELAY="$OPTARG" ;;
+        V) V2X_DELAY="$OPTARG" ;;
+        x) V2X_DIRECTION="$OPTARG" ;;
         T) TTC_THRESHOLD="$OPTARG" ;;
         D) DIST_THRESHOLD="$OPTARG" ;;
         l) LOG_FILE="$OPTARG" ;;
@@ -198,6 +205,10 @@ if [ "$FALL_DELAY" -gt 0 ] 2>/dev/null; then
     ARGS="${ARGS} -t ${FALL_DELAY}"
     log "测试模式: ${FALL_DELAY} 秒后将自动模拟 IMU 摔倒事件"
 fi
+if [ "$V2X_DELAY" -gt 0 ] 2>/dev/null; then
+    ARGS="${ARGS} -V ${V2X_DELAY} -x ${V2X_DIRECTION}"
+    log "测试模式: ${V2X_DELAY} 秒后将自动模拟 V2X 告警 (direction=${V2X_DIRECTION})"
+fi
 if [ -n "$TTC_THRESHOLD" ]; then
     ARGS="${ARGS} -T ${TTC_THRESHOLD}"
     log "雷达 TTC 阈值: ${TTC_THRESHOLD} s"
@@ -213,17 +224,20 @@ log "完整日志: ${LOG_FILE}"
 log "终端只显示关键事件，完整日志请查看上方文件"
 
 # 关键日志过滤规则
-KEY_PATTERN='ROAD USER DETECTED|NPU CONFIRMED|ALERT:|FALL DETECTED|Save triggered|Recording started|Post-trigger|Child: Saved|Encoder finished|TARGET ON|TARGET GONE|Playing .* alert|V2X_ALERT|RPMsg ready|DVR] TF card|DVR] ffmpeg'
+# 源日志已经按类型打上 [目标]/[告警]/[保存]/[系统] 前缀，这里直接按前缀过滤
+KEY_PATTERN='^\[(目标|告警|保存|系统)\]'
 
 # 后台实时过滤并打印关键日志（从当前日志末尾开始，不打印历史）
 # 使用子shell，这样 READER_PID 就是进程组 leader，cleanup 可以一次性 kill 整个管道
 (
     tail -n 0 -f "$LOG_FILE" 2>/dev/null | stdbuf -oL grep --line-buffered -E "$KEY_PATTERN" | \
     stdbuf -oL awk '
-    BEGIN { yellow="\033[1;33m"; cyan="\033[1;36m"; reset="\033[0m" }
-    /FALL DETECTED|ALERT:/ { print yellow "[关键] " $0 reset; next }
-    /Child: Saved/         { print cyan "[保存] " $0 reset; next }
-                            { print "[关键] " $0 }
+    BEGIN { yellow="\033[1;33m"; red="\033[1;31m"; cyan="\033[1;36m"; gray="\033[0;90m"; reset="\033[0m" }
+    /^\[目标\]/ { print $0; next }
+    /^\[告警\]/ { print yellow $0 reset; next }
+    /^\[保存\]/ { print cyan $0 reset; next }
+    /^\[系统\]/ { print gray $0 reset; next }
+                 { print $0 }
     '
 ) &
 READER_PID=$!
