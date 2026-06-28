@@ -74,7 +74,11 @@
 /* Audio alert files */
 #define AUDIO_FALL             "/xxl/camera_detect/sounds/fall_alert.wav"
 #define AUDIO_COLLISION        "/xxl/camera_detect/sounds/collision_alert.wav"
-#define AUDIO_V2X              "/xxl/camera_detect/sounds/v2x_alert.wav"
+#define AUDIO_V2X_NEARBY       "/xxl/camera_detect/sounds/v2x_nearby.wav"
+#define AUDIO_V2X_LEFT_FRONT   "/xxl/camera_detect/sounds/v2x_left_front.wav"
+#define AUDIO_V2X_RIGHT_FRONT  "/xxl/camera_detect/sounds/v2x_right_front.wav"
+#define AUDIO_V2X_LEFT         "/xxl/camera_detect/sounds/v2x_left.wav"
+#define AUDIO_V2X_RIGHT        "/xxl/camera_detect/sounds/v2x_right.wav"
 
 /* ======================== 雷达协议结构体 ======================== */
 #pragma pack(push, 1)
@@ -97,7 +101,10 @@ static volatile int g_running    = 1;
 static volatile int g_led_alert  = 0;
 static volatile int g_radar_npu_alert = 0;   /* 雷达+NPU 确认告警 */
 static volatile int g_imu_fall_alert  = 0;   /* IMU 摔倒告警 */
+static volatile int g_v2x_alert       = 0;   /* V2X 告警 */
 static volatile uint64_t g_imu_fall_time_us = 0;
+static volatile uint64_t g_last_v2x_audio_us = 0;
+#define V2X_AUDIO_COOLDOWN_US 2000000ULL     /* V2X 语音 2 秒防连播 */
 static int g_led_fd              = -1;
 static int g_camera_ok_global    = 0;        /* 供 RPMsg 线程使用 */
 static struct timeval g_t_start;             /* 程序启动时间 (全局) */
@@ -702,7 +709,6 @@ static void play_alert_sound(const char *type) {
     const char *file = NULL;
     if (strcmp(type, "fall") == 0)       file = AUDIO_FALL;
     else if (strcmp(type, "collision") == 0) file = AUDIO_COLLISION;
-    else if (strcmp(type, "v2x") == 0)   file = AUDIO_V2X;
     else                                 return;
 
     if (access(file, F_OK) != 0) {
@@ -716,6 +722,39 @@ static void play_alert_sound(const char *type) {
         fprintf(stderr, "[AUDIO] Failed to play %s\n", file);
     } else {
         printf("[AUDIO] Playing %s alert\n", type);
+    }
+}
+
+static void play_v2x_alert(const char *direction) {
+    const char *file = NULL;
+    if (strcmp(direction, "nearby") == 0)       file = AUDIO_V2X_NEARBY;
+    else if (strcmp(direction, "left_front") == 0)  file = AUDIO_V2X_LEFT_FRONT;
+    else if (strcmp(direction, "right_front") == 0) file = AUDIO_V2X_RIGHT_FRONT;
+    else if (strcmp(direction, "left") == 0)      file = AUDIO_V2X_LEFT;
+    else if (strcmp(direction, "right") == 0)     file = AUDIO_V2X_RIGHT;
+    else                                          file = AUDIO_V2X_NEARBY;
+
+    if (access(file, F_OK) != 0) {
+        printf("[AUDIO] V2X sound file not found: %s\n", file);
+        return;
+    }
+
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    uint64_t now_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
+                      (uint64_t)tv_now.tv_usec;
+    if (g_last_v2x_audio_us != 0 && (now_us - g_last_v2x_audio_us) < V2X_AUDIO_COOLDOWN_US) {
+        printf("[V2X] Audio cooldown, skip playing (%s)\n", direction);
+        return;
+    }
+    g_last_v2x_audio_us = now_us;
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "aplay -q %s >/dev/null 2>&1 &", file);
+    if (system(cmd) == -1) {
+        fprintf(stderr, "[AUDIO] Failed to play v2x %s alert\n", direction);
+    } else {
+        printf("[关键] [AUDIO] Playing V2X alert: %s\n", direction);
     }
 }
 
@@ -822,9 +861,24 @@ static void *rpmsg_thread(void *arg) {
                                              (uint64_t)tv_now.tv_usec;
                             handle_fall_trigger(ts_us);
                         }
-                        /* 其他 IMU/V2X 告警可在此扩展 */
+                        /* V2X 告警: 解析 direction 并播放定向语音 */
                         else if (strstr(line, "V2X_ALERT") != NULL) {
-                            printf("[V2X] %s\n", line);
+                            printf("[关键] [V2X] %s\n", line);
+                            g_v2x_alert = 1;
+                            g_led_alert = 1;
+
+                            char direction[32] = "nearby";
+                            const char *dir_start = strstr(line, "direction=");
+                            if (dir_start != NULL) {
+                                dir_start += strlen("direction=");
+                                const char *dir_end = strchr(dir_start, ' ');
+                                int len = (dir_end != NULL) ? (int)(dir_end - dir_start) : (int)strlen(dir_start);
+                                if (len > 0 && len < (int)sizeof(direction)) {
+                                    memcpy(direction, dir_start, len);
+                                    direction[len] = '\0';
+                                }
+                            }
+                            play_v2x_alert(direction);
                         }
 
                         idx = 0;
@@ -1007,6 +1061,7 @@ int main(int argc, char *argv[]) {
                 /* 重置告警状态，准备下一轮触发 */
                 g_radar_npu_alert = 0;
                 g_imu_fall_alert = 0;
+                g_v2x_alert = 0;
                 g_imu_fall_time_us = 0;
                 npu_confirm_cnt = 0;
                 npu_deny_cnt = 0;
@@ -1243,8 +1298,8 @@ int main(int argc, char *argv[]) {
             if (rx_len >= (int)sizeof(rx_buf)) rx_len = 0;
         }
 
-        /* 统一 LED 控制: 雷达+NPU 告警 或 IMU 摔倒告警 */
-        g_led_alert = g_radar_npu_alert || g_imu_fall_alert;
+        /* 统一 LED 控制: 雷达+NPU 告警 / IMU 摔倒告警 / V2X 告警 */
+        g_led_alert = g_radar_npu_alert || g_imu_fall_alert || g_v2x_alert;
     }
 
     printf("\n[FUSION] Stopping...\n");

@@ -1,0 +1,24 @@
+# Large vendor SDKs (kept locally, not in git)
+myir-st-linux/
+v2x/STM32Cube_ATK_FW_MP2_V1.0.0/
+v2x/E04-2G4M10S1AX/
+
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.map
+camera_detect/radar_fusion
+camera_detect/camera_detect
+camera_detect/fusion_detect
+
+# Runtime outputs
+/run/media/mmcblk0p1/dvr/*.mp4
+/run/media/mmcblk0p1/dvr/.buffer/
+*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
