@@ -14,12 +14,14 @@ FW_SCRIPT="${FW_DIR}/fw_cortex_m33.sh"
 RADAR_FUSION="${CAMERA_DIR}/radar_fusion"
 RPMSG_DEV="/dev/ttyRPMSG0"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
+BT_UART="/dev/ttySTM0"        # 蓝牙串口透传设备
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
 V2X_DELAY=0                   # 默认不模拟 V2X；由 -V 参数覆盖
 V2X_DIRECTION="left_front"    # 默认 V2X 方向
 RADAR_PID=0
 READER_PID=0                  # 过滤进程组的 leader PID
+BT_FORWARD_PID=0              # 蓝牙日志转发进程 PID
 
 # -------------------------- 用法 --------------------------
 usage() {
@@ -110,10 +112,18 @@ cleanup() {
         READER_PID=0
     fi
 
-    # 3. 确保没有遗留子进程占用摄像头/雷达
+    # 3. 停止蓝牙日志转发
+    if [ "$BT_FORWARD_PID" -gt 0 ] 2>/dev/null; then
+        log "停止蓝牙日志转发 (pid=${BT_FORWARD_PID})..."
+        kill -TERM "$BT_FORWARD_PID" 2>/dev/null || true
+        wait_or_kill "$BT_FORWARD_PID" "蓝牙日志转发" 2
+        BT_FORWARD_PID=0
+    fi
+
+    # 4. 确保没有遗留子进程占用摄像头/雷达
     pkill -9 -f "radar_fusion" 2>/dev/null || true
 
-    # 4. 停止 M33 固件（最多等 10 秒）
+    # 5. 停止 M33 固件（最多等 10 秒）
     log "停止 M33 固件..."
     (
         cd "$FW_DIR" || exit 1
@@ -242,6 +252,19 @@ KEY_PATTERN='^\[(目标|告警|保存|系统)\]'
 ) &
 READER_PID=$!
 
+# 同时把关键日志转发到蓝牙串口，手机 APP 可实时查看
+if [ -e "$BT_UART" ]; then
+    (
+        tail -n 0 -f "$LOG_FILE" 2>/dev/null | \
+        stdbuf -oL grep --line-buffered -E "$KEY_PATTERN" | \
+        stdbuf -oL awk '{ print "[DVR] " $0 }'
+    ) > "$BT_UART" 2>/dev/null &
+    BT_FORWARD_PID=$!
+    log "蓝牙日志转发已启动，pid=${BT_FORWARD_PID}"
+else
+    log "警告: 蓝牙串口 ${BT_UART} 不存在，无法转发日志到手机"
+fi
+
 export LD_LIBRARY_PATH="/usr/lib:/vendor/lib:${CAMERA_DIR}/stai_mpu"
 "$RADAR_FUSION" $ARGS >> "$LOG_FILE" 2>&1 &
 RADAR_PID=$!
@@ -251,13 +274,20 @@ log "radar_fusion 已启动，pid=${RADAR_PID}，过滤进程 pid=${READER_PID}"
 wait "$RADAR_PID"
 RADAR_PID=0
 
-# 正常退出：关闭过滤进程组
+# 正常退出：关闭过滤进程组和蓝牙日志转发
 if [ "$READER_PID" -gt 0 ] 2>/dev/null; then
     log "关闭日志过滤进程组..."
     kill -TERM -"$READER_PID" 2>/dev/null || true
     wait "$READER_PID" 2>/dev/null || true
 fi
 READER_PID=0
+
+if [ "$BT_FORWARD_PID" -gt 0 ] 2>/dev/null; then
+    log "关闭蓝牙日志转发..."
+    kill -TERM "$BT_FORWARD_PID" 2>/dev/null || true
+    wait "$BT_FORWARD_PID" 2>/dev/null || true
+fi
+BT_FORWARD_PID=0
 
 log "radar_fusion 已退出，执行清理..."
 (
