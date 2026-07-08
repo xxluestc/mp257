@@ -69,11 +69,16 @@ usb_camera_t *usb_camera_open(const char *device, int width, int height, int fps
         fmt.fmt.pix.field       = V4L2_FIELD_NONE;
 
         if (ioctl(ctx->fd, VIDIOC_S_FMT, &fmt) == 0) {
-            ctx->pixelformat = try_fmts[i];
+            ctx->pixelformat = fmt.fmt.pix.pixelformat;
             ctx->bpp         = try_bpp[i];
             strncpy(ctx->fmt_name, try_names[i], sizeof(ctx->fmt_name) - 1);
-            printf("[USB_CAM] Format: %dx%d %s\n",
-                   fmt.fmt.pix.width, fmt.fmt.pix.height, try_names[i]);
+
+            uint32_t fourcc = fmt.fmt.pix.pixelformat;
+            printf("[USB_CAM] Format set: %dx%d %s fourcc=%c%c%c%c bytesperline=%u sizeimage=%u\n",
+                   fmt.fmt.pix.width, fmt.fmt.pix.height, try_names[i],
+                   (fourcc >> 0) & 0xFF, (fourcc >> 8) & 0xFF,
+                   (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF,
+                   fmt.fmt.pix.bytesperline, fmt.fmt.pix.sizeimage);
             ok = 1;
             break;
         }

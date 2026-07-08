@@ -117,7 +117,10 @@ static void *write_thread_func(void *arg)
             break;
         }
 
-        /* 取出一个pending帧 */
+        /* 取出一个 pending 帧: 在锁内把数据复制到写线程私有 buffer，
+         * 绝对不能把 pending slot 的 data 指针拿到锁外使用，
+         * 否则该 slot 可能被 ring_buffer_push 复用，导致文件数据被覆盖。
+         */
         local.size         = rb->pending[rb->pending_head].size;
         local.timestamp_us = rb->pending[rb->pending_head].timestamp_us;
         memcpy(local.data, rb->pending[rb->pending_head].data, (size_t)local.size);
@@ -152,7 +155,7 @@ static void *write_thread_func(void *arg)
             int idx = rb->head;
             rb->index[idx].timestamp_us = local.timestamp_us;
             rb->index[idx].file_offset  = rb->write_pos;
-            rb->index[idx].frame_size   = local.size;
+            rb->index[idx].size         = local.size;
 
             rb->write_pos += entry_size;
             rb->head = (rb->head + 1) % rb->capacity;
@@ -186,6 +189,9 @@ int ring_buffer_push(ring_buffer_t *rb, const uint8_t *data, int size, int64_t t
 
     int slot = (rb->pending_head + rb->pending_count) % PENDING_QUEUE_SIZE;
     int copy_size = size < rb->pending[slot].capacity ? size : rb->pending[slot].capacity;
+
+    /* 写 pending slot 前先清零，避免旧数据残留 */
+    memset(rb->pending[slot].data, 0, (size_t)rb->pending[slot].capacity);
     memcpy(rb->pending[slot].data, data, (size_t)copy_size);
     rb->pending[slot].size         = copy_size;
     rb->pending[slot].timestamp_us = timestamp_us;
@@ -254,7 +260,7 @@ int ring_buffer_get_frame_size(const ring_buffer_t *rb, int idx)
 {
     if (!rb || idx < 0 || idx >= rb->count) return -1;
     int pos = (rb->tail + idx) % rb->capacity;
-    return rb->index[pos].frame_size;
+    return rb->index[pos].size;
 }
 
 int64_t ring_buffer_get_frame_timestamp(const ring_buffer_t *rb, int idx)

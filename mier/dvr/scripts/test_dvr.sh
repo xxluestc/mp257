@@ -79,8 +79,8 @@ if [ "$MODE" = "auto" ]; then
         --target-delay "$TARGET_DELAY" \
         --collision-delay "$COLLISION_DELAY" \
         --auto-event collision \
-        -d /dev/video6 -s "$OUTPUT_DIR" \
-        -W 1280 -H 720 -f 15 \
+        -d /dev/video7 -s "$OUTPUT_DIR" \
+        -W 1280 -H 720 -f 25 \
         > "$OUTPUT_DIR/dvr.log" 2>&1
 
     DVR_EXIT_CODE=$?
@@ -90,7 +90,7 @@ else
     # 手动模式: 使用命名管道触发
     echo "      Mode: MANUAL (pipe trigger)"
 
-    "$DIR/dvr" -d /dev/video6 -s "$OUTPUT_DIR" -W 1280 -H 720 -f 15 \
+    "$DIR/dvr" -d /dev/video7 -s "$OUTPUT_DIR" -W 1280 -H 720 -f 25 \
         > "$OUTPUT_DIR/dvr.log" 2>&1 &
     DVR_PID=$!
     sleep 3
@@ -162,8 +162,8 @@ grep -iE "error|fail" "$OUTPUT_DIR/dvr.log" 2>/dev/null | head -10 || echo "(no 
 
 echo ""
 echo "--- ffmpeg log ---"
-if [ -f /tmp/ffmpeg_stderr.log ]; then
-    head -20 /tmp/ffmpeg_stderr.log
+if [ -f /tmp/dvr_ffmpeg.log ]; then
+    head -20 /tmp/dvr_ffmpeg.log
 else
     echo "(no ffmpeg log)"
 fi

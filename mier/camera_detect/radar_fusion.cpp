@@ -80,6 +80,7 @@
 #define AUDIO_V2X_RIGHT_FRONT  "/xxl/camera_detect/sounds/v2x_right_front.wav"
 #define AUDIO_V2X_LEFT         "/xxl/camera_detect/sounds/v2x_left.wav"
 #define AUDIO_V2X_RIGHT        "/xxl/camera_detect/sounds/v2x_right.wav"
+#define AUDIO_RECORDING_COMPLETE "/xxl/audio/assets/cmd/recording_complete.wav"
 
 /* ======================== 雷达协议结构体 ======================== */
 #pragma pack(push, 1)
@@ -384,10 +385,11 @@ static uint64_t dvr_trigger_time_us = 0;
 static int dvr_frame_count = 0;
 static dvr_frame_entry_t dvr_frames[DVR_MAX_FRAMES];
 static FILE *dvr_raw_file = NULL;
-static char dvr_raw_path[512];
-static char dvr_buffer_dir[512];
+static char dvr_raw_path[2048];
+static char dvr_buffer_dir[1024];
 static int dvr_tf_ok = 0;
 static int dvr_has_ffmpeg = 0;
+static int dvr_camera_pixelformat = 0;
 
 /* 生成输出文件名 */
 static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
@@ -432,6 +434,40 @@ static int dvr_start(void) {
 static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_t timestamp_us) {
     if (!dvr_recording || dvr_encoding || !dvr_raw_file) return;
 
+    /* 只支持 MJPEG 格式; 其他格式需要转码, 这里跳过避免写入错误数据 */
+    if (dvr_camera_pixelformat != V4L2_PIX_FMT_MJPEG) {
+        static int warned = 0;
+        if (!warned) {
+            printf("[调试] [DVR] Camera format is not MJPEG, skipping DVR frames\n");
+            warned = 1;
+        }
+        return;
+    }
+
+    /* 校验 JPEG 边界: 必须以 SOI (FFD8) 开始, EOI (FFD9) 结束
+     * 部分摄像头会在 EOI 后补 0x00, 所以搜索最后 16 字节内的 FFD9 */
+    int has_eoi = 0;
+    if (jpeg_size >= 4 && jpeg_data[0] == 0xFF && jpeg_data[1] == 0xD8) {
+        int scan_start = (jpeg_size > 16) ? (jpeg_size - 16) : 0;
+        for (int i = jpeg_size - 2; i >= scan_start; i--) {
+            if (jpeg_data[i] == 0xFF && jpeg_data[i + 1] == 0xD9) {
+                has_eoi = 1;
+                break;
+            }
+        }
+    }
+    if (!has_eoi) {
+        static int warned = 0;
+        if (!warned) {
+            printf("[调试] [DVR] Invalid JPEG frame skipped (size=%u, head=%02X%02X tail=%02X%02X)\n",
+                   jpeg_size,
+                   jpeg_size > 0 ? jpeg_data[0] : 0, jpeg_size > 1 ? jpeg_data[1] : 0,
+                   jpeg_size > 2 ? jpeg_data[jpeg_size - 2] : 0, jpeg_size > 1 ? jpeg_data[jpeg_size - 1] : 0);
+            warned = 1;
+        }
+        return;
+    }
+
     /* 记录帧信息 */
     if (dvr_frame_count < DVR_MAX_FRAMES) {
         dvr_frames[dvr_frame_count].timestamp_us = timestamp_us;
@@ -452,7 +488,13 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
     fwrite(&frame_size, 4, 1, dvr_raw_file);
     fwrite(&timestamp_us, 8, 1, dvr_raw_file);
     fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file);
-    fflush(dvr_raw_file);
+
+    /* 每 25 帧 flush 一次，避免每帧都 sync 磁盘 */
+    static int dvr_flush_cnt = 0;
+    if (++dvr_flush_cnt >= DVR_CAPTURE_FPS) {
+        fflush(dvr_raw_file);
+        dvr_flush_cnt = 0;
+    }
 
     dvr_frame_count++;
 }
@@ -482,6 +524,44 @@ static void dvr_stop(void) {
         printf("[调试] [DVR] No trigger event, cleaning up buffer\n");
         unlink(dvr_raw_path);
         rmdir(dvr_buffer_dir);
+    }
+}
+
+/* 在子进程内运行一个编码器命令, 等待结束并返回退出码。
+ * 输出重定向到 log_path。
+ */
+static int run_encoder_in_child(const char *name, char *const argv[], const char *log_path) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int log_fd = open(log_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            close(log_fd);
+        }
+        execvp(name, argv);
+        _exit(127); /* 命令不存在 */
+    }
+    int status;
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
+/* 录制完成提示音 */
+static void play_recording_complete_sound(void) {
+    const char *file = AUDIO_RECORDING_COMPLETE;
+    if (access(file, F_OK) != 0) {
+        printf("[AUDIO] Recording complete sound not found: %s\n", file);
+        return;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "aplay -q %s >/dev/null 2>&1 &", file);
+    if (system(cmd) == -1) {
+        fprintf(stderr, "[AUDIO] Failed to play recording complete sound\n");
+    } else {
+        printf("[保存] [AUDIO] Playing recording complete notification\n");
     }
 }
 
@@ -543,7 +623,7 @@ static int dvr_encode_mp4(void) {
     printf("[保存] [DVR] FPS: %.1f, Frames: %d\n", fps, total);
 
     /* 生成输出文件名 */
-    char output_path[512];
+    char output_path[1024];
     dvr_make_filename(output_path, sizeof(output_path), "emergency");
 
     /* 复制必要数据到堆上 (fork 后子进程使用) */
@@ -566,11 +646,11 @@ static int dvr_encode_mp4(void) {
          */
         signal(SIGTERM, SIG_IGN);
         setsid();
-        char work_dir[512];
+        char work_dir[1024];
         snprintf(work_dir, sizeof(work_dir), "%s/.encode", heap_buffer_dir);
         mkdir(work_dir, 0777);
 
-        char list_path[512];
+        char list_path[1024];
         snprintf(list_path, sizeof(list_path), "%s/filelist.txt", heap_buffer_dir);
 
         FILE *raw = fopen(heap_raw_path, "rb");
@@ -585,7 +665,7 @@ static int dvr_encode_mp4(void) {
 
         int frame_idx = 0;
         for (int i = heap_start_idx; i <= heap_start_idx + heap_total - 1; i++) {
-            char jpg_path[512];
+            char jpg_path[1024];
             snprintf(jpg_path, sizeof(jpg_path), "%s/frame_%06d.jpg", work_dir, frame_idx);
 
             fseeko(raw, dvr_frames[i].file_offset, SEEK_SET);
@@ -625,81 +705,107 @@ static int dvr_encode_mp4(void) {
         char gst_fps_str[32];
         snprintf(gst_fps_str, sizeof(gst_fps_str), "%d/1", gst_fps_i);
 
-        char ffmpeg_log[512];
-        snprintf(ffmpeg_log, sizeof(ffmpeg_log), "%s/ffmpeg.log", heap_buffer_dir);
+        char ffmpeg_log[1024];
+        snprintf(ffmpeg_log, sizeof(ffmpeg_log), "%s/dvr_ffmpeg.log", heap_buffer_dir);
 
-        char gst_location_arg[512];
-        char gst_caps_arg[512];
-        char gst_sink_arg[512];
+        char gst_location_arg[1024];
+        char gst_caps_arg[1024];
+        char gst_sink_arg[1024];
         snprintf(gst_location_arg, sizeof(gst_location_arg), "location=%s/frame_%%06d.jpg", work_dir);
         snprintf(gst_caps_arg, sizeof(gst_caps_arg), "caps=image/jpeg,framerate=%s", gst_fps_str);
         snprintf(gst_sink_arg, sizeof(gst_sink_arg), "location=%s", heap_output_path);
 
-        /* 先尝试 GStreamer 硬件 H.264, 再 ffmpeg mpeg4, 再 avconv */
-        pid_t ff_pid = fork();
-        if (ff_pid == 0) {
-            /* 孙进程: 重定向 stdout/stderr 到日志文件 */
-            int log_fd = open(ffmpeg_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (log_fd >= 0) {
-                dup2(log_fd, STDOUT_FILENO);
-                dup2(log_fd, STDERR_FILENO);
-                close(log_fd);
-            }
-            /* 1) GStreamer: JPEG 序列 -> v4l2slh264enc -> MP4 (H.264，兼容性最好) */
-            execlp("gst-launch-1.0", "gst-launch-1.0", "-e",
-                   "multifilesrc", gst_location_arg, "start-index=0", gst_caps_arg,
-                   "!", "jpegdec", "!", "videoconvert", "!", "video/x-raw,format=NV12",
-                   "!", "v4l2slh264enc", "bitrate=4000000", "!", "h264parse", "!", "qtmux",
-                   "!", "filesink", gst_sink_arg,
-                   NULL);
-            /* 2) gst-launch 失败，回退到 ffmpeg mpeg4 */
-            execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "warning",
-                   "-f", "concat", "-safe", "0",
-                   "-i", list_path,
-                   "-r", fps_str,
-                   "-c:v", "mpeg4", "-q:v", "5",
-                   "-pix_fmt", "yuv420p",
-                   "-y", heap_output_path,
-                   NULL);
-            /* 3) ffmpeg 不可用, 尝试 avconv */
-            execlp("avconv", "avconv", "-hide_banner", "-loglevel", "warning",
-                   "-f", "concat", "-safe", "0",
-                   "-i", list_path,
-                   "-r", fps_str,
-                   "-c:v", "mpeg4", "-q:v", "5",
-                   "-pix_fmt", "yuv420p",
-                   "-y", heap_output_path,
-                   NULL);
-            exit(1);
-        } else if (ff_pid > 0) {
-            int ff_status;
-            waitpid(ff_pid, &ff_status, 0);
-            if (WIFEXITED(ff_status) && WEXITSTATUS(ff_status) == 0) {
-                printf("[保存] [DVR] Child: Saved %s\n", heap_output_path);
-                /* 成功后清理临时文件 */
-                unlink(list_path);
-                DIR *d = opendir(work_dir);
-                if (d) {
-                    struct dirent *ent;
-                    char path[512];
-                    while ((ent = readdir(d)) != NULL) {
-                        if (ent->d_name[0] == '.') continue;
-                        snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
-                        unlink(path);
-                    }
-                    closedir(d);
-                }
-                rmdir(work_dir);
-                unlink(ffmpeg_log);
+        int encoder_ok = 0;
+
+        /* 1) GStreamer: JPEG 序列 -> v4l2slh264enc -> MP4 (H.264，兼容性最好) */
+        {
+            char *argv[] = {
+                (char *)"gst-launch-1.0",
+                (char *)"-e",
+                (char *)"multifilesrc", gst_location_arg, (char *)"start-index=0", gst_caps_arg,
+                (char *)"!", (char *)"jpegdec",
+                (char *)"!", (char *)"videoconvert",
+                (char *)"!", (char *)"video/x-raw,format=NV12",
+                (char *)"!", (char *)"v4l2slh264enc", (char *)"bitrate=4000000",
+                (char *)"!", (char *)"h264parse",
+                (char *)"!", (char *)"qtmux",
+                (char *)"!", (char *)"filesink", gst_sink_arg,
+                NULL
+            };
+            int rc = run_encoder_in_child("gst-launch-1.0", argv, ffmpeg_log);
+            struct stat st;
+            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
+                printf("[保存] [DVR] Child: Saved %s (gst-launch H.264)\n", heap_output_path);
+                encoder_ok = 1;
             } else {
-                printf("[保存] [DVR] Child: ffmpeg/avconv failed (exit=%d), see %s\n",
-                       WEXITSTATUS(ff_status), ffmpeg_log);
-                /* 保留 jpg 文件作为备份 */
+                printf("[保存] [DVR] Child: gst-launch failed (rc=%d), trying ffmpeg, log=%s\n", rc, ffmpeg_log);
             }
-        } else {
-            /* fork 失败也清理 */
+        }
+
+        /* 2) gst-launch 失败/输出为空, 回退到 ffmpeg mpeg4 */
+        if (!encoder_ok) {
+            char *argv[] = {
+                (char *)"ffmpeg",
+                (char *)"-hide_banner", (char *)"-loglevel", (char *)"warning",
+                (char *)"-framerate", fps_str,
+                (char *)"-i", list_path,
+                (char *)"-c:v", (char *)"mpeg4", (char *)"-q:v", (char *)"5",
+                (char *)"-pix_fmt", (char *)"yuv420p",
+                (char *)"-y", heap_output_path,
+                NULL
+            };
+            int rc = run_encoder_in_child("ffmpeg", argv, ffmpeg_log);
+            struct stat st;
+            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
+                printf("[保存] [DVR] Child: Saved %s (ffmpeg mpeg4)\n", heap_output_path);
+                encoder_ok = 1;
+            } else {
+                printf("[保存] [DVR] Child: ffmpeg failed (rc=%d), trying avconv, log=%s\n", rc, ffmpeg_log);
+            }
+        }
+
+        /* 3) ffmpeg 不可用/失败, 尝试 avconv */
+        if (!encoder_ok) {
+            char *argv[] = {
+                (char *)"avconv",
+                (char *)"-hide_banner", (char *)"-loglevel", (char *)"warning",
+                (char *)"-framerate", fps_str,
+                (char *)"-i", list_path,
+                (char *)"-c:v", (char *)"mpeg4", (char *)"-q:v", (char *)"5",
+                (char *)"-pix_fmt", (char *)"yuv420p",
+                (char *)"-y", heap_output_path,
+                NULL
+            };
+            int rc = run_encoder_in_child("avconv", argv, ffmpeg_log);
+            struct stat st;
+            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
+                printf("[保存] [DVR] Child: Saved %s (avconv mpeg4)\n", heap_output_path);
+                encoder_ok = 1;
+            } else {
+                printf("[保存] [DVR] Child: avconv failed (rc=%d), log=%s\n", rc, ffmpeg_log);
+            }
+        }
+
+        if (encoder_ok) {
+            /* 成功后清理临时文件 */
             unlink(list_path);
+            DIR *d = opendir(work_dir);
+            if (d) {
+                struct dirent *ent;
+                char path[1024];
+                while ((ent = readdir(d)) != NULL) {
+                    if (ent->d_name[0] == '.') continue;
+                    snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
+                    unlink(path);
+                }
+                closedir(d);
+            }
             rmdir(work_dir);
+            unlink(ffmpeg_log);
+            play_recording_complete_sound();
+        } else {
+            printf("[保存] [DVR] Child: All encoders failed, see %s\n", ffmpeg_log);
+            /* 保留 jpg 文件作为备份 */
         }
 
         /* 清理原始缓冲 */
@@ -1047,6 +1153,7 @@ int main(int argc, char *argv[]) {
     int nn_w = 0, nn_h = 0;
 
     if (camera_open(&cam, camera_dev, 1280, 720) == 0) {
+        dvr_camera_pixelformat = cam.pixelformat;
         if (camera_start(&cam) == 0) {
             detector = new NpuDetector(model_path, labels_path, confidence, 0.45f);
             nn_w = detector->get_input_width();
@@ -1188,9 +1295,11 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
-                /* NPU: 每 5 帧推理一次 (始终运行) */
+                /* NPU: 每 10 帧推理一次, 优先保证录像流畅 */
                 npu_frame_count++;
-                if (npu_frame_count % 5 == 0) {
+                if (npu_frame_count % 10 == 0) {
+                    struct timeval tv_npu_start, tv_npu_end;
+                    gettimeofday(&tv_npu_start, NULL);
                     int dec_w, dec_h;
                     if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len, rgb_full, &dec_w, &dec_h) == 0) {
                         resize_rgb(rgb_full, dec_w, dec_h, rgb_nn, nn_w, nn_h);
@@ -1271,6 +1380,10 @@ int main(int argc, char *argv[]) {
                         /* 注意: DVR 保存触发和 LED 控制在雷达段处理,
                            确保只有 radar.should_alert + NPU 确认才触发 */
                     }
+                    gettimeofday(&tv_npu_end, NULL);
+                    long npu_us = (tv_npu_end.tv_sec - tv_npu_start.tv_sec) * 1000000L +
+                                  (tv_npu_end.tv_usec - tv_npu_start.tv_usec);
+                    printf("[调试] [NPU] inference cycle took %ld ms\n", npu_us / 1000);
                 }
             }
         }

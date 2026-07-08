@@ -17,6 +17,12 @@ camera_detect/fusion_detect
 /run/media/mmcblk0p1/dvr/.buffer/
 *.log
 
+# Local test captures / screenshots
+camera_detect/frame_*.png
+camera_detect/test_*.mp4
+dvr/frame_test.png
+dvr/test_output.mp4
+
 # Editor / IDE
 .vscode/
 .idea/

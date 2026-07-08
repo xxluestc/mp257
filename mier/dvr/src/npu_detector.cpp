@@ -113,7 +113,7 @@ bool NpuDetector::ReadLabelsFile(const std::string &file_name)
     while (mLabels.size() % 16) {
         mLabels.emplace_back("");
     }
-    std::cout << "[NPU] Loaded " << line.empty() ? 0 : mLabels.size()
+    std::cout << "[NPU] Loaded " << (line.empty() ? 0 : mLabels.size())
               << " labels from " << file_name << std::endl;
     return true;
 }

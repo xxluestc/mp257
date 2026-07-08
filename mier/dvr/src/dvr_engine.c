@@ -95,7 +95,7 @@ static int clip_is_protected(clip_type_t t)
 typedef struct {
     off_t   offset;
     int64_t timestamp_us;
-    int     frame_size;
+    int     size;
 } frame_info_t;
 
 static int frame_cmp_by_ts(const void *a, const void *b)
@@ -125,7 +125,7 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
             rb->index[pos].timestamp_us <= end_us) {
             frames[frame_count].offset       = rb->index[pos].file_offset;
             frames[frame_count].timestamp_us = rb->index[pos].timestamp_us;
-            frames[frame_count].frame_size   = rb->index[pos].frame_size;
+            frames[frame_count].size         = rb->index[pos].size;
             frame_count++;
         }
     }
@@ -134,6 +134,9 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
     filepath[sizeof(filepath) - 1] = '\0';
     int max_frame_size = rb->max_pending_size;
     pthread_mutex_unlock(&rb->lock);
+
+    /* 原始格式期望每帧固定大小，用于跳过 partial frame */
+    int expected_frame_size = usb_camera_get_frame_size(eng->camera);
 
     if (frame_count == 0) {
         printf("[DVR] No frames in range [%ld, %ld]\n", (long)start_time, (long)end_time);
@@ -214,13 +217,7 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
 
             int sent = 0;
             for (int i = 0; i < frame_count; i++) {
-                uint8_t header[FRAME_HEADER_SIZE];
-                ssize_t hn = pread(fd, header, FRAME_HEADER_SIZE, frames[i].offset);
-                if (hn != FRAME_HEADER_SIZE) continue;
-
-                uint32_t stored_size;
-                memcpy(&stored_size, header, 4);
-                int data_size = (int)stored_size;
+                int data_size = frames[i].size;
                 if (data_size <= 0 || data_size > max_frame_size) continue;
 
                 ssize_t dn = pread(fd, buf, (size_t)data_size,
@@ -239,14 +236,14 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
             snprintf(cmd, sizeof(cmd),
                      "ffmpeg -y -f mjpeg -r %d -i %s "
                      "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -fps_mode cfr %s "
-                     "2>/tmp/ffmpeg_stderr.log",
+                     ">/tmp/dvr_ffmpeg.log 2>&1",
                      fps_for_ffmpeg, tmp_mjpg, filename);
 
             int ret = system(cmd);
             unlink(tmp_mjpg);
 
             if (ret != 0) {
-                fprintf(stderr, "[DVR] Child: ffmpeg failed with code %d\n", ret);
+                fprintf(stderr, "[DVR] Child: ffmpeg failed with code %d, see /tmp/dvr_ffmpeg.log\n", ret);
             } else {
                 printf("[DVR] Child: Saved %d frames: %s\n", sent, filename);
             }
@@ -256,16 +253,17 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
             close(fd);
             exit(ret != 0 ? 1 : 0);
         } else {
-            /* YUYV 等原始格式: 使用管道 */
-            char cmd[1024];
+            /* 原始格式: 使用管道 */
             const char *ff_pixfmt = "yuyv422";
-            if (eng->pix_fmt == V4L2_PIX_FMT_RGB565) ff_pixfmt = "rgb565";
-            else if (eng->pix_fmt == V4L2_PIX_FMT_RGB24) ff_pixfmt = "rgb24";
+            if (eng->pix_fmt == V4L2_PIX_FMT_RGB565)      ff_pixfmt = "rgb565le";
+            else if (eng->pix_fmt == V4L2_PIX_FMT_RGB24)  ff_pixfmt = "rgb24";
+            else if (eng->pix_fmt == V4L2_PIX_FMT_NV12)   ff_pixfmt = "nv12";
 
+            char cmd[1024];
             snprintf(cmd, sizeof(cmd),
                      "ffmpeg -y -f rawvideo -pix_fmt %s -s %dx%d -r %d -i pipe:0 "
                      "-c:v mpeg4 -q:v 5 -pix_fmt yuv420p -fps_mode cfr %s "
-                     "2>/tmp/ffmpeg_stderr.log",
+                     ">/tmp/dvr_ffmpeg.log 2>&1",
                      ff_pixfmt, eng->config.width, eng->config.height,
                      fps_for_ffmpeg, filename);
 
@@ -277,14 +275,15 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
 
             int sent = 0;
             for (int i = 0; i < frame_count; i++) {
-                uint8_t header[FRAME_HEADER_SIZE];
-                ssize_t hn = pread(fd, header, FRAME_HEADER_SIZE, frames[i].offset);
-                if (hn != FRAME_HEADER_SIZE) continue;
-
-                uint32_t stored_size;
-                memcpy(&stored_size, header, 4);
-                int data_size = (int)stored_size;
+                int data_size = frames[i].size;
                 if (data_size <= 0 || data_size > max_frame_size) continue;
+
+                /* 原始格式应为固定帧大小，若 size 不一致则跳过 partial frame */
+                if (data_size != expected_frame_size) {
+                    fprintf(stderr, "[DVR] Child: skip partial frame %d, size=%d, expected=%d\n",
+                            i, data_size, expected_frame_size);
+                    continue;
+                }
 
                 ssize_t dn = pread(fd, buf, (size_t)data_size,
                                    frames[i].offset + FRAME_HEADER_SIZE);
@@ -301,7 +300,7 @@ static int save_clip_to_mp4(dvr_engine_t *eng, time_t start_time, time_t end_tim
             int ret = pclose(ffmpeg_pipe);
 
             if (ret != 0) {
-                fprintf(stderr, "[DVR] Child: ffmpeg failed with code %d\n", ret);
+                fprintf(stderr, "[DVR] Child: ffmpeg failed with code %d, see /tmp/dvr_ffmpeg.log\n", ret);
             } else {
                 printf("[DVR] Child: Saved %d frames: %s\n", sent, filename);
             }
@@ -443,12 +442,12 @@ dvr_engine_t *dvr_engine_create(const dvr_config_t *config)
 
     eng->pix_fmt = usb_camera_get_pixelformat(eng->camera);
 
-    /* 2. 创建环形缓冲区 (可变帧大小, 最大帧大小预留) */
-    int max_frame = config->width * config->height * 2; /* RGB565 worst case */
-    if (eng->pix_fmt == V4L2_PIX_FMT_MJPEG) {
-        /* MJPEG 1280x720 单帧可达 ~1.8MB, 预留2MB避免截断 */
-        max_frame = eng->camera ? usb_camera_get_frame_size(eng->camera) : 2 * 1024 * 1024;
-        if (max_frame < 512 * 1024) max_frame = 512 * 1024;
+    /* 2. 创建环形缓冲区 (使用摄像头实际帧大小) */
+    int max_frame = eng->camera ? usb_camera_get_frame_size(eng->camera) : config->width * config->height * 2;
+    if (max_frame <= 0) max_frame = config->width * config->height * 2;
+    /* MJPEG 1280x720 单帧可达 ~1.8MB, 至少预留 2MB 避免截断 */
+    if (eng->pix_fmt == V4L2_PIX_FMT_MJPEG && max_frame < 2 * 1024 * 1024) {
+        max_frame = 2 * 1024 * 1024;
     }
     int capacity_frames = config->buffer_seconds * config->fps * 2; /* 真实帧率可能高于配置值 */
     eng->ring_buf = ring_buffer_create(capacity_frames,

@@ -2,6 +2,7 @@
 #define CAMERA_H
 
 #include <stdint.h>
+#include <linux/videodev2.h>
 
 #ifdef __cplusplus
 extern "C" {

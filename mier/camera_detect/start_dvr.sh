@@ -155,6 +155,17 @@ if [ ! -x "$RADAR_FUSION" ]; then
     exit 1
 fi
 
+# 确保 TF 卡已挂载; 若未挂载则尝试自动挂载
+if ! mountpoint -q /run/media/mmcblk0p1; then
+    log "TF 卡未挂载，尝试挂载 /dev/mmcblk0p1..."
+    mkdir -p /run/media/mmcblk0p1
+    if ! mount -t vfat /dev/mmcblk0p1 /run/media/mmcblk0p1 >> "$LOG_FILE" 2>&1; then
+        log "错误: TF 卡挂载失败，请检查是否插入 TF 卡"
+        exit 1
+    fi
+    log "TF 卡挂载成功"
+fi
+
 if [ ! -d "/run/media/mmcblk0p1/dvr" ]; then
     log "警告: DVR 目录 /run/media/mmcblk0p1/dvr 不存在，尝试创建..."
     mkdir -p /run/media/mmcblk0p1/dvr || {

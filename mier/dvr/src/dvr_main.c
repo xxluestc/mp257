@@ -3,11 +3,11 @@
  *
  * 使用方法:
  *   手动模式 (命名管道触发):
- *     ./dvr -d /dev/video6 -s /tmp -W 1280 -H 720 -f 25
+ *     ./dvr -d /dev/video7 -s /tmp -W 1280 -H 720 -f 25
  *     echo "TARGET_ON" > /tmp/dvr_trigger_pipe
  *
  *   NPU融合模式 (摄像头AI验证雷达目标):
- *     ./dvr -d /dev/video6 -s /run/media/mmcblk0p1/dvr \
+ *     ./dvr -d /dev/video7 -s /run/media/mmcblk0p1/dvr \
  *           --npu-model /usr/local/share/npu/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb \
  *           --npu-labels /usr/local/share/npu/labels_coco_dataset_80.txt
  *
@@ -41,7 +41,7 @@ static void print_usage(const char *prog)
 {
     printf("Usage: %s [options]\n", prog);
     printf("\nOptions:\n");
-    printf("  -d, --device       Camera device (default: /dev/video6)\n");
+    printf("  -d, --device       Camera device (default: /dev/video7)\n");
     printf("  -s, --storage      Storage path (default: /run/media/mmcblk0p1/dvr)\n");
     printf("  -W, --width        Frame width (default: 1280)\n");
     printf("  -H, --height       Frame height (default: 720)\n");
@@ -86,7 +86,7 @@ int main(int argc, char *argv[])
     config.auto_target_delay   = 3;
     config.auto_collision_delay = 25;
     config.auto_event          = AUTO_EVENT_COLLISION;
-    strcpy(config.camera_device, "/dev/video6");
+    strcpy(config.camera_device, "/dev/video7");
     strcpy(config.storage_path, "/run/media/mmcblk0p1/dvr");
     config.npu_model_path[0]   = '\0';
     config.npu_labels_path[0]  = '\0';

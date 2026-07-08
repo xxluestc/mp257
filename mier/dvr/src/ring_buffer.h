@@ -9,7 +9,7 @@
 typedef struct {
     int64_t timestamp_us;   /* 帧时间戳(微秒) */
     off_t   file_offset;    /* 在缓冲区文件中的字节偏移 */
-    int     frame_size;     /* 实际帧数据大小(字节) */
+    int     size;           /* 实际帧数据大小(字节) */
 } frame_index_t;
 
 /* 待写入帧 */

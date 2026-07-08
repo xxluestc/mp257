@@ -53,13 +53,31 @@ int camera_open(camera_t *cam, const char *device, int width, int height)
         }
     }
 
+    /* 设置帧率 25fps */
+    struct v4l2_streamparm parm;
+    memset(&parm, 0, sizeof(parm));
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    parm.parm.capture.timeperframe.numerator = 1;
+    parm.parm.capture.timeperframe.denominator = 25;
+    if (ioctl(cam->fd, VIDIOC_S_PARM, &parm) < 0) {
+        perror("VIDIOC_S_PARM");
+    }
+
     cam->width = fmt.fmt.pix.width;
     cam->height = fmt.fmt.pix.height;
     cam->pixelformat = fmt.fmt.pix.pixelformat;
     cam->buf_size = fmt.fmt.pix.sizeimage;
 
-    printf("Camera: %s, %dx%d, fmt=0x%x, buf_size=%u\n",
-           device, cam->width, cam->height, cam->pixelformat, cam->buf_size);
+    uint32_t fourcc = cam->pixelformat;
+    const char *fmt_name = (cam->pixelformat == V4L2_PIX_FMT_MJPEG) ? "MJPEG" :
+                           (cam->pixelformat == V4L2_PIX_FMT_YUYV) ? "YUYV" : "unknown";
+    printf("Camera: %s, %dx%d, fmt=%s fourcc=%c%c%c%c, bytesperline=%u, sizeimage=%u, fps=%u/%u\n",
+           device, cam->width, cam->height, fmt_name,
+           (fourcc >> 0) & 0xFF, (fourcc >> 8) & 0xFF,
+           (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF,
+           fmt.fmt.pix.bytesperline, cam->buf_size,
+           parm.parm.capture.timeperframe.denominator,
+           parm.parm.capture.timeperframe.numerator);
 
     /* request buffers */
     struct v4l2_requestbuffers req;
