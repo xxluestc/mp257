@@ -1,0 +1,13 @@
+[Unit]
+Description=DVR System
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/xxl/camera_detect/start_dvr.sh
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/xxl/camera_detect
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,259 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+#include <fcntl.h>
+#include <linux/input.h>
+
+#include "common.h"
+#include "udp.h"
+#include "oled.h"
+#include "cJSON.h"
+
+#define ALERT_BROADCAST_PORT 8889      // 手机 App 监听报警的 UDP 端口
+#define KEY_DEVICE "/dev/input/event0" // User 按键所在设备
+#define KEY_CODE 257                   // BTN_1
+
+static volatile int keep_running = 1;
+static volatile int key_thread_running = 1;
+
+// 函数声明
+void send_alert_sms(int sig);
+void *key_monitor_thread(void *arg);
+
+void sig_handler(int sig) {
+    if (sig == SIGINT || sig == SIGTERM) {
+        keep_running = 0;
+        key_thread_running = 0;
+    }
+}
+
+static const char *turn_to_text(int turn) {
+    switch (turn) {
+        case TURN_UNKNOWN: return "Unknown";
+        case TURN_SELF_CAR: return "Self";
+        case TURN_LEFT: return "Left";
+        case TURN_RIGHT: return "Right";
+        case TURN_SLIGHT_LEFT: return "SlightL";
+        case TURN_SLIGHT_RIGHT: return "SlightR";
+        case TURN_BACK_LEFT: return "BackL";
+        case TURN_BACK_RIGHT: return "BackR";
+        case TURN_UTURN_LEFT: return "U-turnL";
+        case TURN_STRAIGHT: return "Straight";
+        case TURN_VIA_POINT: return "Waypoint";
+        case TURN_ROUNDABOUT: return "Roundabout";
+        case TURN_EXIT_ROUNDABOUT: return "ExitRnd";
+        case TURN_SERVICE: return "Service";
+        case TURN_TOLL: return "Toll";
+        case TURN_DESTINATION: return "Dest";
+        case TURN_UTURN_RIGHT: return "U-turnR";
+        default: return "?";
+    }
+}
+
+int parse_navi_json(const char *json_str, NavData *nav) {
+    printf("[PARSE] raw json: %s\n", json_str);
+
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root) {
+        printf("[PARSE] cJSON_Parse failed\n");
+        return -1;
+    }
+
+    cJSON *type_obj = cJSON_GetObjectItem(root, "type");
+
+    if (cJSON_IsString(type_obj)) {
+        printf("[PARSE] type = %s\n", type_obj->valuestring);
+
+        if (strcmp(type_obj->valuestring, "alert") == 0) {
+            printf("[ALERT] Received alert trigger from phone (simulated fall)\n");
+            send_alert_sms(0);
+            cJSON_Delete(root);
+            return -2;
+        }
+
+        if (strcmp(type_obj->valuestring, "emergency") == 0) {
+            printf("[PARSE] Ignoring emergency contact data (no longer used)\n");
+            cJSON_Delete(root);
+            return -2;
+        }
+
+        if (strcmp(type_obj->valuestring, "navi") != 0) {
+            printf("[PARSE] unknown type: %s\n", type_obj->valuestring);
+            cJSON_Delete(root);
+            return -1;
+        }
+    } else {
+        printf("[PARSE] no type field, try old navi format\n");
+    }
+
+    cJSON *turn_obj = cJSON_GetObjectItem(root, "turn");
+    cJSON *dist_obj = cJSON_GetObjectItem(root, "distance");
+    cJSON *speed_obj = cJSON_GetObjectItem(root, "speed");
+
+    if (!cJSON_IsNumber(turn_obj) || !cJSON_IsNumber(dist_obj)) {
+        printf("[PARSE] missing turn or distance\n");
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    nav->turn = turn_obj->valueint;
+    nav->distance = dist_obj->valueint;
+
+    const char *text = turn_to_text(nav->turn);
+    strncpy(nav->direction_text, text, sizeof(nav->direction_text) - 1);
+    nav->direction_text[sizeof(nav->direction_text) - 1] = '\0';
+
+    printf("[PARSE] OK: turn=%d, distance=%d, text=%s", nav->turn, nav->distance, nav->direction_text);
+    if (cJSON_IsNumber(speed_obj)) printf(", speed=%d", speed_obj->valueint);
+    printf("\n");
+
+    cJSON_Delete(root);
+    return 0;
+}
+
+void broadcast_alert() {
+    int bc_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (bc_sock < 0) {
+        perror("[ALERT] socket failed");
+        return;
+    }
+    int on = 1;
+    setsockopt(bc_sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on));
+
+    struct sockaddr_in dest;
+    memset(&dest, 0, sizeof(dest));
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(ALERT_BROADCAST_PORT);
+    inet_aton("192.168.152.255", &dest.sin_addr);
+
+    char json_str[128];
+    snprintf(json_str, sizeof(json_str),
+             "{\"type\":\"alert\",\"reason\":\"fall\",\"timestamp\":%ld}",
+             time(NULL));
+
+    sendto(bc_sock, json_str, strlen(json_str), 0, (struct sockaddr*)&dest, sizeof(dest));
+    printf("[ALERT] Broadcast alert sent: %s\n", json_str);
+    close(bc_sock);
+}
+
+void *key_monitor_thread(void *arg) {
+    int fd = open(KEY_DEVICE, O_RDONLY);
+    if (fd < 0) {
+        perror("[KEY] open input device");
+        return NULL;
+    }
+
+    struct input_event ev;
+    while (key_thread_running) {
+        ssize_t n = read(fd, &ev, sizeof(ev));
+        if (n == sizeof(ev)) {
+            if (ev.type == EV_KEY && ev.value == 1 && ev.code == KEY_CODE) {
+                printf("[KEY] User button pressed, triggering alert\n");
+                send_alert_sms(0);
+            }
+        }
+    }
+    close(fd);
+    return NULL;
+}
+
+int main() {
+    FILE *pidf = fopen("/tmp/hud.pid", "w");
+    if (pidf) {
+        fprintf(pidf, "%d", getpid());
+        fclose(pidf);
+    }
+
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+    signal(SIGUSR1, send_alert_sms);
+
+    printf("[MAIN] HUD starting...\n");
+
+    if (oled_init() != 0) {
+        fprintf(stderr, "[MAIN] OLED init failed, continuing without display\n");
+    }
+
+    // 启动按键监听线程
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, key_monitor_thread, NULL) != 0) {
+        perror("[KEY] pthread_create");
+    } else {
+        pthread_detach(tid);
+    }
+
+    NavData nav = {0};
+    oled_show_nav(&nav, 0);
+
+    int sock = udp_init(UDP_PORT);
+    if (sock < 0) {
+        fprintf(stderr, "[UDP] udp_init failed, port=%d\n", UDP_PORT);
+        oled_show_nav(&nav, 0);
+        oled_close();
+        return -1;
+    }
+    printf("[UDP] listening on port %d\n", UDP_PORT);
+
+    char buffer[UDP_BUFFER_SIZE + 1];
+    time_t last_recv_time = 0;
+    int has_signal = 0;
+
+    while (keep_running) {
+        int n = udp_receive(sock, buffer, UDP_BUFFER_SIZE, RECV_TIMEOUT_MS);
+
+        if (n > 0) {
+            buffer[n] = '\0';
+            printf("[UDP] packet len=%d, data=%s\n", n, buffer);
+
+            last_recv_time = time(NULL);
+            has_signal = 1;
+
+            int ret = parse_navi_json(buffer, &nav);
+            if (ret == 0) {
+                oled_show_nav(&nav, 1);
+                printf("[OLED] show nav: turn=%d, distance=%d, text=%s\n",
+                       nav.turn, nav.distance, nav.direction_text);
+            } else if (ret == -2) {
+                printf("[MAIN] alert or emergency processed, OLED unchanged\n");
+            } else {
+                printf("[MAIN] invalid JSON, OLED unchanged\n");
+            }
+        } else if (n == -2) {
+            if (has_signal && time(NULL) - last_recv_time > 3) {
+                printf("[OLED] no data timeout, show NO DATA\n");
+                oled_show_nav(&nav, 0);
+                has_signal = 0;
+            }
+        } else {
+            printf("[UDP] receive error, reinit socket\n");
+            udp_close(sock);
+            sock = udp_init(UDP_PORT);
+            sleep(1);
+        }
+    }
+
+    // 停止按键线程
+    key_thread_running = 0;
+    usleep(500000); // 等待线程退出
+
+    printf("[MAIN] exiting...\n");
+    udp_close(sock);
+    oled_close();
+    return 0;
+}
+
+void send_alert_sms(int sig) {
+    printf("[ALERT] ===== Alert triggered =====\n");
+    printf("[ALERT] Broadcasting to phone (will send SMS via phone)\n");
+    broadcast_alert();
+    printf("[SUCCESS] Alarm sent to phone!\n");
+    printf("[SUCCESS] Alarm sent to phone!\n");
+    printf("[ALERT] ===== Alert broadcast done =====\n");
+}
