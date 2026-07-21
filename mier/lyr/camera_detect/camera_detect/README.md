@@ -131,9 +131,58 @@ tail -f /xxl/camera_detect/dvr_system.log | grep "\[NAV\]"
 - `type=navi_tts`：完整路名播报；无网络时只后台尝试生成，不播兜底
 - `type=alert`：播放固定预警提示音
 
+## 摔倒短信通知
+
+检测到 IMU 摔倒事件后，`radar_fusion` 会异步调用外部脚本发送短信通知：
+
+```bash
+/xxl/camera_detect/scripts/send_fall_sms.sh "IMU_ALERT type=fall ..."
+```
+
+脚本由仓库中 `scripts/send_fall_sms.sh` 提供模板，包含：
+- 解析摔倒事件中的 `reason`、`gps_valid`、`lat_1e7`、`lon_1e7` 等字段
+- 构建短信内容并记录到 `/xxl/camera_detect/fall_sms.log`
+- 预留 HTTP API 调用示例，需根据实际短信平台填写
+
+使用方法：
+
+1. 将 `scripts/send_fall_sms.sh` 部署到开发板并赋予执行权限。
+2. 在脚本中替换为你的短信平台接口（阿里云、腾讯云、Twilio 等），或设置环境变量：
+
+```bash
+export SMS_API_URL="https://your-sms-api"
+export SMS_PHONE="13800138000"
+```
+
+3. 触发摔倒事件后查看日志：
+
+```bash
+tail -f /xxl/camera_detect/fall_sms.log
+```
+
+> 该功能为新增功能，不影响原有的摔倒告警音频、DVR 保存和 LED 提示。
+
 ## 注意事项
 
 - 交叉编译器：`aarch64-linux-gnu-gcc` / `aarch64-linux-gnu-g++`
 - 开发板需预装：`aplay`、`ffmpeg`、`python3`、`pip`（可选，用于在线 edge-tts）
 - 骨传导功放使能：`start_dvr.sh` 会自动导出 PB11 GPIO 并置高
 - 日志循环刷屏问题已修复：`dvr.service` 不要把 stdout 重定向回 `dvr_system.log`
+
+## DVR 视频文件
+
+紧急视频保存在 TF 卡：
+
+```text
+/run/media/mmcblk0p1/dvr/emergency_YYYYMMDD_HHMMSS.mp4
+```
+
+- 编码格式：**H.264 / AVC，1280x720**
+- 容器格式：**标准 MP4**（`ftypmp42` / `ftypisom`）
+- 触发时会保存触发前 15 秒 + 触发后 15 秒
+
+> 旧版本使用 GStreamer `qtmux` 生成的是 QuickTime 容器（`ftypqt`），部分播放器会提示“格式错误”。当前版本已改用 `mp4mux` 生成标准 MP4。若旧视频无法播放，可在开发板上用 ffmpeg 转封装：
+>
+> ```bash
+> ffmpeg -i emergency_YYYYMMDD_HHMMSS.mp4 -c copy -movflags +faststart -f mp4 emergency_YYYYMMDD_HHMMSS_fixed.mp4
+> ```
