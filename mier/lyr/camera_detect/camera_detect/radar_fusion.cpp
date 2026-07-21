@@ -106,6 +106,9 @@
 #define AUDIO_V2X_RIGHT        "/xxl/camera_detect/sounds/v2x_right.wav"
 #define AUDIO_RECORDING_COMPLETE "/xxl/audio/assets/cmd/recording_complete.wav"
 
+/* 摔倒短信通知脚本（检测到摔倒后异步调用） */
+#define FALL_SMS_SCRIPT        "/xxl/camera_detect/scripts/send_fall_sms.sh"
+
 /* ======================== 雷达协议结构体 ======================== */
 #pragma pack(push, 1)
 typedef struct { int8_t range_val, angle_val, velo_val, objId; } bsd_obj_t;
@@ -493,7 +496,7 @@ static FILE *dvr_raw_file = NULL;
 static char dvr_raw_path[2048];
 static char dvr_buffer_dir[1024];
 static int dvr_tf_ok = 0;
-static int dvr_has_ffmpeg = 0;
+static int dvr_has_encoder = 0;
 static int dvr_camera_pixelformat = 0;
 
 /* 生成输出文件名 */
@@ -674,8 +677,8 @@ static void play_recording_complete_sound(void) {
 static int dvr_encode_mp4(void) {
     if (dvr_encoding) return -1;
     if (dvr_frame_count == 0) return -1;
-    if (!dvr_has_ffmpeg) {
-        printf("[系统] [DVR] ffmpeg not available, skipping encode\n");
+    if (!dvr_has_encoder) {
+        printf("[系统] [DVR] No video encoder available, skipping encode\n");
         /* 清理缓冲 */
         unlink(dvr_raw_path);
         rmdir(dvr_buffer_dir);
@@ -833,14 +836,14 @@ static int dvr_encode_mp4(void) {
                 (char *)"!", (char *)"video/x-raw,format=NV12",
                 (char *)"!", (char *)"v4l2slh264enc", (char *)"bitrate=4000000",
                 (char *)"!", (char *)"h264parse",
-                (char *)"!", (char *)"qtmux",
+                (char *)"!", (char *)"mp4mux",
                 (char *)"!", (char *)"filesink", gst_sink_arg,
                 NULL
             };
             int rc = run_encoder_in_child("gst-launch-1.0", argv, ffmpeg_log);
             struct stat st;
             if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
-                printf("[保存] [DVR] Child: Saved %s (gst-launch H.264)\n", heap_output_path);
+                printf("[保存] [DVR] Child: Saved %s (gst-launch MP4 H.264)\n", heap_output_path);
                 encoder_ok = 1;
             } else {
                 printf("[保存] [DVR] Child: gst-launch failed (rc=%d), trying ffmpeg, log=%s\n", rc, ffmpeg_log);
@@ -1026,6 +1029,38 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
     }
 }
 
+/* ======================== 摔倒短信通知 ======================== */
+/**
+ * @brief 检测到摔倒后异步调用外部脚本发送短信通知
+ * @param event_line 从 M33 收到的完整 IMU_ALERT 事件行
+ *
+ * 脚本路径由 FALL_SMS_SCRIPT 定义。脚本内容需根据实际短信平台填写。
+ * 该调用以 fork + execl 方式异步执行，不阻塞主循环。
+ */
+static void send_fall_sms(const char *event_line) {
+    if (event_line == NULL || event_line[0] == '\0') return;
+
+    if (access(FALL_SMS_SCRIPT, X_OK) != 0) {
+        printf("[系统] [SMS] %s not found or not executable, skip SMS notification\n",
+               FALL_SMS_SCRIPT);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[SMS] fork failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        /* 子进程：执行短信脚本，把事件行作为参数传入 */
+        execl(FALL_SMS_SCRIPT, FALL_SMS_SCRIPT, event_line, (char *)NULL);
+        fprintf(stderr, "[SMS] exec %s failed: %s\n", FALL_SMS_SCRIPT, strerror(errno));
+        _exit(1);
+    }
+
+    printf("[系统] [SMS] Fall SMS notification script started (pid=%d)\n", pid);
+}
+
 /* ======================== 测试模式: 模拟 IMU 摔倒触发 ======================== */
 static int g_test_fall_delay_sec = 0;
 static void *test_fall_thread(void *arg) {
@@ -1041,6 +1076,13 @@ static void *test_fall_thread(void *arg) {
                      (uint64_t)tv_now.tv_usec;
     printf("[TEST] Injecting simulated FALL event\n");
     handle_fall_trigger(ts_us);
+
+    /* 模拟摔倒事件也触发短信通知，用于测试 */
+    char simulated_line[256];
+    snprintf(simulated_line, sizeof(simulated_line),
+             "IMU_ALERT type=fall reason=simulated seq=0 gps_valid=0 lat_1e7=0 lon_1e7=0");
+    send_fall_sms(simulated_line);
+
     return NULL;
 }
 
@@ -1122,6 +1164,7 @@ static void *rpmsg_thread(void *arg) {
                             uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
                                              (uint64_t)tv_now.tv_usec;
                             handle_fall_trigger(ts_us);
+                            send_fall_sms(line);
                         }
                         /* V2X 告警: 解析 direction 并播放定向语音 */
                         else if (strstr(line, "V2X_ALERT") != NULL) {
@@ -1203,14 +1246,16 @@ int main(int argc, char *argv[]) {
     printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");
 
-    /* 0. 检查 DVR 依赖: ffmpeg + TF 卡 */
+    /* 0. 检查 DVR 依赖: 视频编码器 (gst-launch-1.0 / ffmpeg / avconv) + TF 卡 */
     printf("[系统] [DVR] Checking dependencies...\n");
-    dvr_has_ffmpeg = (system("which ffmpeg >/dev/null 2>&1") == 0);
-    if (!dvr_has_ffmpeg) {
-        printf("[系统] [DVR] WARNING: ffmpeg not found! Video encoding will be disabled.\n");
-        printf("[系统] [DVR] Install: apt-get install ffmpeg\n");
+    dvr_has_encoder = (system("which gst-launch-1.0 >/dev/null 2>&1") == 0) ||
+                      (system("which ffmpeg >/dev/null 2>&1") == 0) ||
+                      (system("which avconv >/dev/null 2>&1") == 0);
+    if (!dvr_has_encoder) {
+        printf("[系统] [DVR] WARNING: No video encoder found! Video encoding will be disabled.\n");
+        printf("[系统] [DVR] Install: apt-get install gstreamer1.0-tools ffmpeg\n");
     } else {
-        printf("[系统] [DVR] ffmpeg: OK\n");
+        printf("[系统] [DVR] encoder: OK (gst-launch-1.0 / ffmpeg / avconv)\n");
     }
 
     struct stat st;

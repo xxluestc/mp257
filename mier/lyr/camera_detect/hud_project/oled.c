@@ -238,8 +238,8 @@ void oled_show_nav(const NavData *nav, int has_signal) {
         return;
     }
 
-    const int RIGHT_EDGE   = 122;  // 右边距
-    const int BASELINE_Y   = 46;   // 底部基线（DIST、数字、单位底部对齐于此）
+    const int RIGHT_EDGE   = 97;  // 向左移动 25 像素
+    const int BASELINE_Y   = 52;  // 向下移动 6 像素
     const int CHAR_HEIGHT  = 8;    // 字符高度（scale=1）
     const int ARROW_SCALE  = 2;    // 箭头 16x16
     const int DIR_SCALE    = 1;    // DIR 文字 6x8
@@ -255,7 +255,7 @@ void oled_show_nav(const NavData *nav, int has_signal) {
     int arrow_w = 8 * ARROW_SCALE;           // 16
     int dir_w   = 3 * 6 * DIR_SCALE;         // 18
     int arrow_x = RIGHT_EDGE - arrow_w;       // 106
-    int arrow_y = 14;                         // 箭头顶部
+    int arrow_y = 20;  // 向下移动 6 像素
     int dir_x   = arrow_x - GAP_UPPER - dir_w;
     int dir_y   = arrow_y + (arrow_w - 8) / 2; // DIR 垂直居中
 
