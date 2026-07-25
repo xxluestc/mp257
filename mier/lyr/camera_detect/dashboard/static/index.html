@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1117">
+  <title>Rear radar · 实测标定台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">STM32MP257 · RIDER SAFETY LAB</p>
+      <h1>后向雷达实测标定台</h1>
+    </div>
+    <div class="topbar-status">
+      <span id="connection-chip" class="status-chip status-offline">
+        <i aria-hidden="true"></i><span>等待雷达数据</span>
+      </span>
+      <time id="last-update">--:--:--</time>
+    </div>
+  </header>
+
+  <main>
+    <section class="instrument-grid" aria-label="当前雷达状态">
+      <article class="radar-panel">
+        <div class="section-label">危险目标方位</div>
+        <div class="radar-stage">
+          <svg class="radar-scope" viewBox="0 0 360 210" role="img"
+               aria-label="危险目标后向方位图">
+            <path class="scope-sector scope-left" d="M180 190 L30 104 A174 174 0 0 1 122 25 Z"/>
+            <path class="scope-sector scope-center" d="M180 190 L122 25 A174 174 0 0 1 238 25 Z"/>
+            <path class="scope-sector scope-right" d="M180 190 L238 25 A174 174 0 0 1 330 104 Z"/>
+            <path class="scope-grid" d="M70 126 A126 126 0 0 1 290 126"/>
+            <path class="scope-grid" d="M112 151 A78 78 0 0 1 248 151"/>
+            <path class="scope-grid scope-edge" d="M30 104 A174 174 0 0 1 330 104"/>
+            <line class="scope-grid" x1="180" y1="190" x2="122" y2="25"/>
+            <line class="scope-grid" x1="180" y1="190" x2="238" y2="25"/>
+            <circle id="target-marker" class="target-marker" cx="180" cy="190" r="8"/>
+          </svg>
+          <span class="bearing-label bearing-left">LEFT</span>
+          <span class="bearing-label bearing-center">CENTER</span>
+          <span class="bearing-label bearing-right">RIGHT</span>
+          <div class="direction-readout">
+            <span>FILTERED DIRECTION</span>
+            <strong id="direction">—</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="threat-panel">
+        <div class="section-label">当前危险目标</div>
+        <div class="object-id">OBJ <strong id="obj-id">—</strong></div>
+        <div id="alarm-state" class="alarm-state alarm-clear">
+          <span class="alarm-lamp" aria-hidden="true"></span>
+          <div><small>RADAR ALERT</small><strong>无告警</strong></div>
+        </div>
+        <dl class="metrics">
+          <div><dt>距离</dt><dd><span id="distance">—</span><small>m</small></dd></div>
+          <div><dt>相对速度</dt><dd><span id="velocity">—</span><small>m/s</small></dd></div>
+          <div><dt>原始角度</dt><dd><span id="angle">—</span><small>°</small></dd></div>
+          <div><dt>TTC</dt><dd><span id="ttc">—</span><small>s</small></dd></div>
+        </dl>
+        <p class="fusion-note">融合告警：<strong id="fusion-alert">—</strong></p>
+      </article>
+    </section>
+
+    <section class="chart-section">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">最近 90 秒</p>
+          <h2>危险目标动态</h2>
+        </div>
+        <p>曲线仅跟随每帧选出的当前危险目标</p>
+      </div>
+      <div class="chart-grid">
+        <article class="chart-card">
+          <header><span>距离</span><strong id="chart-distance-value">— m</strong></header>
+          <canvas id="chart-distance" aria-label="距离实时曲线"></canvas>
+        </article>
+        <article class="chart-card">
+          <header><span>速度</span><strong id="chart-velocity-value">— m/s</strong></header>
+          <canvas id="chart-velocity" aria-label="速度实时曲线"></canvas>
+        </article>
+        <article class="chart-card">
+          <header><span>角度</span><strong id="chart-angle-value">— °</strong></header>
+          <canvas id="chart-angle" aria-label="角度实时曲线"></canvas>
+        </article>
+        <article class="chart-card">
+          <header><span>TTC</span><strong id="chart-ttc-value">— s</strong></header>
+          <canvas id="chart-ttc" aria-label="TTC 实时曲线"></canvas>
+        </article>
+      </div>
+    </section>
+
+    <section class="experiment-grid">
+      <article class="tag-panel">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">人工标注 · labels.csv</p>
+            <h2>测试事件打点</h2>
+          </div>
+          <p>事件发生前点“开始”，完成后点“结束”</p>
+        </div>
+        <div id="event-list" class="event-list"></div>
+      </article>
+
+      <article class="targets-panel">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">本帧全部目标</p>
+            <h2>ObjId 列表</h2>
+          </div>
+          <strong id="object-count">0 TARGETS</strong>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Obj</th><th>距离</th><th>速度</th><th>角度</th><th>TTC</th><th>方向</th></tr>
+            </thead>
+            <tbody id="targets-body">
+              <tr class="empty-row"><td colspan="6">等待目标数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

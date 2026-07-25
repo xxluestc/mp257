@@ -1,0 +1,21 @@
+# 复制为 /xxl/camera_detect/radar_config 后由 start_dvr.sh 自动读取。
+# 命令行 -T/-D/-p 优先于本文件。
+
+# 原有雷达告警阈值
+TTC=2.5
+DIST=1.2
+
+# 方向判断：angle <= LEFT_ANGLE 为 LEFT，
+# angle >= RIGHT_ANGLE 为 RIGHT，中间为 CENTER。
+LEFT_ANGLE=-10
+RIGHT_ANGLE=10
+
+# 角度 EMA 滤波权重，范围 (0, 1]；越小越平滑但响应越慢。
+ANGLE_ALPHA=0.35
+
+# 新方向连续出现多少帧后才确认切换。
+DIRECTION_SAMPLES=3
+
+# Dashboard 与实验日志
+DASHBOARD_PORT=8080
+RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
