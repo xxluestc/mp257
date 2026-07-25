@@ -4,6 +4,7 @@
 
 基于米尔 myd-ld25x (STM32MP257F) 开发板的一体化系统：
 
+- **当前核心代码**：[`lyr/camera_detect/`](lyr/camera_detect/)
 - **摄像头 NPU**：负责目标识别（人、自行车、汽车等道路用户）
 - **毫米波雷达**：负责目标测距、测速、TTC 碰撞时间估计
 - **M33 核 IMU/V2X**：检测摔倒、急刹、路面颠簸，接收周边车辆 V2X 告警
@@ -61,15 +62,18 @@
 
 ```
 mier/
-├── camera_detect/          # 当前主程序: 雷达+NPU+DVR+IMU 融合
-│   ├── radar_fusion.cpp    # 主程序入口
-│   ├── start_dvr.sh        # 一键启动脚本 (推荐)
-│   ├── IMU_FALL_TEST.md    # IMU 摔倒触发 DVR 测试指南
-│   ├── camera.c/h          # USB 摄像头 V4L2 采集
-│   ├── npu_detect.cpp/h    # NPU 推理 (SSD MobileNet V2)
-│   ├── jpeg_decoder.c      # JPEG 解码
-│   ├── stai_mpu/           # 正点原子 NPU 库 (libstai_mpu.so)
-│   └── Makefile
+├── lyr/camera_detect/      # 当前核心项目
+│   ├── camera_detect/      # 雷达+NPU+DVR+IMU 融合主程序
+│   │   ├── radar_fusion.cpp
+│   │   ├── start_dvr.sh
+│   │   ├── camera.c/h
+│   │   ├── npu_detect.cpp/h
+│   │   ├── jpeg_decoder.c
+│   │   ├── stai_mpu/
+│   │   └── Makefile
+│   └── hud_project/        # HUD/OLED 显示
+│
+├── camera_detect/          # 历史/对照副本，不作为主要修改入口
 │
 ├── v2x/                    # M33 固件与 A35 接收脚本
 │   ├── 使用方式.md
@@ -112,7 +116,7 @@ mier/
 ### 1. 交叉编译 (虚拟机)
 
 ```bash
-cd /home/alientek/dvr_project/mier/camera_detect
+cd /home/alientek/dvr_project/mier/lyr/camera_detect/camera_detect
 make clean
 make radar-fusion CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
 ```

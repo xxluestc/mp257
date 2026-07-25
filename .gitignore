@@ -1,8 +1,7 @@
-A_Core/build/
-A_Core/dvr
-A_Core/*.o
-A_Core/*.d
-*.o
-*.d
-build/
-mier/radar/radar_init
+# Repository scope
+#
+# This repository intentionally tracks only /mier. Files elsewhere in the
+# working tree are local reference material and must not be added to Git.
+/*
+!/.gitignore
+!/mier/
