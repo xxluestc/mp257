@@ -172,4 +172,5 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [完整数据流](docs/DATA_FLOW.md)
 - [雷达实验、CSV 与人工标注](docs/RADAR_EXPERIMENT.md)
 - [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)
+- [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)

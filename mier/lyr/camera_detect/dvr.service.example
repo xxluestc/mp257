@@ -1,6 +1,10 @@
 [Unit]
 Description=DVR System
-After=network.target
+# 摄像头、雷达串口和 remoteproc 都由 udev 建立；Dashboard/UDP 可以在
+# 网络地址配置前监听，因此无需等待 network.target。
+Wants=systemd-udev-settle.service
+Wants=dvr-m33.service
+After=local-fs.target systemd-udev-settle.service dvr-m33.service
 
 [Service]
 Type=simple
@@ -8,6 +12,7 @@ ExecStart=/xxl/camera_detect/start_dvr.sh
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=/xxl/camera_detect
+TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target

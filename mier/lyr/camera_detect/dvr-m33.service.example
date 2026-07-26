@@ -1,0 +1,14 @@
+[Unit]
+Description=Rider Safety Early M33 Firmware Start
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=systemd-udev-settle.service dvr.service
+
+[Service]
+Type=oneshot
+ExecStart=/xxl/camera_detect/scripts/start_m33_early.sh
+RemainAfterExit=yes
+TimeoutStartSec=8
+
+[Install]
+WantedBy=sysinit.target

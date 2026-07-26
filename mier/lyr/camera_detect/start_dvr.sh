@@ -18,8 +18,12 @@ DASHBOARD_DIR="${CAMERA_DIR}/dashboard"
 DASHBOARD_SCRIPT="${DASHBOARD_DIR}/radar_dashboard.py"
 DASHBOARD_PID_FILE="/tmp/radar_dashboard.pid"
 RPMSG_DEV="/dev/ttyRPMSG0"
+RPROC_STATE="/sys/class/remoteproc/remoteproc0/state"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 RADAR_LOG_DIR="/run/media/mmcblk0p1/dvr/radar_experiments"
+TF_MOUNT="/run/media/mmcblk0p1"
+TF_DEVICE="/dev/mmcblk0p1"
+TF_FSCK_UNIT="systemd-fsck@dev-mmcblk0p1.service"
 DASHBOARD_PORT="8080"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
@@ -113,6 +117,13 @@ log() {
     echo "$msg" | tee -a "$LOG_FILE"
 }
 
+# systemd-fsck@.service 完成后可能保持 active/exited；只有 activating 才表示
+# fsck 进程仍在读写设备。
+tf_fsck_running() {
+    [ "$(systemctl show "$TF_FSCK_UNIT" \
+        --property=ActiveState --value 2>/dev/null)" = "activating" ]
+}
+
 # -------------------------- 退出清理 --------------------------
 # 安全地等待进程结束，最多 wait_sec 秒
 wait_or_kill() {
@@ -162,7 +173,7 @@ start_hud() {
     rm -f "$HUD_PID_FILE"
     nohup "$HUD_BIN" >> /tmp/hud.log 2>&1 &
     HUD_PID=$!
-    sleep 1
+    sleep 0.2
 
     if kill -0 "$HUD_PID" 2>/dev/null; then
         log "HUD 启动成功，pid=${HUD_PID}"
@@ -204,7 +215,7 @@ start_dashboard() {
         >> "${CAMERA_DIR}/radar_dashboard.log" 2>&1 &
     DASHBOARD_PID=$!
     echo "$DASHBOARD_PID" > "$DASHBOARD_PID_FILE"
-    sleep 1
+    sleep 0.2
 
     if kill -0 "$DASHBOARD_PID" 2>/dev/null; then
         log "Dashboard 已启动，浏览器访问 http://<开发板IP>:${DASHBOARD_PORT}"
@@ -280,11 +291,36 @@ if [ ! -x "$RADAR_FUSION" ]; then
     exit 1
 fi
 
-# 确保 TF 卡已挂载; 若未挂载则尝试自动挂载
-if ! mountpoint -q /run/media/mmcblk0p1; then
-    log "TF 卡未挂载，尝试挂载 /dev/mmcblk0p1..."
-    mkdir -p /run/media/mmcblk0p1
-    if ! mount -t vfat /dev/mmcblk0p1 /run/media/mmcblk0p1 >> "$LOG_FILE" 2>&1; then
+# 等待 udev 触发的 FAT fsck 和自动挂载完成。绝不能在 fsck 尚在读写文件系统时
+# 手工 mount，否则 DVR 与 fsck 会并发修改 FAT，导致 .buffer/CSV 目录损坏。
+if ! mountpoint -q "$TF_MOUNT"; then
+    log "等待 TF 卡检查与自动挂载完成..."
+    for i in $(seq 1 200); do
+        if mountpoint -q "$TF_MOUNT"; then
+            break
+        fi
+        if tf_fsck_running; then
+            sleep 0.2
+            continue
+        fi
+        # fsck 尚未被 udev 拉起时给它短暂的启动窗口。
+        if [ "$i" -lt 25 ]; then
+            sleep 0.2
+            continue
+        fi
+        break
+    done
+fi
+
+# 自动挂载没有发生时才走手工回退；此时已确认 fsck 不在运行。
+if ! mountpoint -q "$TF_MOUNT"; then
+    if tf_fsck_running; then
+        log "错误: TF 卡 fsck 仍在运行，拒绝并发挂载"
+        exit 1
+    fi
+    log "TF 卡未自动挂载，尝试安全挂载 ${TF_DEVICE}..."
+    mkdir -p "$TF_MOUNT"
+    if ! mount -t vfat "$TF_DEVICE" "$TF_MOUNT" >> "$LOG_FILE" 2>&1; then
         log "错误: TF 卡挂载失败，请检查是否插入 TF 卡"
         exit 1
     fi
@@ -330,36 +366,58 @@ fi
 log "清理可能占用摄像头的进程..."
 fuser -k /dev/video7 2>/dev/null || true
 fuser -k /dev/ttySTM1 2>/dev/null || true
-sleep 0.5
+sleep 0.2
 
 # -------------------------- 启动 M33 固件 --------------------------
 # fw_cortex_m33.sh 会根据当前目录名确定固件文件名
 # 固件为 /lib/firmware/project_CM33_NonSecure.elf，所以必须在 /home/root/project 目录下执行
-log "停止可能正在运行的 M33 固件..."
-(
-    cd "$FW_DIR" || exit 1
-    ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-)
-sleep 1
+#
+# 优先复用 dvr-m33.service 的早期启动实例。若早期服务未启动成功或
+# RPMsg 没有出现，则自动回退到原有 Linux remoteproc 启动路径。
+m33_running=0
+if [ -r "$RPROC_STATE" ] &&
+   [ "$(tr -d '\0\r\n' < "$RPROC_STATE")" = "running" ]; then
+    log "检测到 M33 已运行，复用早期启动实例"
+    for i in $(seq 1 20); do
+        if [ -e "$RPMSG_DEV" ]; then
+            m33_running=1
+            break
+        fi
+        sleep 0.1
+    done
+fi
 
-log "启动 M33 固件..."
-if ! (
-    cd "$FW_DIR" || exit 1
-    ./fw_cortex_m33.sh start >> "$LOG_FILE" 2>&1
-); then
-    log "错误: M33 固件启动失败"
-    exit 1
+if [ "$m33_running" -ne 1 ]; then
+    if [ -r "$RPROC_STATE" ] &&
+       [ "$(tr -d '\0\r\n' < "$RPROC_STATE")" = "running" ]; then
+        log "M33 已运行但 RPMsg 未就绪，回退到 Linux remoteproc 重启"
+        (
+            cd "$FW_DIR" || exit 1
+            ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        )
+    else
+        log "早期服务未启动 M33，使用 Linux remoteproc 回退路径"
+    fi
+
+    log "启动 M33 固件..."
+    if ! (
+        cd "$FW_DIR" || exit 1
+        ./fw_cortex_m33.sh start >> "$LOG_FILE" 2>&1
+    ); then
+        log "错误: M33 固件启动失败"
+        exit 1
+    fi
 fi
 
 # -------------------------- 等待 RPMsg 就绪 --------------------------
 log "等待 RPMsg 设备 ${RPMSG_DEV} 就绪（最多 ${M33_READY_TIMEOUT}s）..."
 ready=0
-for i in $(seq 1 "$M33_READY_TIMEOUT"); do
+for i in $(seq 1 $((M33_READY_TIMEOUT * 5))); do
     if [ -e "$RPMSG_DEV" ]; then
         ready=1
         break
     fi
-    sleep 1
+    sleep 0.2
 done
 
 if [ "$ready" -ne 1 ]; then

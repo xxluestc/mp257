@@ -65,7 +65,7 @@ deploy-radar: $(TARGET) hud dashboard-check
 	scp $(TARGET) root@$(BOARD_IP):$(BOARD_DIR)/
 	scp $(HUD_DIR)/hud root@$(BOARD_IP):$(HUD_REMOTE)
 	scp $(MODEL_FILE) $(LABEL_FILE) root@$(BOARD_IP):$(BOARD_DIR)/models/
-	scp start_dvr.sh dvr.service.example radar_config.example root@$(BOARD_IP):$(BOARD_DIR)/
+	scp start_dvr.sh dvr.service.example dvr-m33.service.example radar_config.example root@$(BOARD_IP):$(BOARD_DIR)/
 	scp scripts/*.sh root@$(BOARD_IP):$(BOARD_DIR)/scripts/
 	scp sounds/*.wav root@$(BOARD_IP):$(BOARD_DIR)/sounds/
 	scp nav_tts_cache/*.wav root@$(BOARD_IP):$(BOARD_DIR)/nav_tts_cache/
