@@ -34,6 +34,9 @@
 #define ALERT_COOLDOWN 60              // 冷却时间（秒）
 #define DELIVERY_LOG_DIR "/run/media/mmcblk0p1/dvr/radar_experiments"
 #define DELIVERY_LOG_PATH DELIVERY_LOG_DIR "/imu_delivery.csv"
+#define DELIVERY_LOG_MAX_BYTES (10U * 1024U * 1024U)
+#define DELIVERY_LOG_BACKUPS 4
+#define DELIVERY_LOG_SIZE_CHECK_WRITES 256U
 #define NAV_TTS_TEXT_MAX 1024          // 完整导航播报文案最大字节数（UTF-8）
 #define ENABLE_BONE_TTS_INTERFACE 1    // 1：调用骨传导播放接口；0：只打印完整导航文字
 
@@ -43,6 +46,10 @@ static int oled_initialized = 0;
 /* 每类事件独立冷却，避免频繁 road_bump 吞掉真正的 fall_down。 */
 static time_t last_alert_ts[3] = {0, 0, 0};
 static FILE *delivery_log = NULL;
+static unsigned int delivery_log_write_count = 0;
+
+static const char DELIVERY_LOG_HEADER[] =
+    "timestamp_ms,event_id,m33_type,app_type,seq,reason,stage,status,bytes\n";
 
 static long long wall_clock_ms(void) {
     struct timeval tv;
@@ -50,9 +57,33 @@ static long long wall_clock_ms(void) {
     return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
 }
 
+static int delivery_log_rotate(void) {
+    char source[1024];
+    char destination[1024];
+    for (int index = DELIVERY_LOG_BACKUPS; index >= 1; index--) {
+        if (index == 1)
+            snprintf(source, sizeof(source), "%s", DELIVERY_LOG_PATH);
+        else
+            snprintf(source, sizeof(source), "%s.%d",
+                     DELIVERY_LOG_PATH, index - 1);
+        snprintf(destination, sizeof(destination), "%s.%d",
+                 DELIVERY_LOG_PATH, index);
+        if (index == DELIVERY_LOG_BACKUPS) unlink(destination);
+        if (rename(source, destination) != 0 && errno != ENOENT) {
+            fprintf(stderr, "[IMU] log rotate failed: %s\n", strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static void delivery_log_open(void) {
     mkdir(DELIVERY_LOG_DIR, 0775);
     struct stat st;
+    if (stat(DELIVERY_LOG_PATH, &st) == 0 &&
+        st.st_size >= (off_t)DELIVERY_LOG_MAX_BYTES)
+        delivery_log_rotate();
+
     int needs_header = stat(DELIVERY_LOG_PATH, &st) != 0 || st.st_size == 0;
     delivery_log = fopen(DELIVERY_LOG_PATH, "a");
     if (delivery_log == NULL) {
@@ -60,11 +91,10 @@ static void delivery_log_open(void) {
         return;
     }
     setvbuf(delivery_log, NULL, _IOLBF, BUFSIZ);
-    if (needs_header) {
-        fprintf(delivery_log,
-                "timestamp_ms,event_id,m33_type,app_type,seq,reason,stage,status,bytes\n");
-    }
-    printf("[IMU] delivery log: %s\n", DELIVERY_LOG_PATH);
+    if (needs_header) fputs(DELIVERY_LOG_HEADER, delivery_log);
+    delivery_log_write_count = 0;
+    printf("[IMU] delivery log: %s (10 MiB x current+4)\n",
+           DELIVERY_LOG_PATH);
 }
 
 static void delivery_log_write(const char *event_id, const char *m33_type,
@@ -77,6 +107,19 @@ static void delivery_log_write(const char *event_id, const char *m33_type,
             m33_type ? m33_type : "", app_type ? app_type : "", seq,
             reason ? reason : "", stage ? stage : "",
             status ? status : "", bytes);
+
+    delivery_log_write_count++;
+    if (delivery_log_write_count % DELIVERY_LOG_SIZE_CHECK_WRITES == 0) {
+        struct stat st;
+        if (fflush(delivery_log) == 0 &&
+            fstat(fileno(delivery_log), &st) == 0 &&
+            st.st_size >= (off_t)DELIVERY_LOG_MAX_BYTES) {
+            fclose(delivery_log);
+            delivery_log = NULL;
+            delivery_log_rotate();
+            delivery_log_open();
+        }
+    }
 }
 
 static int alert_slot(const char *type) {

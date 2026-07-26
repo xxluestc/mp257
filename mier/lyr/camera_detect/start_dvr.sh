@@ -17,6 +17,7 @@ HUD_PID_FILE="/tmp/hud.pid"
 DASHBOARD_DIR="${CAMERA_DIR}/dashboard"
 DASHBOARD_SCRIPT="${DASHBOARD_DIR}/radar_dashboard.py"
 DASHBOARD_PID_FILE="/tmp/radar_dashboard.pid"
+LOG_MAINT_SCRIPT="${CAMERA_DIR}/scripts/log_maintenance.sh"
 RPMSG_DEV="/dev/ttyRPMSG0"
 RPROC_STATE="/sys/class/remoteproc/remoteproc0/state"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
@@ -32,7 +33,8 @@ V2X_DIRECTION="left_front"    # 默认 V2X 方向
 RADAR_PID=0
 HUD_PID=0
 DASHBOARD_PID=0
-READER_PID=0                  # 过滤进程组的 leader PID
+READER_PID=0                  # 关键日志过滤子 shell
+LOG_MAINT_PID=0
 NAV_TTS_CACHE="${CAMERA_DIR}/nav_tts_cache"  # 导航 TTS 缓存目录
 
 # -------------------------- 用法 --------------------------
@@ -151,6 +153,36 @@ wait_or_kill() {
     fi
 }
 
+stop_log_reader() {
+    [ "$READER_PID" -gt 0 ] 2>/dev/null || return 0
+    if kill -0 "$READER_PID" 2>/dev/null; then
+        # Bash 后台子 shell 不一定是进程组 leader，不能依赖 kill -PID。
+        # 先结束 tail/grep/awk 子进程，再结束并回收子 shell。
+        pkill -TERM -P "$READER_PID" 2>/dev/null || true
+        wait_or_kill "$READER_PID" "日志过滤" 2
+        pkill -KILL -P "$READER_PID" 2>/dev/null || true
+    fi
+    wait "$READER_PID" 2>/dev/null || true
+    READER_PID=0
+}
+
+start_log_maintenance() {
+    if [ ! -x "$LOG_MAINT_SCRIPT" ]; then
+        log "警告: 日志维护脚本不可用: ${LOG_MAINT_SCRIPT}"
+        return 1
+    fi
+
+    "$LOG_MAINT_SCRIPT" --once || true
+    "$LOG_MAINT_SCRIPT" --watch &
+    LOG_MAINT_PID=$!
+    log "日志容量限制已启用，pid=${LOG_MAINT_PID}"
+}
+
+stop_log_maintenance() {
+    wait_or_kill "$LOG_MAINT_PID" "日志维护" 2
+    LOG_MAINT_PID=0
+}
+
 # 启动 HUD（IMU 异常 UDP 转发到 App）
 start_hud() {
     # 如果 HUD 已在运行，复用现有进程
@@ -248,13 +280,9 @@ cleanup() {
     DASHBOARD_PID=0
     rm -f "$DASHBOARD_PID_FILE"
 
-    # 4. 停止过滤进程组（包括 tail/grep/awk）
-    if [ "$READER_PID" -gt 0 ] 2>/dev/null; then
-        log "停止日志过滤进程组 (pgid=${READER_PID})..."
-        kill -TERM -"$READER_PID" 2>/dev/null || true
-        wait_or_kill "$READER_PID" "日志过滤" 2
-        READER_PID=0
-    fi
+    # 4. 停止过滤管道和日志容量维护
+    stop_log_reader
+    stop_log_maintenance
 
     # 5. 确保没有遗留子进程占用摄像头/雷达
     pkill -9 -f "radar_fusion" 2>/dev/null || true
@@ -339,6 +367,8 @@ mkdir -p "$RADAR_LOG_DIR" || {
     log "错误: 无法创建雷达实验数据目录: ${RADAR_LOG_DIR}"
     exit 1
 }
+
+start_log_maintenance
 
 # 创建导航 TTS 缓存目录
 if [ ! -d "$NAV_TTS_CACHE" ]; then
@@ -495,17 +525,15 @@ log "radar_fusion 已启动，pid=${RADAR_PID}，过滤进程 pid=${READER_PID}"
 
 # 等待 radar_fusion 结束
 wait "$RADAR_PID"
+RADAR_EXIT_STATUS=$?
 RADAR_PID=0
 
-# 正常退出：关闭过滤进程组
-if [ "$READER_PID" -gt 0 ] 2>/dev/null; then
-    log "关闭日志过滤进程组..."
-    kill -TERM -"$READER_PID" 2>/dev/null || true
-    wait "$READER_PID" 2>/dev/null || true
-fi
-READER_PID=0
+# radar_fusion 无论以何种状态自行退出，都属于主业务异常。先关闭不会自行退出的
+# tail/grep/awk，再完整清理；脚本最后返回非零以触发 Restart=on-failure。
+log "radar_fusion 意外退出，status=${RADAR_EXIT_STATUS}"
+stop_log_reader
 
-log "radar_fusion 已退出，执行清理..."
+log "radar_fusion 已退出，执行清理并请求 systemd 重启..."
 
 # 停止 HUD
 wait_or_kill "$HUD_PID" "HUD" 2
@@ -517,8 +545,11 @@ wait_or_kill "$DASHBOARD_PID" "Radar Dashboard" 2
 DASHBOARD_PID=0
 rm -f "$DASHBOARD_PID_FILE"
 
+stop_log_maintenance
+
 (
     cd "$FW_DIR" || exit 1
     ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
 )
-log "DVR 系统已停止"
+log "DVR 系统异常退出，交由 systemd 重启"
+exit 1

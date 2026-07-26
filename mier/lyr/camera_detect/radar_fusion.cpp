@@ -439,8 +439,16 @@ static radar_direction_filter_t g_direction_filters[256];
 static FILE *g_radar_csv = NULL;
 static FILE *g_sensor_csv = NULL;
 static pthread_mutex_t g_sensor_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_radar_csv_path[PATH_MAX];
+static char g_sensor_csv_path[PATH_MAX];
 static char g_radar_state_path[PATH_MAX];
 static uint64_t g_radar_last_publish_ms = 0;
+static unsigned int g_radar_csv_write_count = 0;
+static unsigned int g_sensor_csv_write_count = 0;
+
+#define TELEMETRY_LOG_MAX_BYTES (20U * 1024U * 1024U)
+#define TELEMETRY_LOG_BACKUPS   4
+#define TELEMETRY_SIZE_CHECK_WRITES 256U
 
 static const char *radar_direction_name(radar_direction_t direction) {
     switch (direction) {
@@ -649,6 +657,56 @@ static int mkdir_recursive(const char *path) {
     return 0;
 }
 
+/*
+ * 写入者在调用前必须先关闭文件。采用同目录 rename，避免复制大 CSV；
+ * 当前文件加四份历史文件，总容量上限约为 100 MiB/日志类型。
+ */
+static int rotate_numbered_file(const char *path, int backups) {
+    if (path == NULL || path[0] == '\0' || backups <= 0) return -1;
+
+    char source[PATH_MAX];
+    char destination[PATH_MAX];
+    for (int index = backups; index >= 1; index--) {
+        if (index == 1) {
+            if (snprintf(source, sizeof(source), "%s", path) >=
+                (int)sizeof(source))
+                return -1;
+        } else {
+            if (snprintf(source, sizeof(source), "%s.%d", path, index - 1) >=
+                (int)sizeof(source))
+                return -1;
+        }
+        if (snprintf(destination, sizeof(destination), "%s.%d", path, index) >=
+            (int)sizeof(destination))
+            return -1;
+
+        if (index == backups) unlink(destination);
+        if (rename(source, destination) != 0 && errno != ENOENT) {
+            fprintf(stderr, "[LOG_ROTATE] rename %s -> %s failed: %s\n",
+                    source, destination, strerror(errno));
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static FILE *open_csv_append(const char *path, const char *header) {
+    struct stat st;
+    int needs_header = (stat(path, &st) != 0 || st.st_size == 0);
+    FILE *fp = fopen(path, "a");
+    if (fp == NULL) return NULL;
+    setvbuf(fp, NULL, _IOLBF, BUFSIZ);
+    if (needs_header) fputs(header, fp);
+    return fp;
+}
+
+static int csv_needs_rotation(FILE *fp) {
+    struct stat st;
+    if (fp == NULL) return 0;
+    if (fflush(fp) != 0 || fstat(fileno(fp), &st) != 0) return 0;
+    return st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES;
+}
+
 static void format_timestamp_iso(const struct timeval *tv,
                                  char *out, size_t out_size) {
     struct tm tm_utc;
@@ -673,27 +731,62 @@ static void csv_sanitize(const char *input, char *output, size_t output_size) {
     output[used] = '\0';
 }
 
+static const char SENSOR_CSV_HEADER[] =
+    "timestamp,timestamp_ms,source,event_type,status,event_id,"
+    "label,score,count,seq,reason,details\n";
+
+static const char RADAR_CSV_HEADER[] =
+    "timestamp,timestamp_ms,objId,distance_m,velocity_mps,"
+    "angle_deg,filtered_angle_deg,TTC_s,direction,"
+    "dangerous_objId,is_current_dangerous,radar_alert\n";
+
+static void sensor_csv_maybe_rotate_locked(void) {
+    g_sensor_csv_write_count++;
+    if (g_sensor_csv == NULL ||
+        g_sensor_csv_write_count % TELEMETRY_SIZE_CHECK_WRITES != 0 ||
+        !csv_needs_rotation(g_sensor_csv))
+        return;
+
+    fclose(g_sensor_csv);
+    g_sensor_csv = NULL;
+    if (rotate_numbered_file(g_sensor_csv_path,
+                             TELEMETRY_LOG_BACKUPS) != 0) {
+        fprintf(stderr, "[SENSOR_DATA] Rotation failed for %s\n",
+                g_sensor_csv_path);
+    }
+    g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
+    g_sensor_csv_write_count = 0;
+    if (g_sensor_csv == NULL) {
+        fprintf(stderr, "[SENSOR_DATA] Reopen failed for %s: %s\n",
+                g_sensor_csv_path, strerror(errno));
+    } else {
+        printf("[系统] [SENSOR_DATA] Rotated at %u MiB (keep=%d)\n",
+               TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U),
+               TELEMETRY_LOG_BACKUPS);
+    }
+}
+
 static int sensor_telemetry_init(void) {
     if (mkdir_recursive(g_radar_log_dir) != 0) return -1;
-    char csv_path[PATH_MAX];
-    if (snprintf(csv_path, sizeof(csv_path), "%s/sensor_events.csv",
-                 g_radar_log_dir) >= (int)sizeof(csv_path)) return -1;
+    if (snprintf(g_sensor_csv_path, sizeof(g_sensor_csv_path),
+                 "%s/sensor_events.csv", g_radar_log_dir) >=
+        (int)sizeof(g_sensor_csv_path))
+        return -1;
 
     struct stat st;
-    int needs_header = (stat(csv_path, &st) != 0 || st.st_size == 0);
-    g_sensor_csv = fopen(csv_path, "a");
+    if (stat(g_sensor_csv_path, &st) == 0 &&
+        st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
+        rotate_numbered_file(g_sensor_csv_path, TELEMETRY_LOG_BACKUPS);
+
+    g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
     if (g_sensor_csv == NULL) {
         fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n",
-                csv_path, strerror(errno));
+                g_sensor_csv_path, strerror(errno));
         return -1;
     }
-    setvbuf(g_sensor_csv, NULL, _IOLBF, BUFSIZ);
-    if (needs_header) {
-        fprintf(g_sensor_csv,
-                "timestamp,timestamp_ms,source,event_type,status,event_id,"
-                "label,score,count,seq,reason,details\n");
-    }
-    printf("[系统] [SENSOR_DATA] CSV: %s\n", csv_path);
+    g_sensor_csv_write_count = 0;
+    printf("[系统] [SENSOR_DATA] CSV: %s (20 MiB x current+4)\n",
+           g_sensor_csv_path);
     return 0;
 }
 
@@ -702,7 +795,6 @@ static void sensor_event_log(const char *source, const char *event_type,
                              const char *label, float score, int count,
                              int seq, const char *reason,
                              const char *details) {
-    if (g_sensor_csv == NULL) return;
     struct timeval tv;
     gettimeofday(&tv, NULL);
     uint64_t timestamp_ms = (uint64_t)tv.tv_sec * 1000ULL +
@@ -719,6 +811,10 @@ static void sensor_event_log(const char *source, const char *event_type,
     csv_sanitize(details, safe_details, sizeof(safe_details));
 
     pthread_mutex_lock(&g_sensor_csv_mutex);
+    if (g_sensor_csv == NULL) {
+        pthread_mutex_unlock(&g_sensor_csv_mutex);
+        return;
+    }
     fprintf(g_sensor_csv, "%s,%llu,%s,%s,%s,%s,%s,",
             timestamp, (unsigned long long)timestamp_ms, safe_source,
             safe_type, safe_status, safe_id, safe_label);
@@ -728,6 +824,7 @@ static void sensor_event_log(const char *source, const char *event_type,
     fputc(',', g_sensor_csv);
     if (seq >= 0) fprintf(g_sensor_csv, "%d", seq);
     fprintf(g_sensor_csv, ",%s,%s\n", safe_reason, safe_details);
+    sensor_csv_maybe_rotate_locked();
     pthread_mutex_unlock(&g_sensor_csv_mutex);
 }
 
@@ -747,9 +844,9 @@ static int radar_telemetry_init(void) {
         return -1;
     }
 
-    char csv_path[PATH_MAX];
-    if (snprintf(csv_path, sizeof(csv_path), "%s/radar_data.csv",
-                 g_radar_log_dir) >= (int)sizeof(csv_path) ||
+    if (snprintf(g_radar_csv_path, sizeof(g_radar_csv_path),
+                 "%s/radar_data.csv", g_radar_log_dir) >=
+            (int)sizeof(g_radar_csv_path) ||
         snprintf(g_radar_state_path, sizeof(g_radar_state_path),
                  "%s/radar_state.json", g_radar_log_dir) >=
             (int)sizeof(g_radar_state_path)) {
@@ -758,21 +855,19 @@ static int radar_telemetry_init(void) {
     }
 
     struct stat st;
-    int needs_header = (stat(csv_path, &st) != 0 || st.st_size == 0);
-    g_radar_csv = fopen(csv_path, "a");
+    if (stat(g_radar_csv_path, &st) == 0 &&
+        st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
+        rotate_numbered_file(g_radar_csv_path, TELEMETRY_LOG_BACKUPS);
+
+    g_radar_csv = open_csv_append(g_radar_csv_path, RADAR_CSV_HEADER);
     if (g_radar_csv == NULL) {
         fprintf(stderr, "[RADAR_DATA] Cannot open %s: %s\n",
-                csv_path, strerror(errno));
+                g_radar_csv_path, strerror(errno));
         return -1;
     }
-    setvbuf(g_radar_csv, NULL, _IOLBF, BUFSIZ);
-    if (needs_header) {
-        fprintf(g_radar_csv,
-                "timestamp,timestamp_ms,objId,distance_m,velocity_mps,"
-                "angle_deg,filtered_angle_deg,TTC_s,direction,"
-                "dangerous_objId,is_current_dangerous,radar_alert\n");
-    }
-    printf("[系统] [RADAR_DATA] CSV: %s\n", csv_path);
+    g_radar_csv_write_count = 0;
+    printf("[系统] [RADAR_DATA] CSV: %s (20 MiB x current+4)\n",
+           g_radar_csv_path);
     printf("[系统] [RADAR_DATA] Dashboard state: %s\n",
            g_radar_state_path);
     return 0;
@@ -812,6 +907,29 @@ static void radar_telemetry_publish(const radar_result_t *radar,
                     radar->dangerous_obj_id,
                     i == radar->dangerous_index ? 1 : 0,
                     radar->should_alert ? 1 : 0);
+        }
+        g_radar_csv_write_count += (unsigned int)radar->obj_count;
+        if (g_radar_csv_write_count % TELEMETRY_SIZE_CHECK_WRITES <
+                (unsigned int)radar->obj_count &&
+            csv_needs_rotation(g_radar_csv)) {
+            fclose(g_radar_csv);
+            g_radar_csv = NULL;
+            if (rotate_numbered_file(g_radar_csv_path,
+                                     TELEMETRY_LOG_BACKUPS) != 0) {
+                fprintf(stderr, "[RADAR_DATA] Rotation failed for %s\n",
+                        g_radar_csv_path);
+            }
+            g_radar_csv =
+                open_csv_append(g_radar_csv_path, RADAR_CSV_HEADER);
+            g_radar_csv_write_count = 0;
+            if (g_radar_csv == NULL) {
+                fprintf(stderr, "[RADAR_DATA] Reopen failed for %s: %s\n",
+                        g_radar_csv_path, strerror(errno));
+            } else {
+                printf("[系统] [RADAR_DATA] Rotated at %u MiB (keep=%d)\n",
+                       TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U),
+                       TELEMETRY_LOG_BACKUPS);
+            }
         }
     }
 

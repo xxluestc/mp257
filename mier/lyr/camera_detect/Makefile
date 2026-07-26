@@ -29,9 +29,9 @@ MODEL_DIR  = ./models
 MODEL_FILE = $(MODEL_DIR)/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb
 LABEL_FILE = $(MODEL_DIR)/labels_coco_dataset_80.txt
 
-.PHONY: all radar-fusion hud dashboard-check clean deploy deploy-radar run run-radar
+.PHONY: all radar-fusion hud dashboard-check script-check clean deploy deploy-radar run run-radar
 
-all: radar-fusion hud dashboard-check
+all: radar-fusion hud dashboard-check script-check
 
 radar-fusion: $(TARGET)
 
@@ -40,6 +40,11 @@ hud:
 
 dashboard-check:
 	python3 -m py_compile dashboard/radar_dashboard.py
+
+script-check:
+	bash -n start_dvr.sh
+	sh -n scripts/start_m33_early.sh
+	sh -n scripts/log_maintenance.sh
 
 cJSON.o: $(HUD_DIR)/cJSON.c
 	$(CC) $(CFLAGS) -c -o $@ $<

@@ -28,7 +28,7 @@ camera_detect/
 ├── models/                   # NPU 模型与标签
 ├── sounds/                   # 碰撞、摔倒、V2X、录制完成提示音
 ├── nav_tts_cache/            # 预生成导航语音
-├── scripts/                  # 语音资产生成脚本
+├── scripts/                  # M33、日志、启动优化和语音维护脚本
 ├── stai_mpu/                 # NPU 运行库和头文件
 ├── board/                    # 当前板级 DTS 源码与说明
 └── docs/                     # 当前架构及雷达实验文档
@@ -167,10 +167,16 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - 紧急视频：`/run/media/mmcblk0p1/dvr/emergency_*.mp4`
 - 雷达实验数据：`/run/media/mmcblk0p1/dvr/radar_experiments/`
 
+`start_dvr.sh` 会启动日志容量维护：系统日志最多约 40 MiB，Dashboard 日志
+最多约 20 MiB；雷达、同步传感器和 IMU 投递 CSV 分别保留固定数量的轮转文件。
+具体容量、异常恢复验证和 RAM DVR 方案见
+[运行可靠性与存储](docs/RUNTIME_STORAGE.md)。
+
 ## 维护文档
 
 - [完整数据流](docs/DATA_FLOW.md)
 - [雷达实验、CSV 与人工标注](docs/RADAR_EXPERIMENT.md)
 - [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)
 - [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
+- [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)
