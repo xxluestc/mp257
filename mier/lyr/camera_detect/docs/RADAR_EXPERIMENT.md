@@ -112,7 +112,7 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 ```text
 /run/media/mmcblk0p1/dvr/radar_experiments/
 ├── radar_data.csv      # 每帧、每个 objId 的雷达数据
-├── radar_state.json    # Dashboard 最新状态
+├── radar_state.json    # Dashboard 最新状态；无目标时保持 1 Hz 在线心跳
 └── labels.csv          # 人工开始/结束标注
 ```
 

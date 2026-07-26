@@ -438,6 +438,7 @@ typedef struct {
 static radar_direction_filter_t g_direction_filters[256];
 static FILE *g_radar_csv = NULL;
 static char g_radar_state_path[PATH_MAX];
+static uint64_t g_radar_last_publish_ms = 0;
 
 static const char *radar_direction_name(radar_direction_t direction) {
     switch (direction) {
@@ -710,6 +711,7 @@ static void radar_telemetry_publish(const radar_result_t *radar,
     gettimeofday(&tv_now, NULL);
     uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL +
                             (uint64_t)tv_now.tv_usec / 1000ULL;
+    g_radar_last_publish_ms = timestamp_ms;
     char timestamp[40];
     format_timestamp_iso(&tv_now, timestamp, sizeof(timestamp));
 
@@ -2096,6 +2098,17 @@ int main(int argc, char *argv[]) {
                    post-trigger 15s 由帧捕获部分的定时器控制,
                    NPU 丢失目标后由 NPU 逻辑处理缓冲停止 */
             }
+        }
+
+        /* 无目标时也维持 1 Hz 状态心跳，避免 Dashboard 把正常空闲误判为离线。 */
+        if (!target_active) {
+            struct timeval tv_heartbeat;
+            gettimeofday(&tv_heartbeat, NULL);
+            uint64_t heartbeat_ms =
+                (uint64_t)tv_heartbeat.tv_sec * 1000ULL +
+                (uint64_t)tv_heartbeat.tv_usec / 1000ULL;
+            if (heartbeat_ms - g_radar_last_publish_ms >= 1000ULL)
+                radar_telemetry_publish_empty();
         }
 
         /* 处理雷达数据 */
