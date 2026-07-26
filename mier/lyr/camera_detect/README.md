@@ -174,6 +174,7 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 
 ## 维护文档
 
+- [日常操作指南](docs/操作指南.md)
 - [完整数据流](docs/DATA_FLOW.md)
 - [雷达实验、CSV 与人工标注](docs/RADAR_EXPERIMENT.md)
 - [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)

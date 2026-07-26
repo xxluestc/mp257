@@ -45,6 +45,7 @@ script-check:
 	bash -n start_dvr.sh
 	sh -n scripts/start_m33_early.sh
 	sh -n scripts/log_maintenance.sh
+	sh -n scripts/clear_runtime_logs.sh
 
 cJSON.o: $(HUD_DIR)/cJSON.c
 	$(CC) $(CFLAGS) -c -o $@ $<
