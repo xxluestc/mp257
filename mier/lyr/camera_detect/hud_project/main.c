@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -31,13 +32,75 @@
 #define APP_BROADCAST_PORT 8889        // 广播给 APP 的端口
 #define BROADCAST_IP "192.168.152.255" // 广播地址
 #define ALERT_COOLDOWN 60              // 冷却时间（秒）
+#define DELIVERY_LOG_DIR "/run/media/mmcblk0p1/dvr/radar_experiments"
+#define DELIVERY_LOG_PATH DELIVERY_LOG_DIR "/imu_delivery.csv"
 #define NAV_TTS_TEXT_MAX 1024          // 完整导航播报文案最大字节数（UTF-8）
 #define ENABLE_BONE_TTS_INTERFACE 1    // 1：调用骨传导播放接口；0：只打印完整导航文字
 
 // ==================== 全局变量 ====================
 static volatile int keep_running = 1;
 static int oled_initialized = 0;
-static time_t last_alert_ts = 0;
+/* 每类事件独立冷却，避免频繁 road_bump 吞掉真正的 fall_down。 */
+static time_t last_alert_ts[3] = {0, 0, 0};
+static FILE *delivery_log = NULL;
+
+static long long wall_clock_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
+static void delivery_log_open(void) {
+    mkdir(DELIVERY_LOG_DIR, 0775);
+    struct stat st;
+    int needs_header = stat(DELIVERY_LOG_PATH, &st) != 0 || st.st_size == 0;
+    delivery_log = fopen(DELIVERY_LOG_PATH, "a");
+    if (delivery_log == NULL) {
+        fprintf(stderr, "[IMU] delivery log open failed: %s\n", strerror(errno));
+        return;
+    }
+    setvbuf(delivery_log, NULL, _IOLBF, BUFSIZ);
+    if (needs_header) {
+        fprintf(delivery_log,
+                "timestamp_ms,event_id,m33_type,app_type,seq,reason,stage,status,bytes\n");
+    }
+    printf("[IMU] delivery log: %s\n", DELIVERY_LOG_PATH);
+}
+
+static void delivery_log_write(const char *event_id, const char *m33_type,
+                               const char *app_type, int seq,
+                               const char *reason, const char *stage,
+                               const char *status, long bytes) {
+    if (delivery_log == NULL) return;
+    fprintf(delivery_log, "%lld,%s,%s,%s,%d,%s,%s,%s,%ld\n",
+            wall_clock_ms(), event_id ? event_id : "",
+            m33_type ? m33_type : "", app_type ? app_type : "", seq,
+            reason ? reason : "", stage ? stage : "",
+            status ? status : "", bytes);
+}
+
+static int alert_slot(const char *type) {
+    if (type != NULL && strcmp(type, "fall_down") == 0) return 0;
+    if (type != NULL && strcmp(type, "emergency_brake") == 0) return 1;
+    return 2;
+}
+
+static const char *json_string(cJSON *root, const char *name,
+                               const char *fallback) {
+    cJSON *item = cJSON_GetObjectItem(root, name);
+    return cJSON_IsString(item) && item->valuestring != NULL
+               ? item->valuestring : fallback;
+}
+
+static int json_int(cJSON *root, const char *name) {
+    cJSON *item = cJSON_GetObjectItem(root, name);
+    return cJSON_IsNumber(item) ? item->valueint : 0;
+}
+
+static long long json_long_long(cJSON *root, const char *name) {
+    cJSON *item = cJSON_GetObjectItem(root, name);
+    return cJSON_IsNumber(item) ? (long long)item->valuedouble : 0LL;
+}
 
 // ==================== 完整导航语音数据 ====================
 // APP 发送示例：
@@ -221,7 +284,7 @@ static void broadcast_imu_json(const char *json_str) {
     printf("[IMU] recv: %s\n", json_str);
 
     // 去除末尾换行符
-    char clean_json[512];
+    char clean_json[2048];
     strncpy(clean_json, json_str, sizeof(clean_json) - 1);
     clean_json[sizeof(clean_json) - 1] = '\0';
 
@@ -241,35 +304,58 @@ static void broadcast_imu_json(const char *json_str) {
     }
 
     cJSON *type_item = cJSON_GetObjectItem(root, "type");
-    cJSON *message_item = cJSON_GetObjectItem(root, "message");
-
-    if (!type_item) {
+    if (!cJSON_IsString(type_item) || type_item->valuestring == NULL) {
         printf("[IMU] missing type\n");
         cJSON_Delete(root);
         return;
     }
 
     const char *type = type_item->valuestring;
-    const char *message = message_item ? message_item->valuestring : type;
+    const char *message = json_string(root, "message", type);
+    const char *event_id = json_string(root, "event_id", "unknown");
+    const char *m33_type = json_string(root, "m33_type", "unknown");
+    const char *reason = json_string(root, "reason", "unknown");
+    int seq = json_int(root, "seq");
+    delivery_log_write(event_id, m33_type, type, seq, reason,
+                       "hud_received", "ok", len);
 
     time_t now = time(NULL);
-    if (now - last_alert_ts < ALERT_COOLDOWN) {
-        printf("[IMU] cooldown, skip\n");
+    int slot = alert_slot(type);
+    if (now - last_alert_ts[slot] < ALERT_COOLDOWN) {
+        printf("[IMU] same-type cooldown, skip type=%s\n", type);
+        delivery_log_write(event_id, m33_type, type, seq, reason,
+                           "app_broadcast", "suppressed_cooldown", 0);
         cJSON_Delete(root);
         return;
     }
-    last_alert_ts = now;
 
-    char out[256];
+    char out[1536];
     snprintf(out, sizeof(out),
-             "{\"type\":\"%s\",\"message\":\"%s\",\"source\":\"IMU\"}",
-             type, message);
+             "{\"type\":\"%s\",\"message\":\"%s\",\"source\":\"IMU\","
+             "\"event_id\":\"%s\",\"m33_type\":\"%s\",\"reason\":\"%s\","
+             "\"seq\":%d,\"a35_timestamp_ms\":%lld,\"hud_timestamp_ms\":%lld,"
+             "\"requires_sms\":%s,\"tick\":%d,\"acc_norm\":%d,"
+             "\"horiz_acc\":%d,\"z_delta\":%d,\"brake_y_delta\":%d,"
+             "\"ax\":%d,\"ay\":%d,\"az\":%d,\"gx\":%d,\"gy\":%d,"
+             "\"gz\":%d,\"roll\":%d,\"pitch\":%d,\"yaw\":%d}",
+             type, message, event_id, m33_type, reason, seq,
+             json_long_long(root, "a35_timestamp_ms"), wall_clock_ms(),
+             strcmp(type, "fall_down") == 0 ? "true" : "false",
+             json_int(root, "tick"), json_int(root, "acc_norm"),
+             json_int(root, "horiz_acc"), json_int(root, "z_delta"),
+             json_int(root, "brake_y_delta"), json_int(root, "ax"),
+             json_int(root, "ay"), json_int(root, "az"),
+             json_int(root, "gx"), json_int(root, "gy"),
+             json_int(root, "gz"), json_int(root, "roll"),
+             json_int(root, "pitch"), json_int(root, "yaw"));
 
     printf("[IMU] → APP: %s\n", out);
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("[IMU] socket fail");
+        delivery_log_write(event_id, m33_type, type, seq, reason,
+                           "app_broadcast", "socket_failed", -1);
         cJSON_Delete(root);
         return;
     }
@@ -288,8 +374,13 @@ static void broadcast_imu_json(const char *json_str) {
 
     if (sent > 0) {
         printf("[IMU] ✅ UDP broadcast OK (%ld bytes)\n", (long)sent);
+        last_alert_ts[slot] = now;
+        delivery_log_write(event_id, m33_type, type, seq, reason,
+                           "app_broadcast", "sent", (long)sent);
     } else {
         perror("[IMU] ❌ UDP broadcast fail");
+        delivery_log_write(event_id, m33_type, type, seq, reason,
+                           "app_broadcast", "send_failed", (long)sent);
     }
 
     close(sock);
@@ -298,6 +389,8 @@ static void broadcast_imu_json(const char *json_str) {
 
 // ==================== 主程序 ====================
 int main() {
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
     FILE *pidf = fopen("/tmp/hud.pid", "w");
     if (pidf) {
         fprintf(pidf, "%d", getpid());
@@ -308,6 +401,7 @@ int main() {
     signal(SIGTERM, sig_handler);
 
     printf("[MAIN] HUD starting...\n");
+    delivery_log_open();
 
     // ===== OLED 初始化 =====
     if (oled_init() != 0) {
@@ -363,7 +457,7 @@ int main() {
     fds[1].events = POLLIN;
 
     char buffer[2048];  // 同时容纳 OLED 简单指令和完整 UTF-8 导航文案
-    char imu_buffer[1024];
+    char imu_buffer[2048];
     time_t last_recv_time = 0;
     int has_signal = 0;
 
@@ -430,6 +524,7 @@ int main() {
     printf("[MAIN] exiting...\n");
     udp_close(nav_sock);
     close(imu_sock);
+    if (delivery_log != NULL) fclose(delivery_log);
     if (oled_initialized) oled_close();
     return 0;
 }

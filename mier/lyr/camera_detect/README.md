@@ -6,7 +6,7 @@
 - 毫米波雷达多目标解析、危险目标选择、方向滤波和碰撞告警
 - IMU 摔倒与 V2X RPMsg 事件
 - LED、骨传导音频、OLED/HUD 和手机导航 UDP
-- 雷达 CSV 记录、本地 Web Dashboard 与人工实验标注
+- 雷达/摄像头/IMU 同步记录、本地 Web Dashboard 与人工实验标注
 
 雷达增强是在原有融合链路上增量实现的，没有改动 NPU、DVR、LED、Audio
 和 IMU 摔倒的既有决策逻辑。
@@ -115,13 +115,15 @@ RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
 http://<开发板IP>:8080
 ```
 
-页面显示当前危险目标、距离、速度、角度、TTC、方向和告警状态，并维护
-四条实时曲线。五类测试事件均可点击开始/结束，结果保存到：
+页面显示当前危险目标、四条实时曲线、摄像头/NPU 状态、M33 IMU 事件、
+摔倒 UDP 投递链和跨传感器同步时间线。五类测试事件均可点击开始/结束，结果保存到：
 
 ```text
 /run/media/mmcblk0p1/dvr/radar_experiments/
 ├── radar_data.csv
 ├── radar_state.json
+├── sensor_events.csv
+├── imu_delivery.csv
 └── labels.csv
 ```
 
@@ -136,9 +138,9 @@ python3 dashboard/radar_dashboard.py \
 详细的字段、危险目标算法和现场测试步骤见
 [雷达实验文档](docs/RADAR_EXPERIMENT.md)。
 
-## 当前离线测试方法
+## 基础测试方法
 
-开发板不在线时可执行：
+主机侧可执行：
 
 ```bash
 make
@@ -146,9 +148,14 @@ bash -n start_dvr.sh
 python3 -m py_compile dashboard/radar_dashboard.py
 ```
 
-Dashboard 可使用临时 `radar_state.json` 验证页面和标注 API。硬件恢复在线后，
-再依照 [雷达实验文档](docs/RADAR_EXPERIMENT.md) 完成正后方、左后方、右后方
-快速接近，以及触发/不触发接近的现场标定。
+板端启动后确认 `dvr.service`、`radar_fusion`、HUD 和 Dashboard 都在运行，
+再检查 `/api/state` 的 `stale=false` 以及 `/api/events` 中 CAM/NPU、IMU 和
+HUD 事件时间线。随后依照 [雷达实验文档](docs/RADAR_EXPERIMENT.md) 完成
+正后方、左后方、右后方快速接近，以及触发/不触发接近的现场标定。
+
+`start_dvr.sh -t N` 只模拟 A35 本地 LED/音频/DVR 摔倒动作，不经过 M33、
+HUD 或手机短信，不能作为端到端短信测试。完整边界见
+[摔倒与短信链路](docs/FALL_SMS_PIPELINE.md)。
 
 ## 运行依赖与输出
 
@@ -164,4 +171,5 @@ Dashboard 可使用临时 `radar_state.json` 验证页面和标注 API。硬件�
 
 - [完整数据流](docs/DATA_FLOW.md)
 - [雷达实验、CSV 与人工标注](docs/RADAR_EXPERIMENT.md)
+- [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)

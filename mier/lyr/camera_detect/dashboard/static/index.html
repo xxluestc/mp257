@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b1117">
-  <title>Rear radar · 实测标定台</title>
+  <title>Rider Safety · 多传感器同步台</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div>
       <p class="eyebrow">STM32MP257 · RIDER SAFETY LAB</p>
-      <h1>后向雷达实测标定台</h1>
+      <h1>骑行安全多传感器同步台</h1>
     </div>
     <div class="topbar-status">
       <span id="connection-chip" class="status-chip status-offline">
@@ -91,6 +91,69 @@
           <canvas id="chart-ttc" aria-label="TTC 实时曲线"></canvas>
         </article>
       </div>
+    </section>
+
+    <section class="sensor-section" aria-label="多传感器同步状态">
+      <div class="section-heading">
+        <div>
+          <p class="section-label">RADAR · CAMERA/NPU · M33 IMU</p>
+          <h2>同步观测与摔倒投递链</h2>
+        </div>
+        <p>所有记录共用 Unix 毫秒时间戳，可与 labels.csv 对齐</p>
+      </div>
+
+      <div class="sensor-summary">
+        <article class="sensor-card sensor-camera">
+          <span class="sensor-code">CAM / NPU</span>
+          <strong id="camera-state">等待推理</strong>
+          <p id="camera-detail">尚无摄像头检测日志</p>
+          <time id="camera-age">—</time>
+        </article>
+        <article class="sensor-card sensor-imu">
+          <span class="sensor-code">M33 / IMU</span>
+          <strong id="imu-state">等待事件</strong>
+          <p id="imu-detail">尚无 M 核异常上报</p>
+          <time id="imu-age">—</time>
+        </article>
+        <article class="sensor-card sensor-sms">
+          <span class="sensor-code">FALL / DELIVERY</span>
+          <strong id="sms-state">手机 / SMS 未确认</strong>
+          <p id="sms-detail">当前协议没有 App 或短信回执</p>
+          <time id="fall-age">—</time>
+        </article>
+      </div>
+
+      <div id="imu-diagnostic" class="diagnostic-strip" hidden></div>
+
+      <article class="delivery-panel">
+        <div class="delivery-head">
+          <div>
+            <span class="sensor-code">LATEST FALL PATH</span>
+            <strong>最近一次摔倒链路</strong>
+          </div>
+          <span id="fall-event-id">NO FALL EVENT</span>
+        </div>
+        <div class="delivery-chain" aria-label="摔倒事件投递阶段">
+          <div data-stage="m33"><i></i><span>M33 判断</span><small>等待</small></div>
+          <div data-stage="a35"><i></i><span>A35 接收</span><small>等待</small></div>
+          <div data-stage="hud"><i></i><span>HUD 接收</span><small>等待</small></div>
+          <div data-stage="udp"><i></i><span>App UDP 广播</span><small>等待</small></div>
+          <div data-stage="sms" class="unknown"><i></i><span>手机 / SMS</span><small>无回执</small></div>
+        </div>
+      </article>
+
+      <article class="timeline-panel">
+        <div class="timeline-head">
+          <div>
+            <span class="sensor-code">SYNCHRONIZED EVENT RAIL</span>
+            <strong>跨传感器事件时间线</strong>
+          </div>
+          <span>最新在上 · 自动刷新</span>
+        </div>
+        <div id="timeline-list" class="timeline-list">
+          <p class="timeline-empty">等待 sensor_events.csv 与雷达数据</p>
+        </div>
+      </article>
     </section>
 
     <section class="experiment-grid">

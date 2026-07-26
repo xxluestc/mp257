@@ -37,4 +37,5 @@ make
 - [核心工程 README](lyr/camera_detect/README.md)
 - [数据流](lyr/camera_detect/docs/DATA_FLOW.md)
 - [雷达实验与标注](lyr/camera_detect/docs/RADAR_EXPERIMENT.md)
+- [M33 摔倒与短信投递链](lyr/camera_detect/docs/FALL_SMS_PIPELINE.md)
 - [设备树说明](lyr/camera_detect/board/DEVICE_TREE.md)

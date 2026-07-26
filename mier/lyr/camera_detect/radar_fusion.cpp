@@ -437,6 +437,8 @@ typedef struct {
 
 static radar_direction_filter_t g_direction_filters[256];
 static FILE *g_radar_csv = NULL;
+static FILE *g_sensor_csv = NULL;
+static pthread_mutex_t g_sensor_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char g_radar_state_path[PATH_MAX];
 static uint64_t g_radar_last_publish_ms = 0;
 
@@ -656,6 +658,86 @@ static void format_timestamp_iso(const struct timeval *tv,
     strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &tm_utc);
     int milliseconds = (int)(tv->tv_usec / 1000L);
     snprintf(out, out_size, "%s.%03dZ", date, milliseconds);
+}
+
+static void csv_sanitize(const char *input, char *output, size_t output_size) {
+    if (output_size == 0) return;
+    size_t used = 0;
+    if (input != NULL) {
+        for (const char *p = input; *p != '\0' && used + 1 < output_size; p++) {
+            char ch = *p;
+            if (ch == ',' || ch == '\r' || ch == '\n' || ch == '"') ch = ' ';
+            output[used++] = ch;
+        }
+    }
+    output[used] = '\0';
+}
+
+static int sensor_telemetry_init(void) {
+    if (mkdir_recursive(g_radar_log_dir) != 0) return -1;
+    char csv_path[PATH_MAX];
+    if (snprintf(csv_path, sizeof(csv_path), "%s/sensor_events.csv",
+                 g_radar_log_dir) >= (int)sizeof(csv_path)) return -1;
+
+    struct stat st;
+    int needs_header = (stat(csv_path, &st) != 0 || st.st_size == 0);
+    g_sensor_csv = fopen(csv_path, "a");
+    if (g_sensor_csv == NULL) {
+        fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n",
+                csv_path, strerror(errno));
+        return -1;
+    }
+    setvbuf(g_sensor_csv, NULL, _IOLBF, BUFSIZ);
+    if (needs_header) {
+        fprintf(g_sensor_csv,
+                "timestamp,timestamp_ms,source,event_type,status,event_id,"
+                "label,score,count,seq,reason,details\n");
+    }
+    printf("[系统] [SENSOR_DATA] CSV: %s\n", csv_path);
+    return 0;
+}
+
+static void sensor_event_log(const char *source, const char *event_type,
+                             const char *status, const char *event_id,
+                             const char *label, float score, int count,
+                             int seq, const char *reason,
+                             const char *details) {
+    if (g_sensor_csv == NULL) return;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint64_t timestamp_ms = (uint64_t)tv.tv_sec * 1000ULL +
+                            (uint64_t)tv.tv_usec / 1000ULL;
+    char timestamp[40], safe_source[32], safe_type[48], safe_status[32];
+    char safe_id[96], safe_label[96], safe_reason[96], safe_details[512];
+    format_timestamp_iso(&tv, timestamp, sizeof(timestamp));
+    csv_sanitize(source, safe_source, sizeof(safe_source));
+    csv_sanitize(event_type, safe_type, sizeof(safe_type));
+    csv_sanitize(status, safe_status, sizeof(safe_status));
+    csv_sanitize(event_id, safe_id, sizeof(safe_id));
+    csv_sanitize(label, safe_label, sizeof(safe_label));
+    csv_sanitize(reason, safe_reason, sizeof(safe_reason));
+    csv_sanitize(details, safe_details, sizeof(safe_details));
+
+    pthread_mutex_lock(&g_sensor_csv_mutex);
+    fprintf(g_sensor_csv, "%s,%llu,%s,%s,%s,%s,%s,",
+            timestamp, (unsigned long long)timestamp_ms, safe_source,
+            safe_type, safe_status, safe_id, safe_label);
+    if (score >= 0.0f) fprintf(g_sensor_csv, "%.4f", score);
+    fputc(',', g_sensor_csv);
+    if (count >= 0) fprintf(g_sensor_csv, "%d", count);
+    fputc(',', g_sensor_csv);
+    if (seq >= 0) fprintf(g_sensor_csv, "%d", seq);
+    fprintf(g_sensor_csv, ",%s,%s\n", safe_reason, safe_details);
+    pthread_mutex_unlock(&g_sensor_csv_mutex);
+}
+
+static void sensor_telemetry_close(void) {
+    pthread_mutex_lock(&g_sensor_csv_mutex);
+    if (g_sensor_csv != NULL) {
+        fclose(g_sensor_csv);
+        g_sensor_csv = NULL;
+    }
+    pthread_mutex_unlock(&g_sensor_csv_mutex);
 }
 
 static int radar_telemetry_init(void) {
@@ -1419,13 +1501,13 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
  *
  * 与 v2x_alert_link.sh 行为一致：UDP 127.0.0.1:8890 -> HUD -> App
  */
-static void udp_send_to_hud(const char *json) {
-    if (json == NULL || json[0] == '\0') return;
+static int udp_send_to_hud(const char *json) {
+    if (json == NULL || json[0] == '\0') return -1;
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         fprintf(stderr, "[IMU_FWD] socket failed: %s\n", strerror(errno));
-        return;
+        return -1;
     }
 
     struct sockaddr_in addr;
@@ -1435,7 +1517,7 @@ static void udp_send_to_hud(const char *json) {
     if (inet_pton(AF_INET, HUD_INPUT_IP, &addr.sin_addr) <= 0) {
         fprintf(stderr, "[IMU_FWD] inet_pton failed: %s\n", strerror(errno));
         close(sock);
-        return;
+        return -1;
     }
 
     ssize_t sent = sendto(sock, json, strlen(json), 0,
@@ -1447,6 +1529,7 @@ static void udp_send_to_hud(const char *json) {
                sent, HUD_INPUT_IP, HUD_INPUT_PORT);
     }
     close(sock);
+    return sent >= 0 ? (int)sent : -1;
 }
 
 /**
@@ -1505,7 +1588,24 @@ static void forward_imu_alert(const char *line) {
     int lon_1e7       = parse_kv_int(line, "lon_1e7");
     int speed_cms     = parse_kv_int(line, "speed_cms");
     int heading_cdeg  = parse_kv_int(line, "heading_cdeg");
-    time_t now = time(NULL);
+    int tick           = parse_kv_int(line, "tick");
+    int acc_norm       = parse_kv_int(line, "acc_norm");
+    int horiz_acc      = parse_kv_int(line, "horiz_acc");
+    int z_delta        = parse_kv_int(line, "z_delta");
+    int brake_y_delta  = parse_kv_int(line, "brake_y_delta");
+    int ax             = parse_kv_int(line, "ax");
+    int ay             = parse_kv_int(line, "ay");
+    int az             = parse_kv_int(line, "az");
+    int gx             = parse_kv_int(line, "gx");
+    int gy             = parse_kv_int(line, "gy");
+    int gz             = parse_kv_int(line, "gz");
+    int roll           = parse_kv_int(line, "roll");
+    int pitch          = parse_kv_int(line, "pitch");
+    int yaw            = parse_kv_int(line, "yaw");
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL +
+                            (uint64_t)tv_now.tv_usec / 1000ULL;
 
     const char *reason = strstr(line, "reason=");
     char reason_buf[64] = "unknown";
@@ -1519,17 +1619,44 @@ static void forward_imu_alert(const char *line) {
         }
     }
 
-    char json[512];
+    char event_id[96];
+    snprintf(event_id, sizeof(event_id), "m33-%d-%llu", seq,
+             (unsigned long long)timestamp_ms);
+    char details[512];
+    snprintf(details, sizeof(details),
+             "tick=%d acc_norm=%d horiz_acc=%d z_delta=%d brake_y_delta=%d "
+             "ax=%d ay=%d az=%d gx=%d gy=%d gz=%d roll=%d pitch=%d yaw=%d",
+             tick, acc_norm, horiz_acc, z_delta, brake_y_delta,
+             ax, ay, az, gx, gy, gz, roll, pitch, yaw);
+    sensor_event_log("imu_m33", m33_type, "received", event_id, NULL,
+                     -1.0f, -1, seq, reason_buf, details);
+
+    char json[1536];
     snprintf(json, sizeof(json),
              "{\"type\":\"%s\",\"message\":\"%s\",\"source\":\"M33_A35\","
              "\"m33_type\":\"%s\",\"reason\":\"%s\",\"seq\":%d,"
-             "\"timestamp\":%ld,\"gps_valid\":%d,\"lat_1e7\":%d,"
-             "\"lon_1e7\":%d,\"speed_cms\":%d,\"heading_cdeg\":%d}",
+             "\"event_id\":\"%s\",\"a35_timestamp_ms\":%llu,"
+             "\"requires_sms\":%s,\"tick\":%d,\"acc_norm\":%d,"
+             "\"horiz_acc\":%d,\"z_delta\":%d,\"brake_y_delta\":%d,"
+             "\"ax\":%d,\"ay\":%d,\"az\":%d,\"gx\":%d,\"gy\":%d,"
+             "\"gz\":%d,\"roll\":%d,\"pitch\":%d,\"yaw\":%d,"
+             "\"gps_valid\":%d,\"lat_1e7\":%d,\"lon_1e7\":%d,"
+             "\"speed_cms\":%d,\"heading_cdeg\":%d}",
              app_type, message, m33_type, reason_buf, seq,
-             (long)now, gps_valid, lat_1e7, lon_1e7, speed_cms, heading_cdeg);
+             event_id, (unsigned long long)timestamp_ms,
+             strcmp(m33_type, "fall") == 0 ? "true" : "false",
+             tick, acc_norm, horiz_acc, z_delta, brake_y_delta,
+             ax, ay, az, gx, gy, gz, roll, pitch, yaw,
+             gps_valid, lat_1e7, lon_1e7, speed_cms, heading_cdeg);
 
     printf("[系统] [IMU_FWD] Forwarding IMU event: type=%s\n", app_type);
-    udp_send_to_hud(json);
+    int bytes = udp_send_to_hud(json);
+    char send_details[96];
+    snprintf(send_details, sizeof(send_details), "udp_bytes=%d hud_port=%d",
+             bytes, HUD_INPUT_PORT);
+    sensor_event_log("a35_hud", app_type,
+                     bytes >= 0 ? "sent" : "failed", event_id, NULL,
+                     -1.0f, -1, seq, reason_buf, send_details);
 }
 
 /* ======================== 测试模式: 模拟 IMU 摔倒触发 ======================== */
@@ -1853,6 +1980,9 @@ int main(int argc, char *argv[]) {
     }
     printf("[系统] [FUSION] Running... Press Ctrl+C to stop.\n\n");
 
+    /* 必须在线程启动前打开共享传感器日志，保证首条 M33 事件不丢失。 */
+    sensor_telemetry_init();
+
     /* 4. 启动 RPMsg 接收线程 (M33 IMU/V2X alerts) */
     pthread_t rpmsg_tid;
     pthread_create(&rpmsg_tid, NULL, rpmsg_thread, NULL);
@@ -1994,17 +2124,20 @@ int main(int argc, char *argv[]) {
                         frame_results_t results = detector->detect(rgb_nn);
 
                         int has_road = 0;
+                        int road_count = 0;
                         const char *best_label = "";
                         float best_score = 0;
                         for (size_t i = 0; i < results.objects.size(); i++) {
                             if (is_road_user(results.objects[i].class_index)) {
                                 has_road = 1;
+                                road_count++;
                                 if (results.objects[i].score > best_score) {
                                     best_score = results.objects[i].score;
                                     best_label = detector->get_label(results.objects[i].class_index).c_str();
                                 }
                             }
                         }
+
                         if (has_road && best_label[0]) {
                             snprintf(g_last_road_user_label, sizeof(g_last_road_user_label), "%s", best_label);
                             g_last_road_user_score = best_score;
@@ -2053,6 +2186,17 @@ int main(int argc, char *argv[]) {
                                 }
                             }
                         }
+
+                        char npu_details[192];
+                        snprintf(npu_details, sizeof(npu_details),
+                                 "objects=%zu inference_ms=%.1f confirmed=%d active=%d",
+                                 results.objects.size(), results.inference_time_ms,
+                                 npu_confirmed, npu_has_target);
+                        sensor_event_log("camera_npu", "npu_inference",
+                                         has_road ? "target" : "clear", NULL,
+                                         has_road ? best_label : NULL,
+                                         has_road ? best_score : -1.0f,
+                                         road_count, -1, NULL, npu_details);
 
                         /* === 显示 NPU 中间结果 (调试级别，不进终端) === */
                         if (npu_has_target || target_active) {
@@ -2275,6 +2419,7 @@ int main(int argc, char *argv[]) {
     }
     close(radar_fd);
     radar_telemetry_close();
+    sensor_telemetry_close();
 
     printf("[系统] [FUSION] Done.\n");
     return 0;

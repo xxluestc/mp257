@@ -16,8 +16,8 @@ BSD 串口帧
                              └─ 人工开始/结束标签 → labels.csv
 ```
 
-`radar_fusion` 的原有 NPU、DVR、LED、Audio、IMU 摔倒触发链路没有改变；
-Dashboard 只消费雷达状态文件。
+Dashboard 同时消费雷达、摄像头/NPU、M33 IMU 和 HUD 投递日志；NPU、DVR、
+LED、Audio 与 M33 摔倒决策本身没有重构。
 
 ## 危险目标选择
 
@@ -46,7 +46,7 @@ angle >= RIGHT_ANGLE   → RIGHT
 
 ## 配置
 
-将 [`radar_config.example`](radar_config.example) 复制为开发板上的
+将 [`radar_config.example`](../radar_config.example) 复制为开发板上的
 `/xxl/camera_detect/radar_config`：
 
 ```ini
@@ -113,6 +113,8 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 /run/media/mmcblk0p1/dvr/radar_experiments/
 ├── radar_data.csv      # 每帧、每个 objId 的雷达数据
 ├── radar_state.json    # Dashboard 最新状态；无目标时保持 1 Hz 在线心跳
+├── sensor_events.csv   # 摄像头/NPU、M33 IMU、A35→HUD 同步事件
+├── imu_delivery.csv    # HUD 接收、冷却与 App UDP 广播结果
 └── labels.csv          # 人工开始/结束标注
 ```
 
@@ -127,8 +129,13 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 - `radar_alert`
 
 `labels.csv` 中每次点击都会写一行。开始和结束共享同一个 `event_id`，
-结束行额外保存 `duration_ms`。两份 CSV 都包含 `timestamp_ms`，可以直接
+结束行额外保存 `duration_ms`。所有 CSV 都包含 `timestamp_ms`，可以直接
 按时间范围对齐。
+
+`sensor_events.csv` 统一字段为 `timestamp_ms/source/event_type/status/event_id`
+以及 NPU 的 `label/score/count`、IMU 的 `seq/reason/details`。`imu_delivery.csv`
+用同一个 `event_id` 记录 `hud_received`、`app_broadcast` 及 sent/failed/cooldown。
+手机短信尚无 ACK，面板不会把 UDP sent 显示成 SMS 成功。
 
 ## 当前实测方法
 

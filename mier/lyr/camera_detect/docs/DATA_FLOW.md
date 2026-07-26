@@ -23,7 +23,7 @@
 │   │                    +---> 播放碰撞告警音                                    │
 │   │                    +---> DVR 保存前后15秒为 MP4                            │
 │   │                                                                         │
-│   ├── RPMsg /dev/ttyRPMSG0 (M33核) ──IMU摔倒/V2X告警──> 触发DVR保存/语音播报  │
+│   ├── RPMsg /dev/ttyRPMSG0 (M33核) ──IMU_ALERT──> LED/DVR + HUD/App UDP      │
 │   │                                                                         │
 │   └── UDP 8888 (手机APP) ──导航/异常/预警──> nav_tts 线程                     │
 │                              ├── navi:       OLED显示 + <=50m 转向播报         │
@@ -49,6 +49,7 @@
    - resize 到模型输入尺寸
    - `NpuDetector::detect()` 推理
    - 只关心 `ROAD_USER_CLASSES`：person、bicycle、car、bus、truck、motorcycle
+   - 每次推理将目标类型、置信度、数量、耗时和确认状态写入 `sensor_events.csv`
 
 4. **NPU 状态机**
    - 连续 `NPU_CONFIRM_FRAMES` 帧看到道路用户 → `npu_confirmed = 1`
@@ -99,14 +100,19 @@ NPU 看到目标 ─────────────────────
 - 编码使用 `ffmpeg` 子进程，不阻塞主循环
 - 编码完成后主循环回收子进程并复位告警状态
 
-## 4. RPMsg 数据流
+## 4. RPMsg 与短信投递数据流
 
 M33 核通过 `/dev/ttyRPMSG0` 发送两类消息：
 
 | 消息前缀 | 含义 | 处理 |
 |---|---|---|
-| `FALL:` | IMU 检测到摔倒 | `g_imu_fall_alert = 1`，若摄像头可用则触发 DVR 保存，播放 `fall_alert.wav` |
+| `IMU_ALERT` | `fall / hard_brake / road_bump` | 摔倒时置 `g_imu_fall_alert` 并保存 DVR；全部事件写同步日志并转发 HUD/App |
 | `V2X:` | V2X 预警（如盲区来车） | 解析方向字段，播放对应方向 `v2x_*.wav`，2 秒冷却避免连播 |
+
+HUD 对三类 IMU 事件分别执行 60 秒同类冷却，再广播到手机 UDP 8889。
+该协议目前没有手机或短信回执，所以 LED 亮、开发板 UDP 成功都不能证明短信已发出。
+详细阈值、已修复的跨类型冷却问题和排查方法见
+[M33 摔倒判断与手机短信投递链路](FALL_SMS_PIPELINE.md)。
 
 ## 5. UDP 8888 导航/异常/预警数据流
 
@@ -197,7 +203,7 @@ M33 核通过 `/dev/ttyRPMSG0` 发送两类消息：
 | 源文件 | 类型 | 核心职责 |
 |---|---|---|
 | [radar_fusion.cpp](../radar_fusion.cpp) | C++ | 主程序：雷达 BSD 解析、摄像头采集、NPU 道路用户验证、DVR 缓冲/编码、LED/音频告警、RPMsg 告警、导航 UDP 集成 |
-| [dashboard/radar_dashboard.py](../dashboard/radar_dashboard.py) | Python | 本地 Web/API 服务，读取雷达状态并写入 `labels.csv` |
+| [dashboard/radar_dashboard.py](../dashboard/radar_dashboard.py) | Python | 本地 Web/API 服务，合并雷达/NPU/IMU/投递时间线并写入 `labels.csv` |
 | [RADAR_EXPERIMENT.md](RADAR_EXPERIMENT.md) | 文档 | 雷达阈值、Dashboard、CSV 字段与现场标注方法 |
 | [nav_tts.c](../nav_tts.c) | C | HUD 导航 UDP 接收、OLED 显示、骨传导语音播报（含 danger_tts 本地兜底） |
 | [nav_tts.h](../nav_tts.h) | C 头 | 导航语音接口与 danger_tts handler 类型定义 |

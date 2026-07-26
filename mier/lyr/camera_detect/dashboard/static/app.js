@@ -19,6 +19,7 @@ const history = {
 let activeLabels = {};
 let lastSampleTimestamp = null;
 let toastTimer = null;
+let latestEventPayload = null;
 
 const charts = [
   { key: "distance", canvas: $("chart-distance"), color: "#31c7bc", unit: "m" },
@@ -274,6 +275,140 @@ function renderState(state) {
   if (previousSignature !== nextSignature) renderEvents();
 }
 
+function ageText(timestampMs) {
+  const age = Math.max(0, Date.now() - Number(timestampMs || 0));
+  if (!timestampMs) return "—";
+  if (age < 1000) return "刚刚";
+  if (age < 60000) return `${Math.floor(age / 1000)} 秒前`;
+  return `${Math.floor(age / 60000)} 分钟前`;
+}
+
+function setDeliveryStage(name, state, note) {
+  const stage = document.querySelector(`[data-stage="${name}"]`);
+  if (!stage) return;
+  stage.classList.remove("ok", "failed", "unknown");
+  stage.classList.add(state);
+  stage.querySelector("small").textContent = note;
+}
+
+function sourceName(source) {
+  return ({
+    radar: "RADAR",
+    camera_npu: "CAM/NPU",
+    imu_m33: "M33/IMU",
+    a35_hud: "A35→HUD",
+    hud_delivery: "HUD→APP",
+    manual_label: "LABEL",
+  })[source] || String(source || "EVENT").toUpperCase();
+}
+
+function eventSummary(event) {
+  if (event.source === "camera_npu") {
+    return event.status === "target"
+      ? `检测到 ${event.label || "道路用户"}${event.score ? ` · ${Number(event.score).toFixed(2)}` : ""}`
+      : "未检测到道路用户";
+  }
+  if (event.source === "radar") return `${event.label} · ${event.reason || "UNKNOWN"}`;
+  if (event.source === "manual_label") return `${event.label} · ${event.status}`;
+  if (event.source === "hud_delivery") return `${event.label} · ${event.status}`;
+  return `${event.event_type}${event.reason ? ` · ${event.reason}` : ""}`;
+}
+
+function renderTimeline(events) {
+  const list = $("timeline-list");
+  list.innerHTML = "";
+  const sourceCounts = {};
+  const selected = [];
+  for (const event of events || []) {
+    const cap = event.source === "camera_npu" ? 12 : event.source === "radar" ? 10 : 30;
+    sourceCounts[event.source] = (sourceCounts[event.source] || 0) + 1;
+    if (sourceCounts[event.source] <= cap) selected.push(event);
+    if (selected.length >= 48) break;
+  }
+  if (!selected.length) {
+    list.innerHTML = '<p class="timeline-empty">暂无同步事件</p>';
+    return;
+  }
+  for (const event of selected) {
+    const row = document.createElement("div");
+    row.className = `timeline-row source-${event.source}`;
+    const time = document.createElement("time");
+    time.textContent = new Date(event.timestamp_ms).toLocaleTimeString("zh-CN", {
+      hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
+      fractionalSecondDigits: 3,
+    });
+    const dot = document.createElement("i");
+    const content = document.createElement("div");
+    const head = document.createElement("div");
+    const source = document.createElement("span");
+    source.textContent = sourceName(event.source);
+    const summary = document.createElement("strong");
+    summary.textContent = eventSummary(event);
+    head.append(source, summary);
+    const detail = document.createElement("small");
+    detail.textContent = event.details || `event=${event.event_type}`;
+    content.append(head, detail);
+    row.append(time, dot, content);
+    list.append(row);
+  }
+}
+
+function renderSensorEvents(payload) {
+  latestEventPayload = payload;
+  const camera = payload.latest_camera;
+  $("camera-state").textContent = camera
+    ? (camera.status === "target" ? "检测到道路用户" : "画面无目标")
+    : "等待推理";
+  $("camera-detail").textContent = camera
+    ? (camera.status === "target"
+      ? `${camera.label || "目标"} · 置信度 ${camera.score || "—"} · 数量 ${camera.count || 0}`
+      : camera.details || "NPU 推理正常")
+    : "尚无摄像头检测日志";
+  $("camera-age").textContent = ageText(camera?.timestamp_ms);
+
+  const imu = payload.latest_imu;
+  $("imu-state").textContent = imu ? imu.event_type : "等待事件";
+  $("imu-detail").textContent = imu
+    ? `SEQ ${imu.seq || "—"} · ${imu.reason || "无原因字段"}`
+    : "尚无 M 核异常上报";
+  $("imu-age").textContent = ageText(imu?.timestamp_ms);
+
+  const fall = payload.latest_fall;
+  $("fall-event-id").textContent = fall?.event_id || "NO FALL EVENT";
+  $("fall-age").textContent = ageText(fall?.timestamp_ms);
+  const chain = payload.fall_chain || [];
+  const a35 = chain.find((event) => event.source === "a35_hud");
+  const hud = chain.find((event) => event.source === "hud_delivery" && event.label === "hud_received");
+  const udp = chain.find((event) => event.source === "hud_delivery" && event.label === "app_broadcast");
+  setDeliveryStage("m33", fall ? "ok" : "unknown", fall ? "已判断" : "等待");
+  setDeliveryStage("a35", a35?.status === "sent" ? "ok" : a35 ? "failed" : "unknown", a35?.status || "等待");
+  setDeliveryStage("hud", hud?.status === "ok" ? "ok" : hud ? "failed" : "unknown", hud?.status || "等待");
+  setDeliveryStage("udp", udp?.status === "sent" ? "ok" : udp ? "failed" : "unknown", udp?.status || "等待");
+  setDeliveryStage("sms", "unknown", "协议无回执");
+  $("sms-state").textContent = udp?.status === "sent" ? "已广播，SMS 未确认" : "手机 / SMS 未确认";
+  $("sms-detail").textContent = udp
+    ? `App UDP：${udp.status}；短信结果无法由开发板确认`
+    : "当前协议没有 App 或短信回执";
+
+  const diagnostics = payload.diagnostics || {};
+  const banner = $("imu-diagnostic");
+  banner.hidden = !diagnostics.road_bump_frequent;
+  if (!banner.hidden) {
+    banner.textContent = `IMU 标定提示：最近 60 秒出现 ${diagnostics.road_bumps_60s} 次 road_bump，当前静态环境仍可能误报，建议室外采样后再调整 M33 阈值。`;
+  }
+  renderTimeline(payload.events);
+}
+
+async function pollEvents() {
+  try {
+    const response = await fetch("/api/events?limit=160", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderSensorEvents(await response.json());
+  } catch (_) {
+    $("camera-state").textContent = "同步接口断开";
+  }
+}
+
 async function pollState() {
   try {
     const response = await fetch("/api/state", { cache: "no-store" });
@@ -288,6 +423,8 @@ async function pollState() {
 
 renderEvents();
 pollState();
+pollEvents();
 window.setInterval(pollState, 500);
+window.setInterval(pollEvents, 1000);
 window.setInterval(updateEventTimers, 250);
 window.addEventListener("resize", () => charts.forEach(drawChart));

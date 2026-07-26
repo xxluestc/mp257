@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 EVENT_TYPES = {
@@ -72,6 +72,9 @@ class RadarStore:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.data_dir / "radar_state.json"
         self.labels_path = self.data_dir / "labels.csv"
+        self.radar_csv_path = self.data_dir / "radar_data.csv"
+        self.sensor_events_path = self.data_dir / "sensor_events.csv"
+        self.imu_delivery_path = self.data_dir / "imu_delivery.csv"
         self.lock = threading.Lock()
         self.active: dict[str, dict[str, Any]] = {}
         self._restore_active_labels()
@@ -91,6 +94,146 @@ class RadarStore:
     def active_labels(self) -> dict[str, dict[str, Any]]:
         with self.lock:
             return {key: dict(value) for key, value in self.active.items()}
+
+    @staticmethod
+    def _tail_csv(path: Path, max_rows: int = 240) -> list[dict[str, str]]:
+        """Read a bounded tail while retaining the CSV header."""
+        try:
+            with path.open("rb") as source:
+                header = source.readline().decode("utf-8", "replace")
+                source.seek(0, 2)
+                size = source.tell()
+                start = max(len(header.encode("utf-8")), size - 262_144)
+                source.seek(start)
+                if start > len(header.encode("utf-8")):
+                    source.readline()
+                tail = source.read().decode("utf-8", "replace")
+            lines = tail.splitlines()[-max_rows:]
+            if not header.strip() or not lines:
+                return []
+            return list(csv.DictReader([header.rstrip("\r\n"), *lines]))
+        except (FileNotFoundError, OSError, csv.Error):
+            return []
+
+    @staticmethod
+    def _as_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    def read_events(self, limit: int = 120) -> dict[str, Any]:
+        events: list[dict[str, Any]] = []
+        sensor_rows = self._tail_csv(self.sensor_events_path)
+        delivery_rows = self._tail_csv(self.imu_delivery_path)
+        label_rows = self._tail_csv(self.labels_path, 120)
+        radar_rows = self._tail_csv(self.radar_csv_path, 160)
+
+        for row in sensor_rows:
+            events.append({
+                "timestamp_ms": self._as_int(row.get("timestamp_ms")),
+                "source": row.get("source") or "sensor",
+                "event_type": row.get("event_type") or "event",
+                "status": row.get("status") or "",
+                "event_id": row.get("event_id") or "",
+                "label": row.get("label") or "",
+                "score": row.get("score") or "",
+                "count": row.get("count") or "",
+                "seq": row.get("seq") or "",
+                "reason": row.get("reason") or "",
+                "details": row.get("details") or "",
+            })
+
+        for row in delivery_rows:
+            events.append({
+                "timestamp_ms": self._as_int(row.get("timestamp_ms")),
+                "source": "hud_delivery",
+                "event_type": row.get("app_type") or row.get("m33_type") or "imu",
+                "status": row.get("status") or "",
+                "event_id": row.get("event_id") or "",
+                "label": row.get("stage") or "",
+                "score": "",
+                "count": "",
+                "seq": row.get("seq") or "",
+                "reason": row.get("reason") or "",
+                "details": f"stage={row.get('stage', '')} bytes={row.get('bytes', '')}",
+            })
+
+        for row in label_rows:
+            events.append({
+                "timestamp_ms": self._as_int(row.get("timestamp_ms")),
+                "source": "manual_label",
+                "event_type": row.get("event_type") or "label",
+                "status": row.get("action") or "",
+                "event_id": row.get("event_id") or "",
+                "label": row.get("event_name") or "",
+                "score": "",
+                "count": "",
+                "seq": "",
+                "reason": "",
+                "details": f"direction={row.get('direction', '')} obj={row.get('dangerous_objId', '')}",
+            })
+
+        for row in radar_rows:
+            if row.get("is_current_dangerous") != "1":
+                continue
+            events.append({
+                "timestamp_ms": self._as_int(row.get("timestamp_ms")),
+                "source": "radar",
+                "event_type": "dangerous_target",
+                "status": "alert" if row.get("radar_alert") == "1" else "tracking",
+                "event_id": "",
+                "label": f"OBJ {row.get('objId', '')}",
+                "score": "",
+                "count": "",
+                "seq": "",
+                "reason": row.get("direction") or "",
+                "details": (
+                    f"distance={row.get('distance_m', '')}m "
+                    f"velocity={row.get('velocity_mps', '')}m/s "
+                    f"angle={row.get('angle_deg', '')}deg TTC={row.get('TTC_s', '')}s"
+                ),
+            })
+
+        events.sort(key=lambda item: item["timestamp_ms"], reverse=True)
+        now_ms = int(time.time() * 1000)
+        camera = next((e for e in events if e["source"] == "camera_npu"), None)
+        imu = next((e for e in events if e["source"] == "imu_m33"), None)
+        latest_fall = next(
+            (e for e in events
+             if e["source"] == "imu_m33" and e["event_type"] == "fall"),
+            None,
+        )
+        fall_chain: list[dict[str, Any]] = []
+        if latest_fall is not None:
+            event_id = latest_fall["event_id"]
+            fall_chain = sorted(
+                [e for e in events if event_id and e["event_id"] == event_id],
+                key=lambda item: item["timestamp_ms"],
+            )
+
+        recent_cutoff = now_ms - 60_000
+        road_bumps = sum(
+            1 for e in events
+            if e["source"] == "imu_m33"
+            and e["event_type"] == "road_bump"
+            and e["timestamp_ms"] >= recent_cutoff
+        )
+        return {
+            "ok": True,
+            "timestamp_ms": now_ms,
+            "events": events[:limit],
+            "latest_camera": camera,
+            "latest_imu": imu,
+            "latest_fall": latest_fall,
+            "fall_chain": fall_chain,
+            "diagnostics": {
+                "road_bumps_60s": road_bumps,
+                "road_bump_frequent": road_bumps >= 5,
+                "sms_ack_supported": False,
+                "sms_status": "unconfirmed_no_app_ack",
+            },
+        }
 
     def _restore_active_labels(self) -> None:
         if not self.labels_path.exists():
@@ -228,7 +371,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._json_response({"ok": False, "error": message}, status)
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/api/state":
             state = self.server.store.read_state()
             now_ms = int(time.time() * 1000)
@@ -243,6 +387,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             state["dashboard_time_ms"] = now_ms
             state["active_labels"] = self.server.store.active_labels()
             self._json_response(state)
+            return
+        if path == "/api/events":
+            query = parse_qs(parsed.query)
+            try:
+                limit = max(20, min(200, int(query.get("limit", ["120"])[0])))
+            except ValueError:
+                limit = 120
+            self._json_response(self.server.store.read_events(limit))
             return
         if path == "/api/labels/active":
             self._json_response(
