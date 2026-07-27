@@ -24,6 +24,7 @@ camera_detect/
 ├── dvr.service.example       # systemd 服务示例
 ├── radar_config.example      # 现场配置模板
 ├── dashboard/                # Python 标准库 Web 服务与静态页面
+├── ota/                      # 独立 OTA 服务、事务安装器、打包与主机测试
 ├── hud_project/              # HUD 可执行程序源码
 ├── models/                   # NPU 模型与标签
 ├── sounds/                   # 碰撞、摔倒、V2X、录制完成提示音
@@ -60,6 +61,15 @@ make radar-fusion
 make hud
 make dashboard-check
 ```
+
+生成 A35 运行时 OTA 包：
+
+```bash
+make ota-package VERSION=1.0.1
+```
+
+输出位于 `dist/`。完整的目录迁移、板端服务部署和回滚方法见
+[A35 OTA 操作指南](docs/OTA.md)。
 
 ## 部署
 
@@ -180,4 +190,6 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)
 - [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
 - [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
+- [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)
+- [Android 使用的 OTA HTTP API](docs/OTA_API.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)

@@ -8,6 +8,8 @@ After=local-fs.target systemd-udev-settle.service dvr-m33.service
 
 [Service]
 Type=simple
+Environment=STOP_M33_ON_EXIT=0
+Environment=ALLOW_M33_RESET_ON_START_FAILURE=0
 ExecStart=/xxl/camera_detect/start_dvr.sh
 Restart=on-failure
 RestartSec=5

@@ -12,7 +12,8 @@ CAMERA_DIR="/xxl/camera_detect"
 FW_DIR="/home/root/project"
 FW_SCRIPT="${FW_DIR}/fw_cortex_m33.sh"
 RADAR_FUSION="${CAMERA_DIR}/radar_fusion"
-HUD_BIN="/home/root/hud"
+HUD_BIN="${CAMERA_DIR}/hud"
+LEGACY_HUD_BIN="/home/root/hud"
 HUD_PID_FILE="/tmp/hud.pid"
 DASHBOARD_DIR="${CAMERA_DIR}/dashboard"
 DASHBOARD_SCRIPT="${DASHBOARD_DIR}/radar_dashboard.py"
@@ -27,6 +28,10 @@ TF_DEVICE="/dev/mmcblk0p1"
 TF_FSCK_UNIT="systemd-fsck@dev-mmcblk0p1.service"
 DASHBOARD_PORT="8080"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
+# M33 由 dvr-m33.service 独立管理。A35 应用停止/OTA 切换时默认不停止 M33。
+# 只有现场显式设置为 1，才允许本脚本重置或随退出停止 M33。
+STOP_M33_ON_EXIT="${STOP_M33_ON_EXIT:-0}"
+ALLOW_M33_RESET_ON_START_FAILURE="${ALLOW_M33_RESET_ON_START_FAILURE:-0}"
 FALL_DELAY=0                  # 默认不模拟摔倒；由 -t 参数覆盖
 V2X_DELAY=0                   # 默认不模拟 V2X；由 -V 参数覆盖
 V2X_DIRECTION="left_front"    # 默认 V2X 方向
@@ -183,6 +188,23 @@ stop_log_maintenance() {
     LOG_MAINT_PID=0
 }
 
+stop_m33_if_requested() {
+    if [ "$STOP_M33_ON_EXIT" != "1" ]; then
+        log "保留独立运行的 M33（STOP_M33_ON_EXIT=${STOP_M33_ON_EXIT}）"
+        return 0
+    fi
+
+    log "按配置停止 M33 固件..."
+    (
+        cd "$FW_DIR" || exit 1
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 10 ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        else
+            ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+        fi
+    )
+}
+
 # 启动 HUD（IMU 异常 UDP 转发到 App）
 start_hud() {
     # 如果 HUD 已在运行，复用现有进程
@@ -194,6 +216,11 @@ start_hud() {
             HUD_PID=$existing_pid
             return 0
         fi
+    fi
+
+    if [ ! -x "$HUD_BIN" ] && [ -x "$LEGACY_HUD_BIN" ]; then
+        HUD_BIN="$LEGACY_HUD_BIN"
+        log "当前 release 未包含 HUD，兼容使用旧路径: ${HUD_BIN}"
     fi
 
     if [ ! -x "$HUD_BIN" ]; then
@@ -287,16 +314,8 @@ cleanup() {
     # 5. 确保没有遗留子进程占用摄像头/雷达
     pkill -9 -f "radar_fusion" 2>/dev/null || true
 
-    # 6. 停止 M33 固件（最多等 10 秒）
-    log "停止 M33 固件..."
-    (
-        cd "$FW_DIR" || exit 1
-        if command -v timeout >/dev/null 2>&1; then
-            timeout 10 ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-        else
-            ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-        fi
-    )
+    # 6. M33 生命周期独立于 A35；OTA/服务重启默认保留 M33。
+    stop_m33_if_requested
 
     log "DVR 系统已停止"
     exit 0
@@ -420,11 +439,17 @@ fi
 if [ "$m33_running" -ne 1 ]; then
     if [ -r "$RPROC_STATE" ] &&
        [ "$(tr -d '\0\r\n' < "$RPROC_STATE")" = "running" ]; then
-        log "M33 已运行但 RPMsg 未就绪，回退到 Linux remoteproc 重启"
-        (
-            cd "$FW_DIR" || exit 1
-            ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-        )
+        if [ "$ALLOW_M33_RESET_ON_START_FAILURE" = "1" ]; then
+            log "M33 已运行但 RPMsg 未就绪，按配置执行 Linux remoteproc 重启"
+            (
+                cd "$FW_DIR" || exit 1
+                ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
+            )
+        else
+            log "错误: M33 已运行但 RPMsg 未就绪；为保护独立 M33 生命周期，本次不自动重置"
+            log "如需现场恢复，请重启 dvr-m33.service；仅诊断时可设置 ALLOW_M33_RESET_ON_START_FAILURE=1"
+            exit 1
+        fi
     else
         log "早期服务未启动 M33，使用 Linux remoteproc 回退路径"
     fi
@@ -452,10 +477,7 @@ done
 
 if [ "$ready" -ne 1 ]; then
     log "错误: ${RPMSG_DEV} 未在 ${M33_READY_TIMEOUT}s 内出现，M33 固件可能启动异常"
-    (
-        cd "$FW_DIR" || exit 1
-        ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-    )
+    stop_m33_if_requested
     exit 1
 fi
 log "RPMsg 设备已就绪: ${RPMSG_DEV}"
@@ -547,9 +569,6 @@ rm -f "$DASHBOARD_PID_FILE"
 
 stop_log_maintenance
 
-(
-    cd "$FW_DIR" || exit 1
-    ./fw_cortex_m33.sh stop >> "$LOG_FILE" 2>&1 || true
-)
+stop_m33_if_requested
 log "DVR 系统异常退出，交由 systemd 重启"
 exit 1

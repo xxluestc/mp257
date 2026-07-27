@@ -12,6 +12,7 @@
 *.pid
 /lyr/camera_detect/radar_fusion
 /lyr/camera_detect/hud_project/hud
+/lyr/camera_detect/dist/
 
 # Runtime outputs
 **/.buffer/
