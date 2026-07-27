@@ -182,17 +182,62 @@ M33 仍由独立的 `dvr-m33.service`/既有早期启动链管理，不在 OTA �
 `STOP_M33_ON_EXIT=1` 或 `ALLOW_M33_RESET_ON_START_FAILURE=1`，正常 OTA
 不应启用。
 
-## 7. 真实开发板仍需验证
+## 7. 真实开发板验证记录（2026-07-27）
 
-主机能验证包格式、HTTP 协议、目录迁移和事务状态，但以下项目必须等开发板
-上电后完成：
+已在 `192.168.88.10` 的真实 STM32MP257 开发板完成第一轮验证。板端环境为
+Linux 6.6.48、Python 3.12.4、约 1.7 GiB RAM，测试前
+`/xxl/camera_detect` 是没有 `VERSION` 的普通目录。
 
-1. ARM 程序、NPU 动态库和模型在 release 目录下实际运行；
-2. `dvr.service` 停启后摄像头、雷达串口、TF 卡和 Dashboard 恢复；
-3. HUD 由 release 内 `/xxl/camera_detect/hud` 启动，手机 UDP 通信正常；
-4. OTA 过程中 M33 remoteproc 状态保持 running，摔倒上报链不被中断；
-5. 制造一次新版本启动失败，确认自动回滚和业务恢复；
-6. 在安装的校验、切换、健康检查阶段分别测试手机断网；最后再做一次可控掉电恢复测试。
+已通过：
+
+1. 部署 `/opt/helmet-ota`，`helmet-ota.service` 为 enabled/active，8090
+   的 version/status 接口可从主机访问；
+2. 通过 HTTP 上传并安装 1.0.0，旧普通目录迁移为
+   `/xxl/releases/legacy-*`，当前目录变为软链接；
+3. 相同业务内容仅修改 VERSION，完成 `1.0.0 -> 1.0.1` 升级；
+4. 手工从 1.0.1 回滚到 1.0.0，再切回 1.0.1；
+5. 通过 OTA 安装包含运行清理修复的 1.0.2；
+6. 构造 HUD 必然退出的临时 1.0.3 负向包，健康检查在 45 秒后报告
+   `HUD process is not running`，随后自动恢复 1.0.2，状态为
+   `rolled_back`；
+7. 每次停止、切换、回滚后 `dvr.service`、`radar_fusion`、release 内 HUD
+   和 Dashboard 均恢复；Dashboard 数据为 `stale=false`；
+8. M33 remoteproc 在全部升级、手工回滚、失败回滚和额外 DVR 重启前后始终为
+   `running`；
+9. `radar_config` SHA-256 始终为
+   `bfad967d6c5567f35a7bb215f06d365e9c993572035878b7d31e238472cff326`，
+   证明现场配置没有被包覆盖。
+
+实测发现并修复一处清理问题：原脚本的 `pkill -f radar_fusion` 会误杀命令行
+文本中包含该名称的 SSH 运维 shell。1.0.2 已改为
+`pkill -KILL -x radar_fusion`，随后在同一 SSH 命令内重启 DVR，连接保持正常。
+
+连续执行多个正向/负向包后，Python OTA 服务曾保留约 97 MB 堆内存、峰值约
+140 MB；开发板仍有约 1.5 GiB 可用。安装完成后单独重启
+`helmet-ota.service`，常驻占用回到约 14 MB，DVR 和 M33 不受影响。正式升级
+频率很低，因此第一版可用，后续可把包校验隔离到短生命周期子进程进一步控制
+常驻内存。
+
+板端最终状态：
+
+```text
+/xxl/camera_detect       -> /xxl/releases/1.0.2
+/xxl/releases/.previous -> /xxl/releases/1.0.1
+dvr.service              active/enabled
+dvr-m33.service          active/enabled
+helmet-ota.service       active/enabled
+M33 remoteproc           running
+```
+
+负向 1.0.3 release 和上传文件已清除，不可恢复；保留的 `rolled_back` 状态是
+该次自动回滚的测试证据，`last_success.json` 仍正确记录稳定版 1.0.2。
+
+仍需后续验证：
+
+1. Android 真机按 [OTA API](OTA_API.md) 完成上传、进度展示和断网续查；
+2. 在安装校验、切换和健康检查阶段分别测试手机断开 WiFi；
+3. 做一次有串口监控和可靠供电保护的可控掉电恢复测试；
+4. 室外环境验证摄像头/NPU、真实雷达告警、IMU 摔倒上报和手机短信链。
 
 ## 8. 第一版安全边界
 

@@ -312,7 +312,9 @@ cleanup() {
     stop_log_maintenance
 
     # 5. 确保没有遗留子进程占用摄像头/雷达
-    pkill -9 -f "radar_fusion" 2>/dev/null || true
+    # 只按进程名清理遗留实例。不能使用 -f，否则会误杀命令行中仅仅包含
+    # “radar_fusion”文本的 SSH/运维 shell。
+    pkill -KILL -x radar_fusion 2>/dev/null || true
 
     # 6. M33 生命周期独立于 A35；OTA/服务重启默认保留 M33。
     stop_m33_if_requested
