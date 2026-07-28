@@ -26,8 +26,8 @@ EVENT_TYPES = {
     "rear_fast_collision": "正后方快速碰撞",
     "left_rear_fast_collision": "左后方快速碰撞",
     "right_rear_fast_collision": "右后方快速碰撞",
-    "approach_no_trigger": "不触发的接近",
-    "approach_trigger": "触发的接近",
+    "approach_no_trigger": "安全接近（预期不告警）",
+    "approach_trigger": "危险接近（预期告警）",
 }
 
 LABEL_FIELDS = [

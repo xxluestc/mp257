@@ -161,7 +161,8 @@ python3 -m py_compile dashboard/radar_dashboard.py
 板端启动后确认 `dvr.service`、`radar_fusion`、HUD 和 Dashboard 都在运行，
 再检查 `/api/state` 的 `stale=false` 以及 `/api/events` 中 CAM/NPU、IMU 和
 HUD 事件时间线。随后依照 [雷达实验文档](docs/RADAR_EXPERIMENT.md) 完成
-正后方、左后方、右后方快速接近，以及触发/不触发接近的现场标定。
+正后方、左后方、右后方快速接近，以及“安全接近（预期不告警）”和
+“危险接近（预期告警）”的现场标定。
 
 `start_dvr.sh -t N` 只模拟 A35 本地 LED/音频/DVR 摔倒动作，不经过 M33、
 HUD 或手机短信，不能作为端到端短信测试。完整边界见

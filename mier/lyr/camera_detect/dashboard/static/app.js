@@ -4,8 +4,8 @@ const EVENTS = [
   ["rear_fast_collision", "正后方快速碰撞", "REAR · FAST · COLLISION"],
   ["left_rear_fast_collision", "左后方快速碰撞", "LEFT REAR · FAST · COLLISION"],
   ["right_rear_fast_collision", "右后方快速碰撞", "RIGHT REAR · FAST · COLLISION"],
-  ["approach_no_trigger", "不触发的接近", "APPROACH · EXPECT NO ALERT"],
-  ["approach_trigger", "触发的接近", "APPROACH · EXPECT ALERT"],
+  ["approach_no_trigger", "安全接近（预期不告警）", "SAFE APPROACH · EXPECT NO ALERT"],
+  ["approach_trigger", "危险接近（预期告警）", "DANGEROUS APPROACH · EXPECT ALERT"],
 ];
 
 const $ = (id) => document.getElementById(id);
