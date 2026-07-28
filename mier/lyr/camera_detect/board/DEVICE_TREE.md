@@ -134,6 +134,52 @@ ssh root@192.168.88.10 'sync; reboot'
   - PB11 (原 FDCAN1_RX, AF8) → 用作 GPIO 控制 MAX98357A 的 SD_MODE
   - PB9 (原 FDCAN1_TX, AF8) → 同步释放为 GPIO
 
+### 修改 8: 禁用 UART8（释放 PF10、PF11 为 GPIO）
+
+- **节点**: `serial@40380000` (UART8)
+- **修改**: `status = "disabled"`
+- **释放引脚**:
+  - PF10（原 UART8_TX, AF6）→ MOS 控制 GPIO 1
+  - PF11（原 UART8_RX, AF6）→ MOS 控制 GPIO 2
+- **已确认不影响**:
+  - Linux 控制台使用 `ttySTM0`，不是 `ttySTM8`
+  - `serial-getty@ttySTM8.service` 为 disabled/inactive
+  - 项目源码、systemd、udev 中没有 `ttySTM8` 依赖
+  - 修改前没有进程打开 `/dev/ttySTM8`
+- **预期变化**: 部署并重启后 `/dev/ttySTM8` 不再出现，PF10/PF11 可由
+  GPIO 用户程序申请。
+
+> 本修改严格基于板端当前 `/boot/myb-stm32mp257x-2GB.dtb` 对应的 DTS。
+> 修改前用仓库 DTS 重编译得到的 DTB 与板端文件 SHA-256 完全相同：
+> `4e0fbe9ac29cde99b6311c3f372d49dd6e38d6969239dc16d5e11460e2e66826`。
+> 因此原有保留内存、音频、PB11、摄像头、雷达、M33 等配置均被保留。
+
+#### 2026-07-28 板端部署验证
+
+- 当前生效 DTB：
+  `/boot/myb-stm32mp257x-2GB.dtb`
+- 当前 DTB SHA-256：
+  `7cf5ebd3daaf66d13999f3356f8a09a97b5dd01b96bda99a9957ad7bbf058270`
+- 原始 DTB SHA-256：
+  `4e0fbe9ac29cde99b6311c3f372d49dd6e38d6969239dc16d5e11460e2e66826`
+- 原始 DTB 备份：
+  - 主机：
+    `/home/alientek/myb-stm32mp257x-2GB.original-before-pf10-pf11.dtb`
+  - 板端：
+    `/boot/myb-stm32mp257x-2GB.dtb.bak-before-pf10-pf11`
+  - 板端第二份：
+    `/home/root/myb-stm32mp257x-2GB.dtb.original-before-pf10-pf11`
+
+重启后验证结果：
+
+- `/dev/ttySTM8` 和 `40380000.serial` platform device 不再出现；
+- PF10/PF11 无 consumer，能够以 input 方式导出并释放；
+- `dvr.service`、`dvr-m33.service`、`helmet-ota.service` 均为 active/enabled；
+- M33 remoteproc 为 running，`/dev/ttyRPMSG0` 存在；
+- `radar_fusion`、HUD、Dashboard、`/dev/video7`、雷达 `/dev/ttySTM1`
+  和 MAX98357A 声卡均正常；
+- GPIO 可用性验证未输出高低电平，不会提前驱动 MOS。
+
 ## 引脚变更总览
 
 | 引脚 | 原功能 | 新功能 |
@@ -142,6 +188,8 @@ ssh root@192.168.88.10 'sync; reboot'
 | PB5 | I2C2_SCL | SAI4_SD_B (AF4) |
 | PB6 | UART4_RX (AF3) | SAI4_SCK_B (AF4) |
 | PB11 | FDCAN1_RX (AF8) | GPIO 控制 MAX98357A SD_MODE |
+| PF10 | UART8_TX (AF6) | GPIO 控制 MOS 1 |
+| PF11 | UART8_RX (AF6) | GPIO 控制 MOS 2 |
 
 ## 关键踩坑记录
 

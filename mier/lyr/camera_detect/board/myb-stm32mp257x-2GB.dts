@@ -1990,7 +1990,7 @@
 				access-controllers = <0x1b 0x26>;
 				power-domains = <0x0c>;
 				wakeup-source;
-				status = "okay";
+				status = "disabled";
 				pinctrl-names = "default\0idle\0sleep";
 				pinctrl-0 = <0x4a>;
 				pinctrl-1 = <0x4b>;
