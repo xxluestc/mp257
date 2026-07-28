@@ -192,4 +192,5 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
 - [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)
 - [Android 使用的 OTA HTTP API](docs/OTA_API.md)
+- [Android/云端 OTA 分工与联调交接](docs/OTA_HANDOFF.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)
