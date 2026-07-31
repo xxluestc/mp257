@@ -67,6 +67,16 @@ h2 { font-size: 23px; font-weight: 550; }
   font: 600 12px ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
+.version-chip {
+  padding: 7px 10px;
+  color: var(--muted);
+  border: 1px solid rgba(111, 151, 255, 0.38);
+  background: rgba(111, 151, 255, 0.08);
+  letter-spacing: 0.08em;
+}
+
+.version-chip strong { color: var(--lane); font-weight: 750; }
+
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -127,17 +137,47 @@ main {
 .scope-right { fill: var(--amber); stroke: var(--amber); }
 .scope-grid { fill: none; stroke: #6b7d86; stroke-width: 1; opacity: 0.48; }
 .scope-edge { stroke: var(--radar); opacity: 0.65; }
+.scope-boundary { stroke-dasharray: 4 5; opacity: 0.8; }
+.scope-centerline { stroke-dasharray: 2 7; opacity: 0.25; }
 
 .target-marker {
   fill: var(--danger);
   stroke: #fff;
-  stroke-width: 2;
-  opacity: 0;
+  stroke-width: 2.5;
   filter: drop-shadow(0 0 10px var(--danger));
-  transition: cx 180ms linear, cy 180ms linear, opacity 180ms ease;
+  transition: cx 180ms linear, cy 180ms linear;
 }
 
-.target-marker.visible { opacity: 1; }
+.target-contact {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.target-contact.visible { opacity: 1; }
+
+.target-halo {
+  fill: rgba(255, 95, 88, 0.18);
+  stroke: var(--danger);
+  stroke-width: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: target-pulse 1.3s ease-out infinite;
+  transition: cx 180ms linear, cy 180ms linear;
+}
+
+.target-caption {
+  fill: #fff;
+  stroke: rgba(11, 17, 23, 0.96);
+  stroke-width: 4px;
+  paint-order: stroke fill;
+  font: 700 10px ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.04em;
+}
+
+@keyframes target-pulse {
+  0% { opacity: 0.95; transform: scale(0.65); }
+  75%, 100% { opacity: 0; transform: scale(1.35); }
+}
 
 .bearing-label {
   position: absolute;
@@ -407,7 +447,7 @@ tr.dangerous td { color: var(--danger); background: rgba(255, 95, 88, 0.045); }
 
 @media (max-width: 620px) {
   .topbar { align-items: flex-start; flex-direction: column; }
-  .topbar-status { width: 100%; justify-content: space-between; }
+  .topbar-status { width: 100%; justify-content: space-between; flex-wrap: wrap; }
   .chart-grid { grid-template-columns: 1fr; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .radar-panel, .threat-panel, .tag-panel, .targets-panel { padding: 15px; }

@@ -33,12 +33,13 @@ risk           = min(distance_ratio, ttc_ratio)
 `TTC < TTC_THRESHOLD` 或 `distance <= DIST`。这样距离、速度、角度和
 TTC 始终来自同一个目标，不会再把不同目标的最短距离和最小 TTC 混在一起。
 
-方向规则：
+方向先把雷达协议坐标转换为骑行者坐标：
 
 ```text
-angle <= LEFT_ANGLE    → LEFT
-angle >= RIGHT_ANGLE   → RIGHT
-其他                   → CENTER
+rider_angle = sensor_angle × ANGLE_SIGN
+rider_angle <= LEFT_ANGLE    → LEFT
+rider_angle >= RIGHT_ANGLE   → RIGHT
+其他                         → CENTER
 ```
 
 角度先经过按 `objId` 独立维护的 EMA，再经过 2° 边界滞回和连续帧确认，
@@ -52,6 +53,7 @@ angle >= RIGHT_ANGLE   → RIGHT
 ```ini
 TTC=2.5
 DIST=1.2
+ANGLE_SIGN=-1
 LEFT_ANGLE=-10
 RIGHT_ANGLE=10
 ANGLE_ALPHA=0.35
@@ -60,8 +62,31 @@ DASHBOARD_PORT=8080
 RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
 ```
 
-其中 `LEFT_ANGLE` 必须小于 `RIGHT_ANGLE`。如果现场确认雷达角度正负方向
-与页面相反，应根据实测重新配置左右边界。
+其中 `LEFT_ANGLE` 必须小于 `RIGHT_ANGLE`。当前后向安装方式经实测确认：
+雷达协议正角位于骑行者左后方、负角位于骑行者右后方，因此
+`ANGLE_SIGN=-1`。CSV 中的 `angle_deg/filtered_angle_deg` 保留雷达协议原值，
+页面扇形、方向字段和左右阈值使用转换后的骑行者坐标。
+
+## 2026-07-31 室外数据结论
+
+分析 `radar_experiments/labels.csv` 中 29 组完整事件，并仅统计危险目标在
+4 米内的数据：
+
+| 人工场景 | 完整组数 | 每组角度中位数的总体中位数（雷达协议） |
+|---|---:|---:|
+| 正后方快速碰撞 | 8 | +3.1° |
+| 左后方快速碰撞 | 8 | +26.4° |
+| 右后方快速碰撞 | 7 | -17.7° |
+| 安全接近 | 6 | -4.3° |
+
+采用 `ANGLE_SIGN=-1` 和骑行者坐标 `-10°/+10°` 边界后，23 组有方向标签的
+快速碰撞事件中，按事件区间角度中位数统计可正确区分 22 组（95.7%）：
+正后方 8/8、左后方 7/8、右后方 7/7。唯一偏差样本的运动轨迹大部分仍在
+中心区，不建议为了单个样本扩大中心区。下一轮继续保持相同安装位置和阈值，
+每类补测 10 组以上即可。
+
+“安全接近”只表示预期不告警，不代表目标一定在正后方，因此不用于左右方向
+准确率统计。
 
 ## 编译与部署
 
@@ -136,6 +161,18 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 以及 NPU 的 `label/score/count`、IMU 的 `seq/reason/details`。`imu_delivery.csv`
 用同一个 `event_id` 记录 `hud_received`、`app_broadcast` 及 sent/failed/cooldown。
 手机短信尚无 ACK，面板不会把 UDP sent 显示成 SMS 成功。
+
+其中 `source=a35_dvr` 新增记录 DVR 生命周期：
+
+- `event_type=buffer,status=started/failed`：预缓存启动结果及失败原因；
+- `event_type=recording,status=triggered`：摔倒或雷达+NPU 融合触发保存。
+
+本批 23 组快速碰撞事件都同时出现过雷达告警和 NPU 确认，说明“不生成视频”
+不是本次雷达阈值或 NPU 融合条件不足。旧代码只在 NPU 第一次从无目标变成有
+目标时尝试一次 `dvr_start()`，且忽略失败返回值；目标持续存在时不会重试，
+碰撞分支又要求 `dvr_recording=1` 才保存，因此 TF 卡目录短暂未就绪时会静默
+漏录。摔倒分支会主动启动 DVR，所以会表现为“只有摔倒能录像”。当前版本已
+增加有目标时每 2 秒重试，以及碰撞告警时强制补启动并写入上述诊断事件。
 
 ## 当前实测方法
 

@@ -70,6 +70,7 @@ TTC_THRESHOLD="2.5"
 DIST_THRESHOLD="1.2"
 LEFT_ANGLE="-10"
 RIGHT_ANGLE="10"
+ANGLE_SIGN="-1"
 ANGLE_ALPHA="0.35"
 DIRECTION_SAMPLES="3"
 
@@ -81,6 +82,7 @@ load_radar_config() {
         local dist
         local left_angle
         local right_angle
+        local angle_sign
         local angle_alpha
         local direction_samples
         local dashboard_port
@@ -89,6 +91,7 @@ load_radar_config() {
         dist=$(grep -E '^DIST=' "$config" | cut -d'=' -f2)
         left_angle=$(grep -E '^LEFT_ANGLE=' "$config" | cut -d'=' -f2)
         right_angle=$(grep -E '^RIGHT_ANGLE=' "$config" | cut -d'=' -f2)
+        angle_sign=$(grep -E '^ANGLE_SIGN=' "$config" | cut -d'=' -f2)
         angle_alpha=$(grep -E '^ANGLE_ALPHA=' "$config" | cut -d'=' -f2)
         direction_samples=$(grep -E '^DIRECTION_SAMPLES=' "$config" | cut -d'=' -f2)
         dashboard_port=$(grep -E '^DASHBOARD_PORT=' "$config" | cut -d'=' -f2)
@@ -97,6 +100,7 @@ load_radar_config() {
         [ -n "$dist" ] && DIST_THRESHOLD="$dist"
         [ -n "$left_angle" ] && LEFT_ANGLE="$left_angle"
         [ -n "$right_angle" ] && RIGHT_ANGLE="$right_angle"
+        [ -n "$angle_sign" ] && ANGLE_SIGN="$angle_sign"
         [ -n "$angle_alpha" ] && ANGLE_ALPHA="$angle_alpha"
         [ -n "$direction_samples" ] && DIRECTION_SAMPLES="$direction_samples"
         [ -n "$dashboard_port" ] && DASHBOARD_PORT="$dashboard_port"
@@ -510,9 +514,10 @@ if [ -n "$DIST_THRESHOLD" ]; then
     log "雷达距离阈值: ${DIST_THRESHOLD} m"
 fi
 ARGS="${ARGS} --left-angle ${LEFT_ANGLE} --right-angle ${RIGHT_ANGLE}"
+ARGS="${ARGS} --angle-sign ${ANGLE_SIGN}"
 ARGS="${ARGS} --angle-alpha ${ANGLE_ALPHA} --direction-samples ${DIRECTION_SAMPLES}"
 ARGS="${ARGS} --radar-log-dir ${RADAR_LOG_DIR}"
-log "雷达方向阈值: LEFT<=${LEFT_ANGLE}°, RIGHT>=${RIGHT_ANGLE}°"
+log "雷达方向: 骑行者角度=传感器角度×${ANGLE_SIGN}; LEFT<=${LEFT_ANGLE}°, RIGHT>=${RIGHT_ANGLE}°"
 log "方向滤波: alpha=${ANGLE_ALPHA}, stable_samples=${DIRECTION_SAMPLES}"
 log "雷达实验数据: ${RADAR_LOG_DIR}"
 

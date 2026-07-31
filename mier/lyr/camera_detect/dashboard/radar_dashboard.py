@@ -66,6 +66,16 @@ EMPTY_STATE: dict[str, Any] = {
 }
 
 
+def read_app_version() -> str:
+    """Read the immutable OTA VERSION next to the installed application."""
+    version_path = Path(__file__).resolve().parent.parent / "VERSION"
+    try:
+        version = version_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "source"
+    return version[:64] if version else "unknown"
+
+
 class RadarStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -331,10 +341,12 @@ class RadarDashboardServer(ThreadingHTTPServer):
         handler: type[BaseHTTPRequestHandler],
         store: RadarStore,
         static_dir: Path,
+        app_version: str,
     ) -> None:
         super().__init__(address, handler)
         self.store = store
         self.static_dir = static_dir
+        self.app_version = app_version
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -385,6 +397,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             state["age_ms"] = age_ms
             state["stale"] = age_ms is None or age_ms > 3000
             state["dashboard_time_ms"] = now_ms
+            state["app_version"] = self.server.app_version
             state["active_labels"] = self.server.store.active_labels()
             self._json_response(state)
             return
@@ -475,13 +488,14 @@ def main() -> None:
     if not 1 <= args.port <= 65535:
         raise SystemExit("port must be between 1 and 65535")
     static_dir = Path(__file__).resolve().parent / "static"
+    app_version = read_app_version()
     store = RadarStore(args.data_dir.resolve())
     server = RadarDashboardServer(
-        (args.host, args.port), DashboardHandler, store, static_dir
+        (args.host, args.port), DashboardHandler, store, static_dir, app_version
     )
     print(
         f"[DASHBOARD] listening on http://{args.host}:{args.port} "
-        f"data_dir={store.data_dir}",
+        f"data_dir={store.data_dir} app_version={app_version}",
         flush=True,
     )
     try:

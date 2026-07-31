@@ -14,6 +14,7 @@
       <h1>骑行安全多传感器同步台</h1>
     </div>
     <div class="topbar-status">
+      <span class="version-chip">APP <strong id="app-version">SOURCE</strong></span>
       <span id="connection-chip" class="status-chip status-offline">
         <i aria-hidden="true"></i><span>等待雷达数据</span>
       </span>
@@ -28,15 +29,20 @@
         <div class="radar-stage">
           <svg class="radar-scope" viewBox="0 0 360 210" role="img"
                aria-label="危险目标后向方位图">
-            <path class="scope-sector scope-left" d="M180 190 L30 104 A174 174 0 0 1 122 25 Z"/>
-            <path class="scope-sector scope-center" d="M180 190 L122 25 A174 174 0 0 1 238 25 Z"/>
-            <path class="scope-sector scope-right" d="M180 190 L238 25 A174 174 0 0 1 330 104 Z"/>
+            <path id="scope-sector-left" class="scope-sector scope-left" d="M180 190 L30 104 A174 174 0 0 1 150 19 Z"/>
+            <path id="scope-sector-center" class="scope-sector scope-center" d="M180 190 L150 19 A174 174 0 0 1 210 19 Z"/>
+            <path id="scope-sector-right" class="scope-sector scope-right" d="M180 190 L210 19 A174 174 0 0 1 330 104 Z"/>
             <path class="scope-grid" d="M70 126 A126 126 0 0 1 290 126"/>
             <path class="scope-grid" d="M112 151 A78 78 0 0 1 248 151"/>
             <path class="scope-grid scope-edge" d="M30 104 A174 174 0 0 1 330 104"/>
-            <line class="scope-grid" x1="180" y1="190" x2="122" y2="25"/>
-            <line class="scope-grid" x1="180" y1="190" x2="238" y2="25"/>
-            <circle id="target-marker" class="target-marker" cx="180" cy="190" r="8"/>
+            <line id="scope-left-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="150" y2="19"/>
+            <line id="scope-right-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="210" y2="19"/>
+            <line class="scope-grid scope-centerline" x1="180" y1="190" x2="180" y2="16"/>
+            <g id="target-contact" class="target-contact" aria-hidden="true">
+              <circle id="target-halo" class="target-halo" cx="180" cy="190" r="18"/>
+              <circle id="target-marker" class="target-marker" cx="180" cy="190" r="9"/>
+              <text id="target-caption" class="target-caption" x="194" y="176">OBJ —</text>
+            </g>
           </svg>
           <span class="bearing-label bearing-left">LEFT</span>
           <span class="bearing-label bearing-center">CENTER</span>
@@ -58,7 +64,7 @@
         <dl class="metrics">
           <div><dt>距离</dt><dd><span id="distance">—</span><small>m</small></dd></div>
           <div><dt>相对速度</dt><dd><span id="velocity">—</span><small>m/s</small></dd></div>
-          <div><dt>原始角度</dt><dd><span id="angle">—</span><small>°</small></dd></div>
+          <div><dt>雷达原始角度</dt><dd><span id="angle">—</span><small>°</small></dd></div>
           <div><dt>TTC</dt><dd><span id="ttc">—</span><small>s</small></dd></div>
         </dl>
         <p class="fusion-note">融合告警：<strong id="fusion-alert">—</strong></p>
@@ -83,8 +89,8 @@
           <canvas id="chart-velocity" aria-label="速度实时曲线"></canvas>
         </article>
         <article class="chart-card">
-          <header><span>角度</span><strong id="chart-angle-value">— °</strong></header>
-          <canvas id="chart-angle" aria-label="角度实时曲线"></canvas>
+          <header><span>骑行者方位角</span><strong id="chart-angle-value">— °</strong></header>
+          <canvas id="chart-angle" aria-label="骑行者方位角实时曲线"></canvas>
         </article>
         <article class="chart-card">
           <header><span>TTC</span><strong id="chart-ttc-value">— s</strong></header>
@@ -179,7 +185,7 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Obj</th><th>距离</th><th>速度</th><th>角度</th><th>TTC</th><th>方向</th></tr>
+              <tr><th>Obj</th><th>距离</th><th>速度</th><th>方位角</th><th>TTC</th><th>方向</th></tr>
             </thead>
             <tbody id="targets-body">
               <tr class="empty-row"><td colspan="6">等待目标数据</td></tr>

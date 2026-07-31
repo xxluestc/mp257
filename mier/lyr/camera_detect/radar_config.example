@@ -5,8 +5,13 @@
 TTC=2.5
 DIST=1.2
 
-# 方向判断：angle <= LEFT_ANGLE 为 LEFT，
-# angle >= RIGHT_ANGLE 为 RIGHT，中间为 CENTER。
+# 方向使用骑行者视角：rider_angle = 雷达协议原始 angle * ANGLE_SIGN。
+# 当前雷达朝后安装，室外数据标定为正角在骑行者左后方，所以取 -1。
+# radar_data.csv 仍保存协议原始角度，Dashboard 会按本参数转换后显示方位。
+ANGLE_SIGN=-1
+
+# 方向判断：rider_angle <= LEFT_ANGLE 为 LEFT，
+# rider_angle >= RIGHT_ANGLE 为 RIGHT，中间为 CENTER。
 LEFT_ANGLE=-10
 RIGHT_ANGLE=10
 

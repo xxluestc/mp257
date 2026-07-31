@@ -88,6 +88,7 @@
 #define ANGLE_FILTER_ALPHA_DEFAULT 0.35f
 #define DIRECTION_STABLE_SAMPLES_DEFAULT 3
 #define DIRECTION_HYSTERESIS_DEG 2.0f
+#define ANGLE_DIRECTION_SIGN_DEFAULT -1.0f
 #define RADAR_LOG_DIR_DEFAULT  "/run/media/mmcblk0p1/dvr/radar_experiments"
 
 /* LED */
@@ -160,6 +161,7 @@ static float g_dist_threshold = DIST_THRESHOLD_DEFAULT;
 static float g_angle_left_threshold  = ANGLE_LEFT_DEFAULT;
 static float g_angle_right_threshold = ANGLE_RIGHT_DEFAULT;
 static float g_angle_filter_alpha = ANGLE_FILTER_ALPHA_DEFAULT;
+static float g_angle_direction_sign = ANGLE_DIRECTION_SIGN_DEFAULT;
 static int   g_direction_stable_samples = DIRECTION_STABLE_SAMPLES_DEFAULT;
 static char  g_radar_log_dir[PATH_MAX] = RADAR_LOG_DIR_DEFAULT;
 
@@ -488,16 +490,17 @@ static radar_direction_t update_direction_filter(int obj_id, float raw_angle,
         filter->valid = 1;
         filter->filtered_angle = raw_angle;
         filter->stable_direction =
-            classify_radar_direction(raw_angle, RADAR_DIR_UNKNOWN);
+            classify_radar_direction(
+                g_angle_direction_sign * raw_angle, RADAR_DIR_UNKNOWN);
         filter->candidate_direction = filter->stable_direction;
     } else {
         filter->filtered_angle =
             g_angle_filter_alpha * raw_angle +
             (1.0f - g_angle_filter_alpha) * filter->filtered_angle;
 
-        radar_direction_t candidate =
-            classify_radar_direction(filter->filtered_angle,
-                                     filter->stable_direction);
+        radar_direction_t candidate = classify_radar_direction(
+            g_angle_direction_sign * filter->filtered_angle,
+            filter->stable_direction);
         if (candidate == filter->stable_direction) {
             filter->candidate_direction = candidate;
             filter->candidate_count = 0;
@@ -616,7 +619,8 @@ static int process_radar_frame(const uint8_t *frame, int frame_len, radar_result
         if (calc_sum8(frame, 2 + len) != frame[2 + len]) return -1;
         const uint8_t *payload = &frame[2];
         if (payload[0] != TYPE_BSD) return 0;
-        int data_len = len;
+        /* LEN 包含 1 字节 TYPE；跳过 TYPE 后剩余长度必须同步减 1。 */
+        int data_len = (int)len - 1;
         const uint8_t *data = payload + 1;
         if (data_len < 4) return 0;
         bsd_det_t bsd; memset(&bsd, 0, sizeof(bsd));
@@ -988,7 +992,8 @@ static void radar_telemetry_publish(const radar_result_t *radar,
             ",\"direction\":\"%s\",\"radar_alert\":%s,"
             "\"fusion_alert\":%s,"
             "\"thresholds\":{\"TTC_s\":%.3f,\"distance_m\":%.3f,"
-            "\"left_angle_deg\":%.3f,\"right_angle_deg\":%.3f},"
+            "\"left_angle_deg\":%.3f,\"right_angle_deg\":%.3f,"
+            "\"angle_sign\":%.0f},"
             "\"targets\":[",
             radar->dangerous_index >= 0
                 ? radar_direction_name(
@@ -997,7 +1002,8 @@ static void radar_telemetry_publish(const radar_result_t *radar,
             radar->should_alert ? "true" : "false",
             fusion_alert ? "true" : "false",
             g_ttc_threshold, g_dist_threshold,
-            g_angle_left_threshold, g_angle_right_threshold);
+            g_angle_left_threshold, g_angle_right_threshold,
+            g_angle_direction_sign);
 
     for (int i = 0; i < radar->obj_count; i++) {
         const radar_target_t *target = &radar->targets[i];
@@ -1081,6 +1087,9 @@ static char dvr_buffer_dir[1024];
 static int dvr_tf_ok = 0;
 static int dvr_has_encoder = 0;
 static int dvr_camera_pixelformat = 0;
+static uint64_t dvr_last_start_attempt_us = 0;
+static uint64_t dvr_last_forced_start_attempt_us = 0;
+#define DVR_START_RETRY_US 2000000ULL
 
 /* 生成输出文件名 */
 static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
@@ -1095,6 +1104,12 @@ static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
 /* 启动 DVR 录制 */
 static int dvr_start(void) {
     if (dvr_recording) return 0;
+    struct stat storage_st;
+    if (!dvr_tf_ok &&
+        stat(DVR_BASE_DIR, &storage_st) == 0 &&
+        S_ISDIR(storage_st.st_mode)) {
+        dvr_tf_ok = 1;
+    }
     if (!dvr_tf_ok) {
         printf("[系统] [DVR] TF card not available, recording disabled\n");
         return -1;
@@ -1102,8 +1117,16 @@ static int dvr_start(void) {
 
     /* 创建目录 */
     snprintf(dvr_buffer_dir, sizeof(dvr_buffer_dir), "%s", DVR_BUFFER_DIR);
-    mkdir(DVR_BASE_DIR, 0777);
-    mkdir(dvr_buffer_dir, 0777);
+    if (mkdir(DVR_BASE_DIR, 0777) != 0 && errno != EEXIST) {
+        fprintf(stderr, "[DVR] Cannot create base directory %s: %s\n",
+                DVR_BASE_DIR, strerror(errno));
+        return -1;
+    }
+    if (mkdir(dvr_buffer_dir, 0777) != 0 && errno != EEXIST) {
+        fprintf(stderr, "[DVR] Cannot create buffer directory %s: %s\n",
+                dvr_buffer_dir, strerror(errno));
+        return -1;
+    }
 
     /* 打开原始帧文件 */
     snprintf(dvr_raw_path, sizeof(dvr_raw_path), "%s/dvr_raw.bin", dvr_buffer_dir);
@@ -1119,6 +1142,36 @@ static int dvr_start(void) {
     dvr_recording = 1;
     printf("[调试] [DVR] Recording started (buffer: %s)\n", dvr_buffer_dir);
     return 0;
+}
+
+/*
+ * NPU 首次发现目标时启动预缓存；如果当时 TF/目录短暂不可用，后续仍要重试。
+ * 碰撞和摔倒事件使用 force=1 立即再试，避免 dvr_recording=0 时静默丢失视频。
+ */
+static int dvr_ensure_started(uint64_t now_us, const char *reason, int force) {
+    if (dvr_recording) return 0;
+    if (dvr_encoding) return -1;
+    uint64_t retry_us = force ? 500000ULL : DVR_START_RETRY_US;
+    uint64_t last_attempt_us =
+        force ? dvr_last_forced_start_attempt_us : dvr_last_start_attempt_us;
+    if (last_attempt_us != 0 &&
+        now_us >= last_attempt_us &&
+        now_us - last_attempt_us < retry_us)
+        return -1;
+
+    dvr_last_start_attempt_us = now_us;
+    if (force) dvr_last_forced_start_attempt_us = now_us;
+    int rc = dvr_start();
+    char details[192];
+    snprintf(details, sizeof(details),
+             "reason=%s recording=%d encoding=%d tf_ok=%d rc=%d",
+             reason != NULL ? reason : "unknown", dvr_recording,
+             dvr_encoding, dvr_tf_ok, rc);
+    sensor_event_log("a35_dvr", "buffer",
+                     rc == 0 ? "started" : "failed",
+                     NULL, NULL, -1.0f, -1, -1,
+                     reason, details);
+    return rc;
 }
 
 /* 保存一帧到 DVR 缓冲 */
@@ -1191,13 +1244,21 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
 }
 
 /* 触发 DVR 保存 */
-static void dvr_trigger_save(uint64_t trigger_time_us) {
+static void dvr_trigger_save(uint64_t trigger_time_us, const char *reason) {
     if (!dvr_recording || dvr_save_triggered) return;
     /* 先写时间再置标志，避免主循环看到标志却读到旧时间 */
     dvr_trigger_time_us = trigger_time_us;
     dvr_save_triggered = 1;
     printf("[保存] [DVR] Save triggered! (pre=%ds, post=%ds)\n",
            DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+    char details[160];
+    snprintf(details, sizeof(details),
+             "reason=%s frames=%d pre_s=%d post_s=%d",
+             reason != NULL ? reason : "unknown", dvr_frame_count,
+             DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+    sensor_event_log("a35_dvr", "recording", "triggered",
+                     NULL, NULL, -1.0f, -1, -1,
+                     reason, details);
 }
 
 /* 停止 DVR 录制 */
@@ -1601,14 +1662,14 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
 
     /* 若摄像头可用但未在缓冲, 立即启动缓冲 (从摔倒瞬间开始) */
     if (g_camera_ok_global && !dvr_recording && !dvr_encoding) {
-        if (dvr_start() == 0) {
+        if (dvr_ensure_started(trigger_time_us, "fall", 1) == 0) {
             printf("[保存] [DVR] Fall-triggered recording started (no pre-buffer)\n");
         }
     }
 
     /* 触发保存 (若已在缓冲则保留 pre 15s, 否则从当前开始) */
     if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
-        dvr_trigger_save(trigger_time_us);
+        dvr_trigger_save(trigger_time_us, "fall");
     }
 }
 
@@ -1942,6 +2003,8 @@ int main(int argc, char *argv[]) {
             g_angle_left_threshold = atof(argv[++i]);
         else if (strcmp(argv[i], "--right-angle") == 0 && i + 1 < argc)
             g_angle_right_threshold = atof(argv[++i]);
+        else if (strcmp(argv[i], "--angle-sign") == 0 && i + 1 < argc)
+            g_angle_direction_sign = atof(argv[++i]);
         else if (strcmp(argv[i], "--angle-alpha") == 0 && i + 1 < argc)
             g_angle_filter_alpha = atof(argv[++i]);
         else if (strcmp(argv[i], "--direction-samples") == 0 && i + 1 < argc)
@@ -1951,12 +2014,14 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [-d camera] [-u uart] [-c conf] [-T ttc] [-D dist]\n"
                    "          [--left-angle deg] [--right-angle deg]\n"
+                   "          [--angle-sign -1|1]\n"
                    "          [--angle-alpha 0..1] [--direction-samples n]\n"
                    "          [--radar-log-dir path]\n"
                    "          [-t fall_delay] [-V v2x_delay] [-x v2x_dir] [-h]\n",
                    argv[0]);
             printf("  v2x_dir: nearby|left_front|right_front|left|right\n");
-            printf("  Direction: angle <= left is LEFT; angle >= right is RIGHT\n");
+            printf("  Direction uses rider_angle = sensor_angle * angle_sign\n");
+            printf("  rider_angle <= left is LEFT; rider_angle >= right is RIGHT\n");
             printf("  Defaults: TTC=%.1fs distance=%.1fm left=%.1fdeg right=%.1fdeg\n",
                    TTC_THRESHOLD_DEFAULT, (float)DIST_THRESHOLD_DEFAULT,
                    ANGLE_LEFT_DEFAULT, ANGLE_RIGHT_DEFAULT);
@@ -1971,6 +2036,10 @@ int main(int argc, char *argv[]) {
     if (g_angle_left_threshold >= g_angle_right_threshold) {
         fprintf(stderr,
                 "[RADAR] left-angle must be smaller than right-angle\n");
+        return 2;
+    }
+    if (fabsf(fabsf(g_angle_direction_sign) - 1.0f) > 0.001f) {
+        fprintf(stderr, "[RADAR] angle-sign must be -1 or 1\n");
         return 2;
     }
     if (g_angle_filter_alpha <= 0.0f || g_angle_filter_alpha > 1.0f) {
@@ -2001,6 +2070,7 @@ int main(int argc, char *argv[]) {
     printf("Dist thr: %.1f m\n", g_dist_threshold);
     printf("Angles:   LEFT <= %.1f deg, RIGHT >= %.1f deg\n",
            g_angle_left_threshold, g_angle_right_threshold);
+    printf("Angle map:rider = sensor * %.0f\n", g_angle_direction_sign);
     printf("Dir filt: alpha=%.2f, stable samples=%d\n",
            g_angle_filter_alpha, g_direction_stable_samples);
     printf("Radar log:%s\n", g_radar_log_dir);
@@ -2274,13 +2344,16 @@ int main(int argc, char *argv[]) {
                                 npu_confirm_cnt = 0;
                                 npu_deny_cnt = 0;
                                 printf("[目标] [%6.1fs] NPU: ROAD USER DETECTED (%s %.2f)\n", t, best_label, best_score);
-                                /* 开始 DVR 缓冲 */
-                                if (camera_ok && !dvr_recording && !dvr_encoding) {
-                                    dvr_start();
-                                }
                             }
                             npu_confirm_cnt++;
                             npu_deny_cnt = 0;
+                            /*
+                             * 不只在 0→1 边沿启动一次：若首次因 TF/目录瞬态失败，
+                             * 目标持续存在时每 2 秒重试，保证碰撞前尽量已有预缓存。
+                             */
+                            if (camera_ok && !dvr_recording && !dvr_encoding) {
+                                dvr_ensure_started(ts_us, "npu_target", 0);
+                            }
                             if (npu_confirm_cnt >= NPU_CONFIRM_FRAMES && !npu_confirmed && !npu_denied) {
                                 npu_confirmed = 1;
                                 printf("[目标] [%6.1fs] NPU CONFIRMED: Real road user!\n", t);
@@ -2466,10 +2539,28 @@ int main(int argc, char *argv[]) {
                     if (camera_ok) {
                         if (radar.should_alert && npu_confirmed && !npu_denied) {
                             /* 雷达告警 + NPU 确认 → 真正碰撞风险 */
+                            uint64_t collision_trigger_us =
+                                (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) *
+                                    1000000ULL +
+                                (uint64_t)tv_now.tv_usec;
                             g_radar_npu_alert = 1;
+                            /*
+                             * 正常情况下 NPU 目标出现后已经启动循环缓存。如果 TF 卡
+                             * 刚挂载或首次启动失败，则在真正碰撞告警到达时再强制尝试，
+                             * 避免“雷达/NPU 已告警但因为无缓存而静默不保存”。
+                             */
+                            if (!dvr_recording && !dvr_encoding) {
+                                if (dvr_ensure_started(
+                                        collision_trigger_us,
+                                        "radar_npu_collision", 1) == 0) {
+                                    printf("[DVR] 碰撞告警时补启动录像，"
+                                           "本次视频可能缺少告警前缓存\n");
+                                }
+                            }
                             if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
                                 printf("[告警] [%6.1fs] ALERT: COLLISION RISK - NPU CONFIRMED\n", t);
-                                dvr_trigger_save((uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec);
+                                dvr_trigger_save(collision_trigger_us,
+                                                 "radar_npu_collision");
                                 play_alert_sound("collision");
                             }
                         } else {

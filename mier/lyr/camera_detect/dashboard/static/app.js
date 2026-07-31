@@ -36,6 +36,60 @@ function format(value, digits = 1) {
   return finite(value) ? value.toFixed(digits) : "—";
 }
 
+function angleSign(state) {
+  const configured = state && state.thresholds
+    ? Number(state.thresholds.angle_sign)
+    : -1;
+  return configured === 1 ? 1 : -1;
+}
+
+function riderAngle(state, sensorAngle) {
+  return finite(sensorAngle) ? sensorAngle * angleSign(state) : null;
+}
+
+function scopePoint(angle, radius = 174) {
+  const clamped = Math.max(-60, Math.min(60, angle));
+  const radians = (clamped * Math.PI) / 180;
+  return {
+    x: 180 + Math.sin(radians) * radius,
+    y: 190 - Math.cos(radians) * radius,
+  };
+}
+
+function sectorPath(startAngle, endAngle) {
+  const start = scopePoint(startAngle);
+  const end = scopePoint(endAngle);
+  return `M180 190 L${start.x.toFixed(1)} ${start.y.toFixed(1)} ` +
+    `A174 174 0 0 1 ${end.x.toFixed(1)} ${end.y.toFixed(1)} Z`;
+}
+
+function updateRadarGeometry(state) {
+  const thresholds = state.thresholds || {};
+  let left = finite(Number(thresholds.left_angle_deg))
+    ? Number(thresholds.left_angle_deg)
+    : -10;
+  let right = finite(Number(thresholds.right_angle_deg))
+    ? Number(thresholds.right_angle_deg)
+    : 10;
+  left = Math.max(-58, Math.min(56, left));
+  right = Math.max(-56, Math.min(58, right));
+  if (left >= right) {
+    left = -10;
+    right = 10;
+  }
+
+  $("scope-sector-left").setAttribute("d", sectorPath(-60, left));
+  $("scope-sector-center").setAttribute("d", sectorPath(left, right));
+  $("scope-sector-right").setAttribute("d", sectorPath(right, 60));
+
+  const leftPoint = scopePoint(left);
+  const rightPoint = scopePoint(right);
+  $("scope-left-boundary").setAttribute("x2", leftPoint.x.toFixed(1));
+  $("scope-left-boundary").setAttribute("y2", leftPoint.y.toFixed(1));
+  $("scope-right-boundary").setAttribute("x2", rightPoint.x.toFixed(1));
+  $("scope-right-boundary").setAttribute("y2", rightPoint.y.toFixed(1));
+}
+
 function showToast(message, isError = false) {
   const toast = $("toast");
   toast.textContent = message;
@@ -117,21 +171,32 @@ async function recordEvent(eventType, action, button) {
 }
 
 function updateRadarMarker(state) {
+  const contact = $("target-contact");
   const marker = $("target-marker");
   if (!state.has_target || !finite(state.filtered_angle_deg)) {
-    marker.classList.remove("visible");
+    contact.classList.remove("visible");
     return;
   }
-  const angle = Math.max(-65, Math.min(65, state.filtered_angle_deg));
-  const distance = finite(state.distance_m) ? state.distance_m : 10;
-  const radius = Math.max(35, Math.min(150, distance * 7));
-  const radians = (angle * Math.PI) / 180;
-  marker.setAttribute("cx", String(180 + Math.sin(radians) * radius));
-  marker.setAttribute("cy", String(190 - Math.cos(radians) * radius));
-  marker.classList.add("visible");
+  const angle = riderAngle(state, state.filtered_angle_deg);
+  const distance = finite(state.distance_m) ? state.distance_m : 12;
+  // 近距离目标仍离开扇形原点足够远，避免被底部方向框遮挡。
+  const radius = 70 + (Math.max(0, Math.min(12, distance)) / 12) * 92;
+  const point = scopePoint(angle, radius);
+  const halo = $("target-halo");
+  const caption = $("target-caption");
+  marker.setAttribute("cx", point.x.toFixed(1));
+  marker.setAttribute("cy", point.y.toFixed(1));
+  halo.setAttribute("cx", point.x.toFixed(1));
+  halo.setAttribute("cy", point.y.toFixed(1));
+  caption.setAttribute("x", (point.x + (point.x > 250 ? -14 : 14)).toFixed(1));
+  caption.setAttribute("y", Math.max(17, point.y - 13).toFixed(1));
+  caption.setAttribute("text-anchor", point.x > 250 ? "end" : "start");
+  caption.textContent =
+    `OBJ ${state.dangerous_objId ?? "—"} · ${format(state.distance_m)}m`;
+  contact.classList.add("visible");
 }
 
-function renderTargets(targets) {
+function renderTargets(targets, state) {
   const body = $("targets-body");
   body.innerHTML = "";
   if (!Array.isArray(targets) || targets.length === 0) {
@@ -147,7 +212,7 @@ function renderTargets(targets) {
       target.objId,
       `${format(target.distance_m)} m`,
       `${format(target.velocity_mps)} m/s`,
-      `${format(target.angle_deg)}°`,
+      `${format(riderAngle(state, target.filtered_angle_deg ?? target.angle_deg))}°`,
       finite(target.TTC_s) ? `${format(target.TTC_s)} s` : "—",
       target.direction || "UNKNOWN",
     ];
@@ -166,7 +231,7 @@ function addSample(state) {
   const values = {
     distance: state.distance_m,
     velocity: state.velocity_mps,
-    angle: state.filtered_angle_deg,
+    angle: riderAngle(state, state.filtered_angle_deg),
     ttc: state.TTC_s,
   };
   for (const [key, value] of Object.entries(values)) {
@@ -238,6 +303,7 @@ function drawChart(chart) {
 }
 
 function renderState(state) {
+  $("app-version").textContent = state.app_version || "unknown";
   const online = !state.stale;
   const chip = $("connection-chip");
   chip.className = `status-chip ${online ? "status-online" : "status-offline"}`;
@@ -260,11 +326,13 @@ function renderState(state) {
 
   $("chart-distance-value").textContent = `${format(state.distance_m)} m`;
   $("chart-velocity-value").textContent = `${format(state.velocity_mps)} m/s`;
-  $("chart-angle-value").textContent = `${format(state.filtered_angle_deg)} °`;
+  $("chart-angle-value").textContent =
+    `${format(riderAngle(state, state.filtered_angle_deg))} °`;
   $("chart-ttc-value").textContent = `${format(state.TTC_s)} s`;
 
+  updateRadarGeometry(state);
   updateRadarMarker(state);
-  renderTargets(state.targets);
+  renderTargets(state.targets, state);
   addSample(state);
   charts.forEach(drawChart);
 
@@ -295,6 +363,7 @@ function sourceName(source) {
   return ({
     radar: "RADAR",
     camera_npu: "CAM/NPU",
+    a35_dvr: "A35/DVR",
     imu_m33: "M33/IMU",
     a35_hud: "A35→HUD",
     hud_delivery: "HUD→APP",
@@ -307,6 +376,9 @@ function eventSummary(event) {
     return event.status === "target"
       ? `检测到 ${event.label || "道路用户"}${event.score ? ` · ${Number(event.score).toFixed(2)}` : ""}`
       : "未检测到道路用户";
+  }
+  if (event.source === "a35_dvr") {
+    return `${event.event_type} · ${event.status}${event.reason ? ` · ${event.reason}` : ""}`;
   }
   if (event.source === "radar") return `${event.label} · ${event.reason || "UNKNOWN"}`;
   if (event.source === "manual_label") return `${event.label} · ${event.status}`;
