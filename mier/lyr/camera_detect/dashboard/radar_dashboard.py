@@ -9,9 +9,11 @@ service serves the UI and appends manual annotations to labels.csv.
 from __future__ import annotations
 
 import argparse
+import codecs
 import csv
 import json
 import mimetypes
+import os
 import threading
 import time
 import uuid
@@ -87,7 +89,38 @@ class RadarStore:
         self.imu_delivery_path = self.data_dir / "imu_delivery.csv"
         self.lock = threading.Lock()
         self.active: dict[str, dict[str, Any]] = {}
+        self._ensure_labels_utf8_bom()
         self._restore_active_labels()
+
+    def _ensure_labels_utf8_bom(self) -> None:
+        """Add a BOM to an existing labels CSV without changing its UTF-8 data."""
+        try:
+            if not self.labels_path.exists() or self.labels_path.stat().st_size == 0:
+                return
+            with self.labels_path.open("rb") as labels_file:
+                if labels_file.read(len(codecs.BOM_UTF8)) == codecs.BOM_UTF8:
+                    return
+                labels_file.seek(0)
+                content = labels_file.read()
+            temporary = self.labels_path.with_name(
+                f".{self.labels_path.name}.utf8-bom.tmp"
+            )
+            with temporary.open("wb") as output:
+                output.write(codecs.BOM_UTF8)
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.labels_path)
+            print(
+                f"[DASHBOARD] added UTF-8 BOM to {self.labels_path}",
+                flush=True,
+            )
+        except OSError as error:
+            print(
+                f"[DASHBOARD] warning: cannot add UTF-8 BOM to "
+                f"{self.labels_path}: {error}",
+                flush=True,
+            )
 
     def read_state(self) -> dict[str, Any]:
         try:
@@ -110,12 +143,14 @@ class RadarStore:
         """Read a bounded tail while retaining the CSV header."""
         try:
             with path.open("rb") as source:
-                header = source.readline().decode("utf-8", "replace")
+                header_bytes = source.readline()
+                header = header_bytes.decode("utf-8-sig", "replace")
                 source.seek(0, 2)
                 size = source.tell()
-                start = max(len(header.encode("utf-8")), size - 262_144)
+                header_end = len(header_bytes)
+                start = max(header_end, size - 262_144)
                 source.seek(start)
-                if start > len(header.encode("utf-8")):
+                if start > header_end:
                     source.readline()
                 tail = source.read().decode("utf-8", "replace")
             lines = tail.splitlines()[-max_rows:]
@@ -249,7 +284,9 @@ class RadarStore:
         if not self.labels_path.exists():
             return
         try:
-            with self.labels_path.open("r", encoding="utf-8", newline="") as labels_file:
+            with self.labels_path.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as labels_file:
                 for row in csv.DictReader(labels_file):
                     event_type = row.get("event_type", "")
                     if event_type not in EVENT_TYPES:
@@ -316,6 +353,7 @@ class RadarStore:
             ) as labels_file:
                 writer = csv.DictWriter(labels_file, fieldnames=LABEL_FIELDS)
                 if needs_header:
+                    labels_file.write("\ufeff")
                     writer.writeheader()
                 writer.writerow(row)
                 labels_file.flush()

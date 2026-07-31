@@ -91,7 +91,11 @@ static void delivery_log_open(void) {
         return;
     }
     setvbuf(delivery_log, NULL, _IOLBF, BUFSIZ);
-    if (needs_header) fputs(DELIVERY_LOG_HEADER, delivery_log);
+    if (needs_header) {
+        /* UTF-8 BOM，兼容 Excel/WPS 直接打开 CSV。 */
+        fputs("\xEF\xBB\xBF", delivery_log);
+        fputs(DELIVERY_LOG_HEADER, delivery_log);
+    }
     delivery_log_write_count = 0;
     printf("[IMU] delivery log: %s (10 MiB x current+4)\n",
            DELIVERY_LOG_PATH);

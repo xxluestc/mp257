@@ -157,6 +157,11 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 结束行额外保存 `duration_ms`。所有 CSV 都包含 `timestamp_ms`，可以直接
 按时间范围对齐。
 
+新创建或轮转的 CSV 统一使用 UTF-8 编码并写入 UTF-8 BOM，Excel/WPS 可以
+直接打开中文而不再误判为 GBK/ANSI。Dashboard 启动时会为已有的无 BOM
+`labels.csv` 原子补写 BOM，不改变历史标注内容；Python 离线分析建议使用
+`encoding="utf-8-sig"`，它同时兼容带 BOM 文件。
+
 `sensor_events.csv` 统一字段为 `timestamp_ms/source/event_type/status/event_id`
 以及 NPU 的 `label/score/count`、IMU 的 `seq/reason/details`。`imu_delivery.csv`
 用同一个 `event_id` 记录 `hud_received`、`app_broadcast` 及 sent/failed/cooldown。

@@ -700,7 +700,11 @@ static FILE *open_csv_append(const char *path, const char *header) {
     FILE *fp = fopen(path, "a");
     if (fp == NULL) return NULL;
     setvbuf(fp, NULL, _IOLBF, BUFSIZ);
-    if (needs_header) fputs(header, fp);
+    if (needs_header) {
+        /* UTF-8 BOM 让 Excel/WPS 不再把 CSV 中文误判为 GBK/ANSI。 */
+        fputs("\xEF\xBB\xBF", fp);
+        fputs(header, fp);
+    }
     return fp;
 }
 
