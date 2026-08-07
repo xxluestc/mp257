@@ -1,0 +1,24 @@
+# IDE user state and generated build products
+.settings/
+.vscode/
+Debug/
+Release/
+__pycache__/
+*.pyc
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+MDK-ARM/E04_BLE_UART/
+MDK-ARM/02_test/
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.uvoptx
+MDK-ARM/*.bak
+MDK-ARM/*.dep
+MDK-ARM/*.hex
+MDK-ARM/*.bin
+MDK-ARM/*.axf
+MDK-ARM/*.map
+MDK-ARM/*.lst
+MDK-ARM/*.o
+MDK-ARM/*.d
+*.launch
+build.log
