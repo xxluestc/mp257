@@ -66,6 +66,7 @@
 #include <jpeglib.h>
 
 #include "camera.h"
+#include "ble_risk_output.h"
 #include "npu_detect.h"
 #include "nav_tts.h"
 
@@ -90,6 +91,7 @@
 #define DIRECTION_HYSTERESIS_DEG 2.0f
 #define ANGLE_DIRECTION_SIGN_DEFAULT -1.0f
 #define RADAR_LOG_DIR_DEFAULT  "/run/media/mmcblk0p1/dvr/radar_experiments"
+#define BLE_LED_UART_DEFAULT   "/dev/ttySTM0"
 
 /* LED */
 #define GPIO_CHIP_DEV          "/dev/gpiochip3"
@@ -164,6 +166,8 @@ static float g_angle_filter_alpha = ANGLE_FILTER_ALPHA_DEFAULT;
 static float g_angle_direction_sign = ANGLE_DIRECTION_SIGN_DEFAULT;
 static int   g_direction_stable_samples = DIRECTION_STABLE_SAMPLES_DEFAULT;
 static char  g_radar_log_dir[PATH_MAX] = RADAR_LOG_DIR_DEFAULT;
+static char  g_ble_led_uart[PATH_MAX] = BLE_LED_UART_DEFAULT;
+static bool  g_ble_led_enabled = true;
 
 /* ======================== 信号处理 ======================== */
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
@@ -2015,12 +2019,17 @@ int main(int argc, char *argv[]) {
             g_direction_stable_samples = atoi(argv[++i]);
         else if (strcmp(argv[i], "--radar-log-dir") == 0 && i + 1 < argc)
             snprintf(g_radar_log_dir, sizeof(g_radar_log_dir), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--ble-led-uart") == 0 && i + 1 < argc)
+            snprintf(g_ble_led_uart, sizeof(g_ble_led_uart), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--no-ble-led") == 0)
+            g_ble_led_enabled = false;
         else if (strcmp(argv[i], "-h") == 0) {
             printf("Usage: %s [-d camera] [-u uart] [-c conf] [-T ttc] [-D dist]\n"
                    "          [--left-angle deg] [--right-angle deg]\n"
                    "          [--angle-sign -1|1]\n"
                    "          [--angle-alpha 0..1] [--direction-samples n]\n"
                    "          [--radar-log-dir path]\n"
+                   "          [--ble-led-uart path] [--no-ble-led]\n"
                    "          [-t fall_delay] [-V v2x_delay] [-x v2x_dir] [-h]\n",
                    argv[0]);
             printf("  v2x_dir: nearby|left_front|right_front|left|right\n");
@@ -2062,6 +2071,7 @@ int main(int argc, char *argv[]) {
     /* 当日志被重定向到文件时，默认全缓冲会导致显示严重滞后；改为行缓冲 */
     setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
     setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+    ble_risk_configure(g_ble_led_uart, g_ble_led_enabled);
 
     printf("========================================\n");
     printf(" Radar + Camera NPU Fusion + DVR (v4)\n");
@@ -2078,6 +2088,9 @@ int main(int argc, char *argv[]) {
     printf("Dir filt: alpha=%.2f, stable samples=%d\n",
            g_angle_filter_alpha, g_direction_stable_samples);
     printf("Radar log:%s\n", g_radar_log_dir);
+    printf("BLE LEDs: %s%s\n",
+           g_ble_led_enabled ? g_ble_led_uart : "disabled",
+           g_ble_led_enabled ? " @ 115200" : "");
     printf("LED:      PD11 via %s\n", GPIO_CHIP_DEV);
     printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");
@@ -2432,6 +2445,7 @@ int main(int argc, char *argv[]) {
                 g_radar_npu_alert = 0;
                 g_led_alert     = 0;
                 radar_telemetry_publish_empty();
+                ble_risk_update(BLE_RISK_CLEAR);
 
                 /* 注意: 不在这里停止 DVR!
                    post-trigger 15s 由帧捕获部分的定时器控制,
@@ -2448,6 +2462,7 @@ int main(int argc, char *argv[]) {
                 (uint64_t)tv_heartbeat.tv_usec / 1000ULL;
             if (heartbeat_ms - g_radar_last_publish_ms >= 1000ULL)
                 radar_telemetry_publish_empty();
+            ble_risk_update(BLE_RISK_CLEAR);
         }
 
         /* 处理雷达数据 */
@@ -2579,6 +2594,21 @@ int main(int argc, char *argv[]) {
                             g_radar_npu_alert = 0;
                         }
                     }
+
+                    /*
+                     * 只转发已经通过现有雷达/NPU逻辑确认的最终碰撞风险。
+                     * CENTER（或方向暂未稳定）点亮两侧，CLEAR 熄灭两侧。
+                     */
+                    BleRiskState ble_state = BLE_RISK_CLEAR;
+                    if (g_radar_npu_alert && dangerous != NULL) {
+                        if (dangerous->direction == RADAR_DIR_LEFT)
+                            ble_state = BLE_RISK_LEFT;
+                        else if (dangerous->direction == RADAR_DIR_RIGHT)
+                            ble_state = BLE_RISK_RIGHT;
+                        else
+                            ble_state = BLE_RISK_CENTER;
+                    }
+                    ble_risk_update(ble_state);
                     radar_telemetry_publish(&radar, g_radar_npu_alert);
                 }
                 memmove(rx_buf, rx_buf + frame_total, rx_len - frame_total);
@@ -2593,6 +2623,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\n[系统] [FUSION] Stopping...\n");
+    ble_risk_shutdown();
 
     /* DVR 清理 */
     if (dvr_recording && !dvr_encoding) {

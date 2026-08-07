@@ -23,6 +23,8 @@ RPMSG_DEV="/dev/ttyRPMSG0"
 RPROC_STATE="/sys/class/remoteproc/remoteproc0/state"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 RADAR_LOG_DIR="/run/media/mmcblk0p1/dvr/radar_experiments"
+BLE_LED_ENABLED="1"
+BLE_LED_UART="/dev/ttySTM0"
 TF_MOUNT="/run/media/mmcblk0p1"
 TF_DEVICE="/dev/mmcblk0p1"
 TF_FSCK_UNIT="systemd-fsck@dev-mmcblk0p1.service"
@@ -87,6 +89,8 @@ load_radar_config() {
         local direction_samples
         local dashboard_port
         local radar_log_dir
+        local ble_led_enabled
+        local ble_led_uart
         ttc=$(grep -E '^TTC=' "$config" | cut -d'=' -f2)
         dist=$(grep -E '^DIST=' "$config" | cut -d'=' -f2)
         left_angle=$(grep -E '^LEFT_ANGLE=' "$config" | cut -d'=' -f2)
@@ -96,6 +100,8 @@ load_radar_config() {
         direction_samples=$(grep -E '^DIRECTION_SAMPLES=' "$config" | cut -d'=' -f2)
         dashboard_port=$(grep -E '^DASHBOARD_PORT=' "$config" | cut -d'=' -f2)
         radar_log_dir=$(grep -E '^RADAR_LOG_DIR=' "$config" | cut -d'=' -f2)
+        ble_led_enabled=$(grep -E '^BLE_LED_ENABLED=' "$config" | cut -d'=' -f2)
+        ble_led_uart=$(grep -E '^BLE_LED_UART=' "$config" | cut -d'=' -f2)
         [ -n "$ttc" ] && TTC_THRESHOLD="$ttc"
         [ -n "$dist" ] && DIST_THRESHOLD="$dist"
         [ -n "$left_angle" ] && LEFT_ANGLE="$left_angle"
@@ -105,6 +111,8 @@ load_radar_config() {
         [ -n "$direction_samples" ] && DIRECTION_SAMPLES="$direction_samples"
         [ -n "$dashboard_port" ] && DASHBOARD_PORT="$dashboard_port"
         [ -n "$radar_log_dir" ] && RADAR_LOG_DIR="$radar_log_dir"
+        [ -n "$ble_led_enabled" ] && BLE_LED_ENABLED="$ble_led_enabled"
+        [ -n "$ble_led_uart" ] && BLE_LED_UART="$ble_led_uart"
     fi
 }
 load_radar_config
@@ -517,6 +525,13 @@ ARGS="${ARGS} --left-angle ${LEFT_ANGLE} --right-angle ${RIGHT_ANGLE}"
 ARGS="${ARGS} --angle-sign ${ANGLE_SIGN}"
 ARGS="${ARGS} --angle-alpha ${ANGLE_ALPHA} --direction-samples ${DIRECTION_SAMPLES}"
 ARGS="${ARGS} --radar-log-dir ${RADAR_LOG_DIR}"
+if [ "$BLE_LED_ENABLED" = "1" ]; then
+    ARGS="${ARGS} --ble-led-uart ${BLE_LED_UART}"
+    log "蓝牙碰撞方向灯: ${BLE_LED_UART} @ 115200"
+else
+    ARGS="${ARGS} --no-ble-led"
+    log "蓝牙碰撞方向灯: 已禁用"
+fi
 log "雷达方向: 骑行者角度=传感器角度×${ANGLE_SIGN}; LEFT<=${LEFT_ANGLE}°, RIGHT>=${RIGHT_ANGLE}°"
 log "方向滤波: alpha=${ANGLE_ALPHA}, stable_samples=${DIRECTION_SAMPLES}"
 log "雷达实验数据: ${RADAR_LOG_DIR}"

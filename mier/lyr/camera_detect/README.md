@@ -6,6 +6,7 @@
 - 毫米波雷达多目标解析、危险目标选择、方向滤波和碰撞告警
 - IMU 摔倒与 V2X RPMsg 事件
 - LED、骨传导音频、OLED/HUD 和手机导航 UDP
+- CH9140 蓝牙方向灯（WBA 左/右碰撞风险提示）
 - 雷达/摄像头/IMU 同步记录、本地 Web Dashboard 与人工实验标注
 
 雷达增强是在原有融合链路上增量实现的，没有改动 NPU、DVR、LED、Audio
@@ -71,6 +72,9 @@ make ota-package VERSION=1.0.1
 输出位于 `dist/`。完整的目录迁移、板端服务部署和回滚方法见
 [A35 OTA 操作指南](docs/OTA.md)。
 
+MP257、CH9140 与 WBA 左右碰撞方向灯的接线、协议、烧录、测试和实机联调
+记录见 [蓝牙方向灯联调文档](docs/BLUETOOTH_DIRECTION_LED.md)。
+
 ## 部署
 
 开发板恢复在线后，按需覆盖地址：
@@ -111,11 +115,39 @@ ANGLE_ALPHA=0.35
 DIRECTION_SAMPLES=3
 DASHBOARD_PORT=8080
 RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
+BLE_LED_ENABLED=1
+BLE_LED_UART=/dev/ttySTM0
 ```
 
 - `LEFT_ANGLE`、`RIGHT_ANGLE`：LEFT/CENTER/RIGHT 可配置边界
 - `ANGLE_ALPHA`：每个 `objId` 独立的角度 EMA 权重
 - `DIRECTION_SAMPLES`：连续多少帧同方向后确认切换
+- `BLE_LED_UART`：J15 USART2 所接 CH9140 的 Linux 串口
+
+## WBA 左右方向灯
+
+`radar_fusion` 只把现有融合逻辑最终确认的碰撞风险发送给 WBA，不改变雷达、
+NPU 或录像判定：
+
+| 最终状态 | 串口命令 | WBA 动作 |
+|---|---|---|
+| 左后方风险 | `RISK LEFT` | PA7 左灯亮 |
+| 右后方风险 | `RISK RIGHT` | PA5 右灯亮 |
+| 正后方风险 | `RISK CENTER` | 两灯同时亮 |
+| 无碰撞风险 | `RISK CLEAR` | 两灯熄灭 |
+
+没有雷达环境时，先停业务服务，避免两个进程同时使用 `/dev/ttySTM0`，再逐项
+测试：
+
+```bash
+systemctl stop dvr.service
+/xxl/camera_detect/scripts/ble_led_test.sh ping
+/xxl/camera_detect/scripts/ble_led_test.sh left
+/xxl/camera_detect/scripts/ble_led_test.sh right
+/xxl/camera_detect/scripts/ble_led_test.sh center
+/xxl/camera_detect/scripts/ble_led_test.sh clear
+systemctl start dvr.service
+```
 
 ## Dashboard 与实验标注
 

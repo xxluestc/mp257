@@ -28,7 +28,7 @@ CFLAGS   = -Wall -O2 -I. -I$(STAI_MPU_INC) -I$(HUD_DIR)
 CXXFLAGS = -Wall -O2 -std=c++17 -I. -I$(STAI_MPU_INC) -I$(HUD_DIR)
 LDFLAGS  = -L$(STAI_MPU_LIB) -lstai_mpu -ljpeg -lstdc++ -lm -lpthread -ldl
 
-COMMON_OBJS = camera.o npu_detect.o nav_tts.o cJSON.o oled.o
+COMMON_OBJS = camera.o npu_detect.o nav_tts.o ble_risk_output.o cJSON.o oled.o
 
 MODEL_DIR  = ./models
 MODEL_FILE = $(MODEL_DIR)/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb
@@ -52,6 +52,7 @@ script-check:
 	sh -n scripts/start_m33_early.sh
 	sh -n scripts/log_maintenance.sh
 	sh -n scripts/clear_runtime_logs.sh
+	sh -n scripts/ble_led_test.sh
 	sh -n $(OTA_DIR)/install_ota_service.sh
 
 ota-check:
