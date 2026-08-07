@@ -584,13 +584,16 @@
 				#size-cells = <0x00>;
 				access-controllers = <0x1b 0x01>;
 				power-domains = <0x0c>;
-				status = "disabled";
+				status = "okay";
 				phandle = <0xd6>;
 
 				pwm {
 					compatible = "st,stm32mp25-pwm";
 					#pwm-cells = <0x03>;
-					status = "disabled";
+					pinctrl-names = "default\0sleep";
+					pinctrl-0 = <0x1ad>;
+					pinctrl-1 = <0x1ae>;
+					status = "okay";
 				};
 
 				timer@1 {
@@ -1990,7 +1993,7 @@
 				access-controllers = <0x1b 0x26>;
 				power-domains = <0x0c>;
 				wakeup-source;
-				status = "okay";
+				status = "disabled";
 				pinctrl-names = "default\0idle\0sleep";
 				pinctrl-0 = <0x4a>;
 				pinctrl-1 = <0x4b>;
@@ -4669,6 +4672,25 @@
 				pins2 {
 					pinmux = <0x5b07>;
 					bias-disable;
+				};
+			};
+
+			pf10-tim2-ch3-pwm-0 {
+				phandle = <0x1ad>;
+
+				pins {
+					pinmux = <0x5a08>;
+					bias-disable;
+					drive-push-pull;
+					slew-rate = <0x00>;
+				};
+			};
+
+			pf10-tim2-ch3-pwm-sleep-0 {
+				phandle = <0x1ae>;
+
+				pins {
+					pinmux = <0x5a11>;
 				};
 			};
 

@@ -44,6 +44,40 @@ ssh root@192.168.88.10 'sync; reboot'
 
 ## 修改内容汇总
 
+### 修改 0: PF10 配置为 TIM2_CH3 硬件 PWM
+
+- **基线**: 从开发板当时正在运行的
+  `/boot/myb-stm32mp257x-2GB.dtb`（SHA256:
+  `7cf5ebd3daaf66d13999f3356f8a09a97b5dd01b96bda99a9957ad7bbf058270`）
+  反编译后修改，不使用内核源码中的通用 DTS。
+- **UART8**: `serial@40380000` 继续保持 `disabled`，释放 PF10/PF11。
+- **TIM2**: `timer@40000000` 和其 `pwm` 子节点改为 `okay`。
+- **PF10**: `pinmux = <0x5a08>`，对应 TIM2_CH3；休眠态为
+  `pinmux = <0x5a11>`。
+- **PWM 通道**: Linux `pwmchip` 中的通道号为 `2`（CH3）。
+- **当前 DTB SHA256**:
+  `bc27687bb01dca448761ea1ceecd288a26960d1f9d2f385a7b0914b12cc0a045`。
+- **回退备份**:
+  `/boot/myb-stm32mp257x-2GB.dtb.bak-before-pf10-pwm-20260807`。
+
+亮度控制程序位于开发板 `/home/root/pf10_pwm`：
+
+```bash
+# 1 kHz、5% / 20% / 50% 亮度
+/home/root/pf10_pwm 5
+/home/root/pf10_pwm 20
+/home/root/pf10_pwm 50
+
+# 关闭
+/home/root/pf10_pwm 0
+
+# 可选：指定频率和反相极性
+/home/root/pf10_pwm 20 1000 inversed
+```
+
+该程序使用 TIM2 硬件 PWM，不通过 Linux 用户态循环翻转 GPIO，因此不会持续占用
+CPU，输出抖动也明显小于软件 PWM。
+
 ### 修改 1: 禁用 UART4（释放 PB6）
 
 - **节点**: `serial@40100000` (UART4)
@@ -142,6 +176,7 @@ ssh root@192.168.88.10 'sync; reboot'
 | PB5 | I2C2_SCL | SAI4_SD_B (AF4) |
 | PB6 | UART4_RX (AF3) | SAI4_SCK_B (AF4) |
 | PB11 | FDCAN1_RX (AF8) | GPIO 控制 MAX98357A SD_MODE |
+| PF10 | UART8_TX (AF6) | TIM2_CH3 硬件 PWM |
 
 ## 关键踩坑记录
 
