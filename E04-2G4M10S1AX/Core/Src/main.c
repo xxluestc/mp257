@@ -634,12 +634,14 @@ static void MX_GPIO_Init(void)
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /*
    * EWT04 D1 on PA2 is active low.
-   * External rear-warning LEDs are active high:
+   * The installed rear-warning LED/MOS inputs are active low:
    *   PA7 (header sequence 3) -> LEFT LED
    *   PA5 (header sequence 5) -> RIGHT LED
+   * Keep both outputs high before switching them to output mode so that
+   * power-up and BLE initialization do not produce a false warning.
    */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5 | GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5 | GPIO_PIN_7, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_5 | GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;

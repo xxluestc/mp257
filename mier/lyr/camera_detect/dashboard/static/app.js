@@ -618,7 +618,7 @@ function renderSystem(payload) {
   setHealthValue("storage-state", storage.mounted, storage.mounted ? percentText(storage.used_percent) : "UNMOUNTED");
   $("storage-detail").textContent = storage.mounted
     ? `${storage.used_gib ?? "—"}/${storage.total_gib ?? "—"} GiB`
-    : "TF unavailable";
+    : "storage unavailable";
   $("system-updated").textContent = `系统采样 ${new Date(payload.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })} · ${payload.refresh_interval_s || 5}s`;
 }
 
@@ -717,6 +717,45 @@ function requestControl(task, action) {
   }
 }
 
+const maintenanceCopy = {
+  tf_mount: {
+    title: "识别并挂载 TF 卡？",
+    message: "仅挂载已经插入的 /dev/mmcblk0p1。录像主存储位于板载 ext4，不依赖 TF 卡。",
+    confirm: "确认挂载",
+  },
+  tf_eject: {
+    title: "安全弹出 TF 卡？",
+    message: "系统会先同步缓存再卸载 TF。看到成功提示后才能物理拔卡。",
+    confirm: "同步并弹出",
+  },
+  project_stop: {
+    title: "安全停止项目？",
+    message: "2 秒后停止 DVR 和 Dashboard，并同步存储；M33、网络和 OTA 保持运行。页面随后会断开。",
+    confirm: "停止项目",
+  },
+  system_poweroff: {
+    title: "安全关闭开发板？",
+    message: "2 秒后停止业务、同步全部存储并执行系统关机。请等待板卡完成关机后再断电。",
+    confirm: "安全关机",
+  },
+};
+
+function requestMaintenance(action) {
+  const copy = maintenanceCopy[action];
+  if (!copy) return;
+  pendingControl = { scope: "maintenance", action, name: copy.title.replace("？", "") };
+  $("control-dialog-title").textContent = copy.title;
+  $("control-dialog-message").textContent = copy.message;
+  $("control-dialog-confirm").textContent = copy.confirm;
+  $("control-dialog-confirm").classList.toggle("danger", action === "project_stop" || action === "system_poweroff");
+  const dialog = $("control-dialog");
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else if (window.confirm(copy.message)) {
+    performControl();
+  }
+}
+
 function renderControl(payload) {
   controlToken = payload.control_token || "";
   const guard = $("control-plane-state");
@@ -724,6 +763,23 @@ function renderControl(payload) {
   guard.textContent = payload.controls_enabled
     ? "独立面板服务在线 · 控制已解锁"
     : "独立面板服务未就绪 · 控制已锁定";
+
+  const maintenance = payload.maintenance || {};
+  const tfState = $("tf-card-state");
+  if (maintenance.tf_mounted) {
+    tfState.textContent = `TF 已挂载 · ${maintenance.tf_mount}`;
+    tfState.className = "mounted";
+  } else if (maintenance.tf_inserted) {
+    tfState.textContent = "TF 已识别 · 尚未挂载";
+    tfState.className = "inserted";
+  } else {
+    tfState.textContent = "未检测到 TF 卡";
+    tfState.className = "missing";
+  }
+  $("recording-storage").textContent = `录像：${maintenance.recording_storage || "/usr/local/helmet/dvr"}`;
+  document.querySelectorAll("[data-maintenance]").forEach((button) => {
+    button.disabled = !payload.controls_enabled;
+  });
 
   const tasks = $("controllable-task-list");
   tasks.innerHTML = "";
@@ -779,7 +835,8 @@ function renderControl(payload) {
       const time = document.createElement("time");
       time.textContent = new Date(Number(entry.timestamp_ms)).toLocaleTimeString("zh-CN", { hour12: false });
       const detail = document.createElement("span");
-      detail.textContent = `${entry.task_name} · ${entry.action === "pause" ? "暂停" : "运行"}`;
+      const actionNames = { pause: "暂停", run: "运行", mount: "挂载", eject: "弹出", stop: "停止", poweroff: "关机" };
+      detail.textContent = `${entry.task_name} · ${actionNames[entry.action] || entry.action}`;
       const result = document.createElement("strong");
       result.textContent = entry.result === "ok" ? "成功" : "失败";
       row.append(time, detail, result);
@@ -794,10 +851,15 @@ async function performControl() {
   pendingControl = null;
   if (!request) return;
   try {
-    const response = await fetch("/api/control", {
+    const maintenance = request.scope === "maintenance";
+    const response = await fetch(maintenance ? "/api/maintenance" : "/api/control", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(maintenance ? {
+        action: request.action,
+        confirmation: `maintenance:${request.action}`,
+        control_token: controlToken,
+      } : {
         task: request.task,
         action: request.action,
         confirmation: `${request.task}:${request.action}`,
@@ -806,7 +868,7 @@ async function performControl() {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    showToast(`${request.name}${request.action === "pause" ? "已暂停" : "已运行"}`);
+    showToast(maintenance ? `${request.name}已调度` : `${request.name}${request.action === "pause" ? "已暂停" : "已运行"}`);
     await pollControl();
     pollSystem();
     pollBoot();
@@ -824,6 +886,9 @@ function bindControlDialog() {
   });
   $("control-dialog").addEventListener("close", () => {
     if ($("control-dialog").returnValue === "cancel") pendingControl = null;
+  });
+  document.querySelectorAll("[data-maintenance]").forEach((button) => {
+    button.addEventListener("click", () => requestMaintenance(button.dataset.maintenance));
   });
 }
 

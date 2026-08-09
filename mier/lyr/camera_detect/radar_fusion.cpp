@@ -28,7 +28,7 @@
  *   1. 雷达 BSD 目标检测 + 摄像头 NPU 道路用户验证
  *   2. PD11 LED 告警闪烁
  *   3. DVR 行车记录:
- *      - TARGET_ON → 开始缓冲 MJPEG 帧到 TF 卡
+ *      - TARGET_ON → 开始缓冲 MJPEG 帧到板载 ext4
  *      - COLLISION + NPU 确认 → 保存前后各 15 秒为 MP4
  *      - TARGET_OFF → 清理缓冲(无触发时)
  *
@@ -58,6 +58,7 @@
 #include <limits.h>
 #include <float.h>
 #include <atomic>
+#include <spawn.h>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -91,7 +92,7 @@
 #define DIRECTION_STABLE_SAMPLES_DEFAULT 3
 #define DIRECTION_HYSTERESIS_DEG 2.0f
 #define ANGLE_DIRECTION_SIGN_DEFAULT -1.0f
-#define RADAR_LOG_DIR_DEFAULT  "/run/media/mmcblk0p1/dvr/radar_experiments"
+#define RADAR_LOG_DIR_DEFAULT  "/usr/local/helmet/radar_experiments"
 #define BLE_LED_UART_DEFAULT   "/dev/ttySTM0"
 
 /* LED */
@@ -101,13 +102,21 @@
 #define LED_BLINK_OFF_MS       200
 
 /* DVR */
-#define DVR_BASE_DIR           "/run/media/mmcblk0p1/dvr"
-#define DVR_BUFFER_DIR         "/run/media/mmcblk0p1/dvr/.buffer"
-#define DVR_MOUNT_DIR          "/run/media/mmcblk0p1"
+#define DVR_BASE_DIR           "/usr/local/helmet/dvr"
+#define DVR_BUFFER_DIR         "/usr/local/helmet/dvr/.buffer"
+#define DVR_MOUNT_DIR          "/usr/local"
+#define DVR_MOUNT_PARENT       "/usr"
 #define DVR_SAVE_BEFORE_SEC    15
 #define DVR_SAVE_AFTER_SEC     15
 #define DVR_CAPTURE_FPS        25
 #define DVR_CAPTURE_INTERVAL_US (1000000 / DVR_CAPTURE_FPS)
+#define DVR_MAX_EVENT_SPAN_SEC 60
+#define DVR_BUFFER_WINDOW_SEC  (DVR_SAVE_BEFORE_SEC + DVR_MAX_EVENT_SPAN_SEC + DVR_SAVE_AFTER_SEC)
+#define DVR_STORAGE_SYNC_FRAMES (DVR_CAPTURE_FPS * 2)
+#define DVR_MIN_MP4_BYTES      4096
+#define DVR_ENCODER_WORKER     "/xxl/camera_detect/scripts/dvr_encode_worker.py"
+
+extern char **environ;
 
 /* RPMsg (M33 IMU/V2X alerts) */
 #define RPMSG_DEVICE           "/dev/ttyRPMSG0"
@@ -142,7 +151,7 @@ typedef struct {
     uint32_t  frame_index;   /* 帧序号 */
 } dvr_frame_entry_t;
 
-#define DVR_MAX_FRAMES (DVR_SAVE_BEFORE_SEC * DVR_CAPTURE_FPS * 2)
+#define DVR_MAX_FRAMES (DVR_BUFFER_WINDOW_SEC * DVR_CAPTURE_FPS)
 
 /* ======================== 全局状态 ======================== */
 static volatile int g_running    = 1;
@@ -470,7 +479,7 @@ static uint64_t g_radar_last_publish_ms = 0;
 static unsigned int g_radar_csv_write_count = 0;
 static unsigned int g_sensor_csv_write_count = 0;
 
-/* TF 尚未挂载时，关键事件先进入有界内存队列，挂载后按原顺序补写。 */
+/* 业务存储尚未就绪时，关键事件先进入有界内存队列，就绪后按原顺序补写。 */
 #define SENSOR_PENDING_MAX 128U
 #define SENSOR_PENDING_LINE_MAX 1536U
 static char g_sensor_pending[SENSOR_PENDING_MAX][SENSOR_PENDING_LINE_MAX];
@@ -1212,13 +1221,16 @@ static int dvr_recording = 0;
 static int dvr_save_triggered = 0;
 static int dvr_encoding = 0;
 static pid_t dvr_encoder_pid = 0;
-static uint64_t dvr_trigger_time_us = 0;
+static uint64_t dvr_first_trigger_time_us = 0;
+static uint64_t dvr_trigger_time_us = 0; /* 最近一次触发，用于延长 post 窗口 */
+static uint64_t dvr_last_extension_log_us = 0;
+static unsigned int dvr_trigger_count = 0;
 static int dvr_frame_count = 0;
 static dvr_frame_entry_t dvr_frames[DVR_MAX_FRAMES];
 static FILE *dvr_raw_file = NULL;
 static char dvr_raw_path[2048];
 static char dvr_buffer_dir[1024];
-static int dvr_tf_ok = 0;
+static int dvr_storage_ok = 0;
 static int dvr_has_encoder = 0;
 static int dvr_camera_pixelformat = 0;
 static uint64_t dvr_last_start_attempt_us = 0;
@@ -1227,35 +1239,35 @@ static int g_storage_ready = 0;
 #define DVR_START_RETRY_US 2000000ULL
 
 /*
- * 目录存在不等于 TF 已挂载。Dashboard 或旧脚本可能提前创建挂载点下的
- * 目录，因此用 st_dev 与父目录比较，防止把根文件系统误当成 TF 写入。
+ * 目录存在不等于 userfs 已挂载。用 st_dev 与父目录比较，防止把根文件系统
+ * 误当成业务存储写入。
  */
-static int tf_storage_mounted(void) {
+static int dvr_storage_available(void) {
     struct stat mount_st;
     struct stat parent_st;
     return stat(DVR_MOUNT_DIR, &mount_st) == 0 &&
-           stat("/run/media", &parent_st) == 0 &&
+           stat(DVR_MOUNT_PARENT, &parent_st) == 0 &&
            S_ISDIR(mount_st.st_mode) && mount_st.st_dev != parent_st.st_dev;
 }
 
-static int path_is_on_tf(const char *path) {
+static int path_requires_dvr_mount(const char *path) {
     size_t prefix_len = strlen(DVR_MOUNT_DIR);
     return path != NULL && strncmp(path, DVR_MOUNT_DIR, prefix_len) == 0 &&
            (path[prefix_len] == '\0' || path[prefix_len] == '/');
 }
 
-/* 在主循环中重复调用；TF 晚到时只初始化一次，不阻塞风险处理。 */
+/* 在主循环中重复调用；userfs 晚到时只初始化一次，不阻塞风险处理。 */
 static void storage_try_initialize(void) {
-    int tf_ready = tf_storage_mounted();
-    if (!dvr_tf_ok && tf_ready) {
+    int storage_ready = dvr_storage_available();
+    if (!dvr_storage_ok && storage_ready) {
         if (mkdir_recursive(DVR_BASE_DIR) == 0) {
-            dvr_tf_ok = 1;
-            printf("[系统] [DVR] TF storage attached: %s\n", DVR_BASE_DIR);
+            dvr_storage_ok = 1;
+            printf("[系统] [DVR] Reliable ext4 storage attached: %s\n", DVR_BASE_DIR);
             startup_mark("dvr_storage_ready");
         }
     }
 
-    int telemetry_ready = !path_is_on_tf(g_radar_log_dir) || tf_ready;
+    int telemetry_ready = !path_requires_dvr_mount(g_radar_log_dir) || storage_ready;
     if (telemetry_ready && g_sensor_csv == NULL)
         sensor_telemetry_init();
     if (telemetry_ready && g_radar_csv == NULL) {
@@ -1263,7 +1275,7 @@ static void storage_try_initialize(void) {
             radar_telemetry_publish_empty();
     }
 
-    if (!g_storage_ready && dvr_tf_ok && g_sensor_csv != NULL &&
+    if (!g_storage_ready && dvr_storage_ok && g_sensor_csv != NULL &&
         g_radar_csv != NULL) {
         g_storage_ready = 1;
         startup_mark("business_storage_initialized");
@@ -1272,12 +1284,16 @@ static void storage_try_initialize(void) {
 
 /* 生成输出文件名 */
 static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
-    time_t t = time(NULL);
-    struct tm *tm = localtime(&t);
-    snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d.mp4",
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t t = tv.tv_sec;
+    struct tm tm_buf;
+    localtime_r(&t, &tm_buf);
+    snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d_%03ld.mp4",
              DVR_BASE_DIR, prefix,
-             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-             tm->tm_hour, tm->tm_min, tm->tm_sec);
+             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+             tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
+             (long)(tv.tv_usec / 1000));
 }
 
 /* 启动 DVR 录制 */
@@ -1285,11 +1301,11 @@ static int dvr_start(void) {
     if (dvr_recording) return 0;
     /* 该函数也可能由 RPMsg 线程调用，只更新 DVR 自己的挂载状态，避免和
      * 主循环并发初始化 CSV/JSON 文件。 */
-    if (!dvr_tf_ok && tf_storage_mounted() &&
+    if (!dvr_storage_ok && dvr_storage_available() &&
         mkdir_recursive(DVR_BASE_DIR) == 0)
-        dvr_tf_ok = 1;
-    if (!dvr_tf_ok) {
-        printf("[系统] [DVR] TF card not available, recording disabled\n");
+        dvr_storage_ok = 1;
+    if (!dvr_storage_ok) {
+        printf("[系统] [DVR] Reliable ext4 storage not available, recording disabled\n");
         return -1;
     }
 
@@ -1317,13 +1333,17 @@ static int dvr_start(void) {
     dvr_frame_count = 0;
     dvr_save_triggered = 0;
     dvr_encoding = 0;
+    dvr_first_trigger_time_us = 0;
+    dvr_trigger_time_us = 0;
+    dvr_last_extension_log_us = 0;
+    dvr_trigger_count = 0;
     dvr_recording = 1;
     printf("[调试] [DVR] Recording started (buffer: %s)\n", dvr_buffer_dir);
     return 0;
 }
 
 /*
- * NPU 首次发现目标时启动预缓存；如果当时 TF/目录短暂不可用，后续仍要重试。
+ * NPU 首次发现目标时启动预缓存；如果当时存储/目录短暂不可用，后续仍要重试。
  * 碰撞和摔倒事件使用 force=1 立即再试，避免 dvr_recording=0 时静默丢失视频。
  */
 static int dvr_ensure_started(uint64_t now_us, const char *reason, int force) {
@@ -1342,9 +1362,9 @@ static int dvr_ensure_started(uint64_t now_us, const char *reason, int force) {
     int rc = dvr_start();
     char details[192];
     snprintf(details, sizeof(details),
-             "reason=%s recording=%d encoding=%d tf_ok=%d rc=%d",
+             "reason=%s recording=%d encoding=%d storage_ok=%d rc=%d",
              reason != NULL ? reason : "unknown", dvr_recording,
-             dvr_encoding, dvr_tf_ok, rc);
+             dvr_encoding, dvr_storage_ok, rc);
     sensor_event_log("a35_dvr", "buffer",
                      rc == 0 ? "started" : "failed",
                      NULL, NULL, -1.0f, -1, -1,
@@ -1407,36 +1427,82 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
 
     /* 写入帧: [4B size][8B timestamp][JPEG data] */
     uint32_t frame_size = jpeg_size + 12;
-    fwrite(&frame_size, 4, 1, dvr_raw_file);
-    fwrite(&timestamp_us, 8, 1, dvr_raw_file);
-    fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file);
+    int write_ok =
+        fwrite(&frame_size, 4, 1, dvr_raw_file) == 1 &&
+        fwrite(&timestamp_us, 8, 1, dvr_raw_file) == 1 &&
+        fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file) == jpeg_size;
+    if (!write_ok) {
+        fprintf(stderr, "[DVR] storage write failed: %s\n", strerror(errno));
+        dvr_storage_ok = 0;
+        dvr_recording = 0;
+        fclose(dvr_raw_file);
+        dvr_raw_file = NULL;
+        return;
+    }
 
-    /* 每 25 帧 flush 一次，避免每帧都 sync 磁盘 */
+    /* 定期 flush + fdatasync；比赛断电或热拔时最多损失约 2 秒缓存。 */
     static int dvr_flush_cnt = 0;
-    if (++dvr_flush_cnt >= DVR_CAPTURE_FPS) {
-        fflush(dvr_raw_file);
+    if (++dvr_flush_cnt >= DVR_STORAGE_SYNC_FRAMES) {
+        int flush_rc = fflush(dvr_raw_file);
+        int sync_rc = flush_rc == 0 ? fdatasync(fileno(dvr_raw_file)) : -1;
         dvr_flush_cnt = 0;
+        if (flush_rc != 0 || sync_rc != 0 || !dvr_storage_available()) {
+            fprintf(stderr, "[DVR] storage flush/sync failed or filesystem detached: %s\n",
+                    strerror(errno));
+            dvr_storage_ok = 0;
+            dvr_recording = 0;
+            fclose(dvr_raw_file);
+            dvr_raw_file = NULL;
+            return;
+        }
     }
 
     dvr_frame_count++;
 }
 
-/* 触发 DVR 保存 */
-static void dvr_trigger_save(uint64_t trigger_time_us, const char *reason) {
-    if (!dvr_recording || dvr_save_triggered) return;
-    /* 先写时间再置标志，避免主循环看到标志却读到旧时间 */
+/*
+ * 触发 DVR 保存。连续风险不会在第一个事件之后被丢弃，而是延长同一录像窗口；
+ * 比赛连续演示 LEFT/CENTER/RIGHT 时，一段录像会完整包含这些事件。
+ * 返回 1 表示新录像首次触发，0 表示延长/忽略。
+ */
+static int dvr_trigger_save(uint64_t trigger_time_us, const char *reason) {
+    if (!dvr_recording || dvr_encoding) return 0;
+
+    if (dvr_save_triggered) {
+        uint64_t max_last = dvr_first_trigger_time_us +
+                            (uint64_t)DVR_MAX_EVENT_SPAN_SEC * 1000000ULL;
+        if (trigger_time_us > dvr_trigger_time_us &&
+            trigger_time_us <= max_last) {
+            dvr_trigger_time_us = trigger_time_us;
+            dvr_trigger_count++;
+            if (dvr_last_extension_log_us == 0 ||
+                trigger_time_us - dvr_last_extension_log_us >= 1000000ULL) {
+                printf("[保存] [DVR] Event window extended (events=%u, post=%ds)\n",
+                       dvr_trigger_count, DVR_SAVE_AFTER_SEC);
+                dvr_last_extension_log_us = trigger_time_us;
+            }
+        }
+        return 0;
+    }
+
+    /* 先写完整状态再置标志，避免主循环看到半初始化的触发信息。 */
+    dvr_first_trigger_time_us = trigger_time_us;
     dvr_trigger_time_us = trigger_time_us;
+    dvr_last_extension_log_us = trigger_time_us;
+    dvr_trigger_count = 1;
     dvr_save_triggered = 1;
-    printf("[保存] [DVR] Save triggered! (pre=%ds, post=%ds)\n",
-           DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+    printf("[保存] [DVR] Save triggered! (pre=%ds, post=%ds, max_span=%ds)\n",
+           DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC, DVR_MAX_EVENT_SPAN_SEC);
     char details[160];
     snprintf(details, sizeof(details),
-             "reason=%s frames=%d pre_s=%d post_s=%d",
+             "reason=%s frames=%d pre_s=%d post_s=%d max_span_s=%d",
              reason != NULL ? reason : "unknown", dvr_frame_count,
-             DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+             DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC,
+             DVR_MAX_EVENT_SPAN_SEC);
     sensor_event_log("a35_dvr", "recording", "triggered",
                      NULL, NULL, -1.0f, -1, -1,
                      reason, details);
+    return 1;
 }
 
 /* 停止 DVR 录制 */
@@ -1445,7 +1511,13 @@ static void dvr_stop(void) {
     dvr_recording = 0;
 
     if (dvr_raw_file) {
-        fclose(dvr_raw_file);
+        if (fflush(dvr_raw_file) != 0 ||
+            fdatasync(fileno(dvr_raw_file)) != 0) {
+            fprintf(stderr, "[DVR] Final storage sync failed: %s\n", strerror(errno));
+            dvr_storage_ok = 0;
+        }
+        if (fclose(dvr_raw_file) != 0)
+            fprintf(stderr, "[DVR] Raw buffer close failed: %s\n", strerror(errno));
         dvr_raw_file = NULL;
     }
 
@@ -1457,27 +1529,6 @@ static void dvr_stop(void) {
     }
 }
 
-/* 在子进程内运行一个编码器命令, 等待结束并返回退出码。
- * 输出重定向到 log_path。
- */
-static int run_encoder_in_child(const char *name, char *const argv[], const char *log_path) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        int log_fd = open(log_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (log_fd >= 0) {
-            dup2(log_fd, STDOUT_FILENO);
-            dup2(log_fd, STDERR_FILENO);
-            close(log_fd);
-        }
-        execvp(name, argv);
-        _exit(127); /* 命令不存在 */
-    }
-    int status;
-    if (waitpid(pid, &status, 0) < 0) return -1;
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
-}
 
 /* 录制完成提示音 */
 static void play_recording_complete_sound(void) {
@@ -1500,10 +1551,7 @@ static int dvr_encode_mp4(void) {
     if (dvr_encoding) return -1;
     if (dvr_frame_count == 0) return -1;
     if (!dvr_has_encoder) {
-        printf("[系统] [DVR] No video encoder available, skipping encode\n");
-        /* 清理缓冲 */
-        unlink(dvr_raw_path);
-        rmdir(dvr_buffer_dir);
+        printf("[系统] [DVR] No video encoder available; raw buffer retained\n");
         return -1;
     }
 
@@ -1514,8 +1562,12 @@ static int dvr_encode_mp4(void) {
     int start_idx = 0;
     int end_idx = active_frames - 1;
 
-    if (dvr_save_triggered && dvr_trigger_time_us > 0) {
-        uint64_t before_us = dvr_trigger_time_us - (uint64_t)DVR_SAVE_BEFORE_SEC * 1000000ULL;
+    if (dvr_save_triggered && dvr_first_trigger_time_us > 0 &&
+        dvr_trigger_time_us >= dvr_first_trigger_time_us) {
+        uint64_t before_delta = (uint64_t)DVR_SAVE_BEFORE_SEC * 1000000ULL;
+        uint64_t before_us = dvr_first_trigger_time_us > before_delta
+                                 ? dvr_first_trigger_time_us - before_delta
+                                 : 0;
         for (int i = 0; i < active_frames; i++) {
             if (dvr_frames[i].timestamp_us >= before_us) {
                 start_idx = i;
@@ -1556,215 +1608,49 @@ static int dvr_encode_mp4(void) {
     char output_path[1024];
     dvr_make_filename(output_path, sizeof(output_path), "emergency");
 
-    /* 复制必要数据到堆上 (fork 后子进程使用) */
-    char *heap_raw_path = strdup(dvr_raw_path);
-    char *heap_buffer_dir = strdup(dvr_buffer_dir);
-    char *heap_output_path = strdup(output_path);
-    float heap_fps = fps;
-    int heap_total = total;
-    int heap_start_idx = start_idx;
-
-    /* fork 前刷新缓冲区，避免日志被重复写入子进程 */
-    fflush(NULL);
-
-    /* fork 子进程做编码, 父进程立即返回 */
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* ========== 子进程: 编码 + 清理 ==========
-         * 子进程忽略 SIGTERM, 防止父进程被 timeout 等工具终止时
-         * 打断 ffmpeg 编码。
-         */
-        signal(SIGTERM, SIG_IGN);
-        setsid();
-        char work_dir[1024];
-        snprintf(work_dir, sizeof(work_dir), "%s/.encode", heap_buffer_dir);
-        mkdir(work_dir, 0777);
-
-        char list_path[1024];
-        snprintf(list_path, sizeof(list_path), "%s/filelist.txt", heap_buffer_dir);
-
-        FILE *raw = fopen(heap_raw_path, "rb");
-        if (!raw) {
-            fprintf(stderr, "[DVR] Child: cannot open raw file\n");
-            free(heap_raw_path); free(heap_buffer_dir); free(heap_output_path);
-            exit(1);
-        }
-
-        FILE *list = fopen(list_path, "w");
-        if (!list) { fclose(raw); free(heap_raw_path); free(heap_buffer_dir); free(heap_output_path); exit(1); }
-
-        int frame_idx = 0;
-        for (int i = heap_start_idx; i <= heap_start_idx + heap_total - 1; i++) {
-            char jpg_path[1024];
-            snprintf(jpg_path, sizeof(jpg_path), "%s/frame_%06d.jpg", work_dir, frame_idx);
-
-            fseeko(raw, dvr_frames[i].file_offset, SEEK_SET);
-            uint32_t frame_size;
-            uint64_t ts;
-            if (fread(&frame_size, 4, 1, raw) != 1) break;
-            if (fread(&ts, 8, 1, raw) != 1) break;
-            uint32_t jpeg_size = frame_size - 12;
-
-            uint8_t *jpeg_data = (uint8_t *)malloc(jpeg_size);
-            if (!jpeg_data) break;
-            if (fread(jpeg_data, 1, jpeg_size, raw) != jpeg_size) {
-                free(jpeg_data);
-                break;
-            }
-
-            FILE *jpg = fopen(jpg_path, "wb");
-            if (jpg) {
-                fwrite(jpeg_data, 1, jpeg_size, jpg);
-                fclose(jpg);
-                fprintf(list, "file '%s'\n", jpg_path);
-            }
-            free(jpeg_data);
-            frame_idx++;
-        }
-        fclose(list);
-        fclose(raw);
-
-        printf("[保存] [DVR] Child: extracted %d frames, running encoder (fps=%.1f)...\n", frame_idx, heap_fps);
-
-        char fps_str[32];
-        snprintf(fps_str, sizeof(fps_str), "%.2f", heap_fps);
-
-        /* GStreamer 的 caps 需要整数帧率，例如 25/1 */
-        int gst_fps_i = (int)(heap_fps + 0.5f);
-        if (gst_fps_i < 1) gst_fps_i = 1;
-        char gst_fps_str[32];
-        snprintf(gst_fps_str, sizeof(gst_fps_str), "%d/1", gst_fps_i);
-
-        char ffmpeg_log[1024];
-        snprintf(ffmpeg_log, sizeof(ffmpeg_log), "%s/dvr_ffmpeg.log", heap_buffer_dir);
-
-        char gst_location_arg[1024];
-        char gst_caps_arg[1024];
-        char gst_sink_arg[1024];
-        snprintf(gst_location_arg, sizeof(gst_location_arg), "location=%s/frame_%%06d.jpg", work_dir);
-        snprintf(gst_caps_arg, sizeof(gst_caps_arg), "caps=image/jpeg,framerate=%s", gst_fps_str);
-        snprintf(gst_sink_arg, sizeof(gst_sink_arg), "location=%s", heap_output_path);
-
-        int encoder_ok = 0;
-
-        /* 1) GStreamer: JPEG 序列 -> v4l2slh264enc -> MP4 (H.264，兼容性最好) */
-        {
-            char *argv[] = {
-                (char *)"gst-launch-1.0",
-                (char *)"-e",
-                (char *)"multifilesrc", gst_location_arg, (char *)"start-index=0", gst_caps_arg,
-                (char *)"!", (char *)"jpegdec",
-                (char *)"!", (char *)"videoconvert",
-                (char *)"!", (char *)"video/x-raw,format=NV12",
-                (char *)"!", (char *)"v4l2slh264enc", (char *)"bitrate=4000000",
-                (char *)"!", (char *)"h264parse",
-                (char *)"!", (char *)"mp4mux",
-                (char *)"!", (char *)"filesink", gst_sink_arg,
-                NULL
-            };
-            int rc = run_encoder_in_child("gst-launch-1.0", argv, ffmpeg_log);
-            struct stat st;
-            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
-                printf("[保存] [DVR] Child: Saved %s (gst-launch MP4 H.264)\n", heap_output_path);
-                encoder_ok = 1;
-            } else {
-                printf("[保存] [DVR] Child: gst-launch failed (rc=%d), trying ffmpeg, log=%s\n", rc, ffmpeg_log);
-            }
-        }
-
-        /* 2) gst-launch 失败/输出为空, 回退到 ffmpeg mpeg4 */
-        if (!encoder_ok) {
-            char *argv[] = {
-                (char *)"ffmpeg",
-                (char *)"-hide_banner", (char *)"-loglevel", (char *)"warning",
-                (char *)"-framerate", fps_str,
-                (char *)"-i", list_path,
-                (char *)"-c:v", (char *)"mpeg4", (char *)"-q:v", (char *)"5",
-                (char *)"-pix_fmt", (char *)"yuv420p",
-                (char *)"-y", heap_output_path,
-                NULL
-            };
-            int rc = run_encoder_in_child("ffmpeg", argv, ffmpeg_log);
-            struct stat st;
-            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
-                printf("[保存] [DVR] Child: Saved %s (ffmpeg mpeg4)\n", heap_output_path);
-                encoder_ok = 1;
-            } else {
-                printf("[保存] [DVR] Child: ffmpeg failed (rc=%d), trying avconv, log=%s\n", rc, ffmpeg_log);
-            }
-        }
-
-        /* 3) ffmpeg 不可用/失败, 尝试 avconv */
-        if (!encoder_ok) {
-            char *argv[] = {
-                (char *)"avconv",
-                (char *)"-hide_banner", (char *)"-loglevel", (char *)"warning",
-                (char *)"-framerate", fps_str,
-                (char *)"-i", list_path,
-                (char *)"-c:v", (char *)"mpeg4", (char *)"-q:v", (char *)"5",
-                (char *)"-pix_fmt", (char *)"yuv420p",
-                (char *)"-y", heap_output_path,
-                NULL
-            };
-            int rc = run_encoder_in_child("avconv", argv, ffmpeg_log);
-            struct stat st;
-            if (rc == 0 && stat(heap_output_path, &st) == 0 && st.st_size > 0) {
-                printf("[保存] [DVR] Child: Saved %s (avconv mpeg4)\n", heap_output_path);
-                encoder_ok = 1;
-            } else {
-                printf("[保存] [DVR] Child: avconv failed (rc=%d), log=%s\n", rc, ffmpeg_log);
-            }
-        }
-
-        if (encoder_ok) {
-            /* 成功后清理临时文件 */
-            unlink(list_path);
-            DIR *d = opendir(work_dir);
-            if (d) {
-                struct dirent *ent;
-                char path[1024];
-                while ((ent = readdir(d)) != NULL) {
-                    if (ent->d_name[0] == '.') continue;
-                    snprintf(path, sizeof(path), "%s/%s", work_dir, ent->d_name);
-                    unlink(path);
-                }
-                closedir(d);
-            }
-            rmdir(work_dir);
-            unlink(ffmpeg_log);
-            play_recording_complete_sound();
-        } else {
-            printf("[保存] [DVR] Child: All encoders failed, see %s\n", ffmpeg_log);
-            /* 保留 jpg 文件作为备份 */
-        }
-
-        /* 清理原始缓冲 */
-        unlink(heap_raw_path);
-        rmdir(heap_buffer_dir);
-
-        free(heap_raw_path);
-        free(heap_buffer_dir);
-        free(heap_output_path);
-
-        printf("[保存] [DVR] Child: cleanup done, exiting\n");
-        exit(0);
+    /*
+     * radar_fusion 已经是多线程进程，不能 fork 后继续 malloc/stdio/GStreamer。
+     * 将只读帧索引写成任务文件，再由 posix_spawn 直接 exec 全新 worker。
+     */
+    char job_path[2048];
+    snprintf(job_path, sizeof(job_path), "%s/dvr_job.tsv", dvr_buffer_dir);
+    FILE *job = fopen(job_path, "w");
+    if (!job) {
+        fprintf(stderr, "[DVR] Cannot create encoder job: %s\n", strerror(errno));
+        dvr_encoding = 0;
+        return -1;
     }
-
-    /* ========== 父进程: 记录 pid, 立即返回 ========== */
-    free(heap_raw_path);
-    free(heap_buffer_dir);
-    free(heap_output_path);
-
-    if (pid > 0) {
-        dvr_encoder_pid = pid;
-        printf("[保存] [DVR] Async encoding started (pid=%d)\n", pid);
-    } else {
-        fprintf(stderr, "[DVR] fork failed: %s\n", strerror(errno));
+    fprintf(job, "DVRJOB1\nraw\t%s\noutput\t%s\nfps\t%.6f\nentries\n",
+            dvr_raw_path, output_path, fps);
+    for (int i = start_idx; i <= end_idx; i++) {
+        fprintf(job, "%lld\t%u\n", (long long)dvr_frames[i].file_offset,
+                dvr_frames[i].jpeg_size);
+    }
+    int job_ok = fflush(job) == 0 && fdatasync(fileno(job)) == 0 &&
+                 fclose(job) == 0;
+    if (!job_ok) {
+        fprintf(stderr, "[DVR] Encoder job sync failed: %s\n", strerror(errno));
         dvr_encoding = 0;
         return -1;
     }
 
+    char *worker_argv[] = {
+        (char *)"python3", (char *)DVR_ENCODER_WORKER,
+        (char *)"--job", job_path, NULL
+    };
+    pid_t worker_pid = 0;
+    int spawn_rc = posix_spawnp(&worker_pid, "python3", NULL, NULL,
+                                worker_argv, environ);
+    if (spawn_rc != 0) {
+        fprintf(stderr, "[DVR] Encoder worker spawn failed: %s\n",
+                strerror(spawn_rc));
+        dvr_encoding = 0;
+        return -1;
+    }
+    dvr_encoder_pid = worker_pid;
+    printf("[保存] [DVR] Safe encoder worker started (pid=%d)\n", worker_pid);
     return 0;
+
 }
 
 /* ======================== 音频提示 ======================== */
@@ -1846,7 +1732,7 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
     }
 
     /* 触发保存 (若已在缓冲则保留 pre 15s, 否则从当前开始) */
-    if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
+    if (dvr_recording && !dvr_encoding) {
         dvr_trigger_save(trigger_time_us, "fall");
     }
 }
@@ -2018,6 +1904,8 @@ static void forward_imu_alert(const char *line) {
 
 /* ======================== 测试模式: 模拟 IMU 摔倒触发 ======================== */
 static int g_test_fall_delay_sec = 0;
+static int g_test_fall_count = 1;
+static int g_test_fall_interval_sec = 45;
 static void *test_fall_thread(void *arg) {
     (void)arg;
     if (g_test_fall_delay_sec <= 0) return NULL;
@@ -2025,18 +1913,33 @@ static void *test_fall_thread(void *arg) {
     for (int i = 0; i < g_test_fall_delay_sec && g_running; i++) sleep(1);
     if (!g_running) return NULL;
 
-    struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
-    uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
-                     (uint64_t)tv_now.tv_usec;
-    printf("[TEST] Injecting simulated FALL event\n");
-    handle_fall_trigger(ts_us);
+    for (int event_index = 0; event_index < g_test_fall_count && g_running;
+         event_index++) {
+        if (event_index > 0) {
+            printf("[TEST] Waiting %d seconds before repeated FALL %d/%d\n",
+                   g_test_fall_interval_sec, event_index + 1,
+                   g_test_fall_count);
+            for (int i = 0; i < g_test_fall_interval_sec && g_running; i++)
+                sleep(1);
+        }
+        if (!g_running) break;
 
-    /* 模拟摔倒事件也触发 UDP 转发到 HUD/App，用于测试 */
-    char simulated_line[256];
-    snprintf(simulated_line, sizeof(simulated_line),
-             "IMU_ALERT type=fall reason=simulated seq=0 gps_valid=0 lat_1e7=0 lon_1e7=0");
-    forward_imu_alert(simulated_line);
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) *
+                             1000000ULL +
+                         (uint64_t)tv_now.tv_usec;
+        printf("[TEST] Injecting simulated FALL event %d/%d\n",
+               event_index + 1, g_test_fall_count);
+        handle_fall_trigger(ts_us);
+
+        /* 模拟摔倒事件也触发 UDP 转发到 HUD/App，用于测试 */
+        char simulated_line[256];
+        snprintf(simulated_line, sizeof(simulated_line),
+                 "IMU_ALERT type=fall reason=simulated seq=%d gps_valid=0 lat_1e7=0 lon_1e7=0",
+                 event_index);
+        forward_imu_alert(simulated_line);
+    }
 
     return NULL;
 }
@@ -2289,6 +2192,10 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) model_path = argv[++i];
         else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) labels_path = argv[++i];
         else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) g_test_fall_delay_sec = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--test-fall-count") == 0 && i + 1 < argc)
+            g_test_fall_count = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--test-fall-interval") == 0 && i + 1 < argc)
+            g_test_fall_interval_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "-V") == 0 && i + 1 < argc) g_test_v2x_delay_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "-x") == 0 && i + 1 < argc) {
             snprintf(g_test_v2x_direction, sizeof(g_test_v2x_direction), "%s", argv[++i]);
@@ -2318,7 +2225,9 @@ int main(int argc, char *argv[]) {
                    "          [--angle-alpha 0..1] [--direction-samples n]\n"
                    "          [--radar-log-dir path]\n"
                    "          [--ble-led-uart path] [--no-ble-led]\n"
-                   "          [-t fall_delay] [-V v2x_delay] [-x v2x_dir] [-h]\n",
+                   "          [-t fall_delay] [--test-fall-count n]\n"
+                   "          [--test-fall-interval sec]\n"
+                   "          [-V v2x_delay] [-x v2x_dir] [-h]\n",
                    argv[0]);
             printf("  v2x_dir: nearby|left_front|right_front|left|right\n");
             printf("  Direction uses rider_angle = sensor_angle * angle_sign\n");
@@ -2332,6 +2241,11 @@ int main(int argc, char *argv[]) {
 
     if (g_ttc_threshold <= 0.0f || g_dist_threshold <= 0.0f) {
         fprintf(stderr, "[RADAR] TTC and distance thresholds must be positive\n");
+        return 2;
+    }
+    if (g_test_fall_count < 1 || g_test_fall_count > 20 ||
+        g_test_fall_interval_sec < 1) {
+        fprintf(stderr, "[TEST] fall count must be 1..20 and interval positive\n");
         return 2;
     }
     if (g_angle_left_threshold >= g_angle_right_threshold) {
@@ -2385,21 +2299,21 @@ int main(int argc, char *argv[]) {
     printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");
 
-    /* 0. 检查 DVR 依赖: 视频编码器 (gst-launch-1.0 / ffmpeg / avconv) + TF 卡 */
+    /* 0. ffmpeg/ffprobe 是强制依赖：不仅编码，还要完整解码验证后才能提交。 */
     printf("[系统] [DVR] Checking dependencies...\n");
-    dvr_has_encoder = (system("which gst-launch-1.0 >/dev/null 2>&1") == 0) ||
-                      (system("which ffmpeg >/dev/null 2>&1") == 0) ||
-                      (system("which avconv >/dev/null 2>&1") == 0);
+    dvr_has_encoder =
+        system("which ffmpeg >/dev/null 2>&1") == 0 &&
+        system("which ffprobe >/dev/null 2>&1") == 0;
     if (!dvr_has_encoder) {
         printf("[系统] [DVR] WARNING: No video encoder found! Video encoding will be disabled.\n");
         printf("[系统] [DVR] Install: apt-get install gstreamer1.0-tools ffmpeg\n");
     } else {
-        printf("[系统] [DVR] encoder: OK (gst-launch-1.0 / ffmpeg / avconv)\n");
+        printf("[系统] [DVR] encoder+validator: OK (ffmpeg + ffprobe; gst preferred)\n");
     }
 
     storage_try_initialize();
-    if (!dvr_tf_ok)
-        printf("[系统] [DVR] TF not mounted yet; storage will attach in background\n");
+    if (!dvr_storage_ok)
+        printf("[系统] [DVR] userfs not mounted yet; storage will attach in background\n");
     startup_mark("dvr_dependencies_checked");
 
     /* 1. GPIO LED: PD11, 用于雷达+NPU/IMU 告警闪烁 */
@@ -2439,7 +2353,7 @@ int main(int argc, char *argv[]) {
     if (!camera_tid_started)
         fprintf(stderr, "[系统] [CAMERA] Cannot create deferred init thread\n");
 
-    /* 4. RPMsg 先启动；TF 未就绪期间的首批事件进入有界内存队列。 */
+    /* 4. RPMsg 先启动；业务存储未就绪期间的首批事件进入有界内存队列。 */
     pthread_t rpmsg_tid;
     pthread_create(&rpmsg_tid, NULL, rpmsg_thread, NULL);
     startup_mark("rpmsg_thread_started");
@@ -2466,7 +2380,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\n[系统] [FUSION] Risk core initialized, entering main loop\n");
-    printf("[系统] [FUSION] Initial mode: radar + RPMsg; camera/NPU and TF attach asynchronously\n");
+    printf("[系统] [FUSION] Initial mode: radar + RPMsg; camera/NPU and storage attach asynchronously\n");
     printf("[系统] [FUSION] Running... Press Ctrl+C to stop.\n\n");
     startup_mark("fusion_risk_core_ready");
 
@@ -2474,7 +2388,7 @@ int main(int argc, char *argv[]) {
     /*
      * 主循环数据流:
      *   1) 按 25fps 定时从摄像头取 MJPEG 帧
-     *   2) DVR 把帧写入 TF 卡循环缓冲 (见 dvr_start/dvr_save_frame)
+     *   2) DVR 把帧写入板载 ext4 循环缓冲 (见 dvr_start/dvr_save_frame)
      *   3) 每 10 帧选 1 帧做 NPU 推理, 判断是否有道路使用者
      *   4) NPU 看到目标 → 开始/继续 DVR 缓冲
      *   5) NPU 连续 N 帧没看到目标 → 停止缓冲 (未触发保存时)
@@ -2514,11 +2428,18 @@ int main(int argc, char *argv[]) {
             if (reaped == dvr_encoder_pid) {
                 if (WIFEXITED(enc_status)) {
                     printf("[保存] [DVR] Encoder finished (exit=%d)\n", WEXITSTATUS(enc_status));
+                    if (WEXITSTATUS(enc_status) == 0)
+                        play_recording_complete_sound();
+                    else
+                        fprintf(stderr, "[DVR] Recording was NOT committed; recovery buffer retained\n");
                 }
                 dvr_encoder_pid = 0;
                 dvr_encoding = 0;
                 dvr_save_triggered = 0;
+                dvr_first_trigger_time_us = 0;
                 dvr_trigger_time_us = 0;
+                dvr_last_extension_log_us = 0;
+                dvr_trigger_count = 0;
                 /* 重置告警状态，准备下一轮触发 */
                 g_radar_npu_alert = 0;
                 g_imu_fall_alert = 0;
@@ -2640,7 +2561,7 @@ int main(int argc, char *argv[]) {
                             npu_confirm_cnt++;
                             npu_deny_cnt = 0;
                             /*
-                             * 不只在 0→1 边沿启动一次：若首次因 TF/目录瞬态失败，
+                             * 不只在 0→1 边沿启动一次：若首次因存储/目录瞬态失败，
                              * 目标持续存在时每 2 秒重试，保证碰撞前尽量已有预缓存。
                              */
                             if (camera_ok && !dvr_recording && !dvr_encoding) {
@@ -2843,7 +2764,7 @@ int main(int argc, char *argv[]) {
                                 (uint64_t)tv_now.tv_usec;
                             g_radar_npu_alert = 1;
                             /*
-                             * 正常情况下 NPU 目标出现后已经启动循环缓存。如果 TF 卡
+                             * 正常情况下 NPU 目标出现后已经启动循环缓存。如果存储
                              * 刚挂载或首次启动失败，则在真正碰撞告警到达时再强制尝试，
                              * 避免“雷达/NPU 已告警但因为无缓存而静默不保存”。
                              */
@@ -2855,11 +2776,14 @@ int main(int argc, char *argv[]) {
                                            "本次视频可能缺少告警前缓存\n");
                                 }
                             }
-                            if (dvr_recording && !dvr_save_triggered && !dvr_encoding) {
-                                printf("[告警] [%6.1fs] ALERT: COLLISION RISK - NPU CONFIRMED\n", t);
-                                dvr_trigger_save(collision_trigger_us,
-                                                 "radar_npu_collision");
-                                play_alert_sound("collision");
+                            if (dvr_recording && !dvr_encoding) {
+                                int new_recording = dvr_trigger_save(
+                                    collision_trigger_us,
+                                    "radar_npu_collision");
+                                if (new_recording) {
+                                    printf("[告警] [%6.1fs] ALERT: COLLISION RISK - NPU CONFIRMED\n", t);
+                                    play_alert_sound("collision");
+                                }
                             }
                         } else {
                             g_radar_npu_alert = 0;

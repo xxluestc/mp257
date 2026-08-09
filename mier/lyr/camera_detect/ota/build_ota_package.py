@@ -66,6 +66,7 @@ def populate_payload(payload: Path, version: str) -> None:
     copy_matching(ROOT / "sounds", payload / "sounds", "*.wav")
     copy_matching(ROOT / "nav_tts_cache", payload / "nav_tts_cache", "*.wav")
     copy_matching(ROOT / "scripts", payload / "scripts", "*.sh", executable=True)
+    copy_matching(ROOT / "scripts", payload / "scripts", "*.py", executable=True)
     copy_matching(ROOT / "stai_mpu", payload / "stai_mpu", "*.so*")
 
     copy_file(

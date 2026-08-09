@@ -55,6 +55,7 @@ REQUIRED_FILES = {
     "dashboard/static/styles.css",
     "dashboard/static/app.js",
     "scripts/log_maintenance.sh",
+    "scripts/dvr_encode_worker.py",
 }
 
 ALLOWED_DIRECTORIES = {
@@ -174,7 +175,7 @@ def _allowed_runtime_member(name: str, is_directory: bool) -> bool:
     if directory in {"sounds", "nav_tts_cache"}:
         return filename.endswith(".wav")
     if directory == "scripts":
-        return filename.endswith(".sh")
+        return filename.endswith((".sh", ".py"))
     if directory == "stai_mpu":
         return ".so" in filename and filename.startswith("lib")
     return False

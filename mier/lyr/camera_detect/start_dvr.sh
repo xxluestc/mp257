@@ -22,12 +22,10 @@ LOG_MAINT_SCRIPT="${CAMERA_DIR}/scripts/log_maintenance.sh"
 RPMSG_DEV="/dev/ttyRPMSG0"
 RPROC_STATE="/sys/class/remoteproc/remoteproc0/state"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
-RADAR_LOG_DIR="/run/media/mmcblk0p1/dvr/radar_experiments"
+RADAR_LOG_DIR="/usr/local/helmet/radar_experiments"
+DVR_STORAGE_DIR="/usr/local/helmet/dvr"
 BLE_LED_ENABLED="1"
 BLE_LED_UART="/dev/ttySTM0"
-TF_MOUNT="/run/media/mmcblk0p1"
-TF_DEVICE="/dev/mmcblk0p1"
-TF_FSCK_UNIT="systemd-fsck@dev-mmcblk0p1.service"
 DASHBOARD_PORT="8080"
 M33_READY_TIMEOUT=15          # 等待 M33 RPMsg 设备就绪的最大秒数
 # M33 由 dvr-m33.service 独立管理。A35 应用停止/OTA 切换时默认不停止 M33。
@@ -102,6 +100,15 @@ load_radar_config() {
 }
 load_radar_config
 
+# 1.0.6以前的现场配置可能仍把CSV写到可移除TF。保留所有标定阈值和BLE参数，
+# 但拒绝继续使用已退出业务链的旧TF路径，避免卡未挂载时写入根文件系统隐藏目录。
+case "$RADAR_LOG_DIR" in
+    /run/media/mmcblk0p1|/run/media/mmcblk0p1/*)
+        printf '%s\n' "警告: 旧RADAR_LOG_DIR=${RADAR_LOG_DIR}已迁移到板载ext4" >&2
+        RADAR_LOG_DIR="/usr/local/helmet/radar_experiments"
+        ;;
+esac
+
 while getopts "t:V:x:T:D:p:l:h" opt; do
     case "$opt" in
         t) FALL_DELAY="$OPTARG" ;;
@@ -123,13 +130,6 @@ log() {
     msg="[${timestamp}] $*"
     printf '%s\n' "$msg"
     printf '%s\n' "$msg" >> "$LOG_FILE"
-}
-
-# systemd-fsck@.service 完成后可能保持 active/exited；只有 activating 才表示
-# fsck 进程仍在读写设备。
-tf_fsck_running() {
-    [ "$(systemctl show "$TF_FSCK_UNIT" \
-        --property=ActiveState --value 2>/dev/null)" = "activating" ]
 }
 
 # 等待单个业务设备。required=1 的设备缺失时返回失败；可选设备超时后由
@@ -201,49 +201,20 @@ start_storage_worker() {
         return 1
     fi
 
-    # TF 卡的 fsck/挂载不再阻塞雷达、RPMsg 和风险处理启动。后台工作器仍严格
-    # 等待 fsck 结束后才允许手工挂载，避免并发修改 FAT。挂载完成后再创建
-    # DVR/CSV 目录并启动日志轮转；radar_fusion 会在运行中动态接入存储。
+    # 比赛录像与实验 CSV 固定使用板载 userfs/ext4。外置 TF 仅供人工导入导出，
+    # 不在业务启动链自动挂载，避免故障卡影响风险检测和录像。
     (
-        if ! mountpoint -q "$TF_MOUNT"; then
-            log "TF 卡尚未挂载，后台等待文件系统检查完成..."
-            for i in $(seq 1 200); do
-                mountpoint -q "$TF_MOUNT" && break
-                if tf_fsck_running || [ "$i" -lt 25 ]; then
-                    sleep 0.2
-                    continue
-                fi
-                break
-            done
-        fi
-
-        if ! mountpoint -q "$TF_MOUNT"; then
-            if tf_fsck_running; then
-                log "警告: TF 卡 fsck 仍在运行，跳过手工挂载"
-                while tf_fsck_running; do sleep 0.5; done
-            fi
-            if ! mountpoint -q "$TF_MOUNT"; then
-                log "TF 卡未自动挂载，尝试安全挂载 ${TF_DEVICE}..."
-                mkdir -p "$TF_MOUNT"
-                if ! mount -t vfat "$TF_DEVICE" "$TF_MOUNT" >> "$LOG_FILE" 2>&1; then
-                    log "警告: TF 卡挂载失败；风险检测继续运行，本次不启用录像和 CSV"
-                    exit 0
-                fi
-                log "TF 卡挂载成功"
-            fi
-        fi
-
-        if ! mkdir -p "$TF_MOUNT/dvr" "$RADAR_LOG_DIR"; then
-            log "警告: 无法创建 TF 业务目录；风险检测继续运行，本次不启用录像和 CSV"
+        if ! mkdir -p "$DVR_STORAGE_DIR" "$RADAR_LOG_DIR"; then
+            log "错误: 无法创建板载业务目录；录像和 CSV 暂不可用"
             exit 0
         fi
 
         "$LOG_MAINT_SCRIPT" --once || true
-        log "TF 存储与日志容量限制已就绪"
+        log "板载 ext4 存储与日志容量限制已就绪"
         exec "$LOG_MAINT_SCRIPT" --watch
     ) &
     LOG_MAINT_PID=$!
-    log "TF 存储后台工作器已启动，pid=${LOG_MAINT_PID}"
+    log "板载存储维护工作器已启动，pid=${LOG_MAINT_PID}"
 }
 
 stop_log_maintenance() {

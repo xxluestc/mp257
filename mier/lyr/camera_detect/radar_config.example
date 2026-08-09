@@ -23,7 +23,7 @@ DIRECTION_SAMPLES=3
 
 # Dashboard 与实验日志
 DASHBOARD_PORT=8080
-RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
+RADAR_LOG_DIR=/usr/local/helmet/radar_experiments
 
 # MP257 J15 USART2 -> CH9140。最终碰撞风险才会发送给 WBA：
 # LEFT=左灯、RIGHT=右灯、CENTER=两灯、CLEAR=两灯熄灭。

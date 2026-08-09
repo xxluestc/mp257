@@ -46,6 +46,7 @@ hud:
 
 dashboard-check:
 	python3 -m py_compile dashboard/radar_dashboard.py
+	python3 -m py_compile scripts/dvr_encode_worker.py
 	python3 -m unittest discover -s dashboard -p 'test_*.py'
 	@if command -v gjs >/dev/null 2>&1; then \
 		gjs -c 'const GLib=imports.gi.GLib; const ByteArray=imports.byteArray; const [ok,data]=GLib.file_get_contents("dashboard/static/app.js"); new Function(ByteArray.toString(data));'; \
@@ -59,6 +60,9 @@ script-check:
 	sh -n scripts/collect_bootloader_audit.sh
 	sh -n scripts/clear_runtime_logs.sh
 	sh -n scripts/ble_led_test.sh
+	sh -n scripts/verify_dvr_videos.sh
+	sh -n scripts/tf_card_control.sh
+	sh -n scripts/project_safe_stop.sh
 	sh -n $(OTA_DIR)/install_ota_service.sh
 	sh -n $(OTA_DIR)/helmet_ota_recover_if_needed.sh
 
@@ -107,12 +111,12 @@ deploy-radar: $(TARGET) hud dashboard-check
 	scp start_dvr.sh dvr.service.example dvr-m33.service.example \
 		radar-dashboard.service.example \
 		dnsmasq.service.override.example radar_config.example root@$(BOARD_IP):$(BOARD_DIR)/
-	scp scripts/*.sh root@$(BOARD_IP):$(BOARD_DIR)/scripts/
+	scp scripts/*.sh scripts/*.py root@$(BOARD_IP):$(BOARD_DIR)/scripts/
 	scp sounds/*.wav root@$(BOARD_IP):$(BOARD_DIR)/sounds/
 	scp nav_tts_cache/*.wav root@$(BOARD_IP):$(BOARD_DIR)/nav_tts_cache/
 	scp dashboard/radar_dashboard.py root@$(BOARD_IP):$(BOARD_DIR)/dashboard/
 	scp dashboard/static/index.html dashboard/static/styles.css dashboard/static/app.js root@$(BOARD_IP):$(BOARD_DIR)/dashboard/static/
-	ssh root@$(BOARD_IP) 'test -f $(BOARD_DIR)/radar_config || cp $(BOARD_DIR)/radar_config.example $(BOARD_DIR)/radar_config; chmod +x $(BOARD_DIR)/$(TARGET) $(BOARD_DIR)/start_dvr.sh $(BOARD_DIR)/scripts/*.sh $(BOARD_DIR)/dashboard/radar_dashboard.py $(HUD_REMOTE)'
+	ssh root@$(BOARD_IP) 'test -f $(BOARD_DIR)/radar_config || cp $(BOARD_DIR)/radar_config.example $(BOARD_DIR)/radar_config; chmod +x $(BOARD_DIR)/$(TARGET) $(BOARD_DIR)/start_dvr.sh $(BOARD_DIR)/scripts/*.sh $(BOARD_DIR)/scripts/*.py $(BOARD_DIR)/dashboard/radar_dashboard.py $(HUD_REMOTE)'
 	@echo "Deploy complete."
 
 deploy-ota-service: ota-check

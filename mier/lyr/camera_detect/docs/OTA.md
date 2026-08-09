@@ -30,6 +30,7 @@
   -> 停止 dvr.service
   -> 原子切换 /xxl/camera_detect
   -> 启动 dvr.service
+  -> 重启独立 radar-dashboard.service（加载同一release后端）
   -> 健康检查
   -> 成功记录上一稳定版本
        或失败自动切回上一版本并重新启动
@@ -41,6 +42,10 @@ HTTP 请求和手机连接运行，因此手机断开 WiFi 不会中止已经开
 
 进入 release/软链接模式后，正式版本更新统一使用 OTA；不要再用
 `make deploy-radar` 直接覆盖当前 release。后者只保留作初次部署和临时开发调试。
+
+现场`radar_config`整体继承、不由OTA包覆盖。为兼容早期版本，若其中
+`RADAR_LOG_DIR`仍指向`/run/media/mmcblk0p1`，新启动脚本会仅将该运行时路径迁移到
+`/usr/local/helmet/radar_experiments`；TTC、距离、角度、滤波和BLE配置保持不变。
 
 ## 2. OTA 包内容
 

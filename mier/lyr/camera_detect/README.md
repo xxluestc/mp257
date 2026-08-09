@@ -30,7 +30,7 @@ camera_detect/
 ├── models/                   # NPU 模型与标签
 ├── sounds/                   # 碰撞、摔倒、V2X、录制完成提示音
 ├── nav_tts_cache/            # 预生成导航语音
-├── scripts/                  # M33、日志、启动优化和语音维护脚本
+├── scripts/                  # 编码worker、存储、安全退出、M33和日志维护脚本
 ├── stai_mpu/                 # NPU 运行库和头文件
 ├── board/                    # 当前板级 DTS 源码与说明
 └── docs/                     # 当前架构及雷达实验文档
@@ -62,6 +62,20 @@ make radar-fusion
 make hud
 make dashboard-check
 ```
+
+在另一台Linux电脑从零拉取时：
+
+```bash
+git clone https://github.com/xxluestc/mp257.git
+cd mp257/mier/lyr/camera_detect
+make clean
+make
+make deploy-radar BOARD_IP=192.168.88.10
+```
+
+仓库已跟踪A35编译所需源码、NPU头文件/运行库、模型、声音、Dashboard和部署脚本；
+主机仍需安装AArch64交叉编译器、Python 3和`make`。部署要求能够SSH/SCP登录
+开发板root账号，且已有现场`radar_config`不会被覆盖。
 
 生成 A35 运行时 OTA 包：
 
@@ -107,6 +121,15 @@ systemctl daemon-reload
 systemctl enable --now dvr.service
 ```
 
+Dashboard使用独立服务：
+
+```bash
+cp /xxl/camera_detect/radar-dashboard.service.example \
+  /etc/systemd/system/radar-dashboard.service
+systemctl daemon-reload
+systemctl enable --now radar-dashboard.service
+```
+
 ## 雷达配置
 
 首次部署会从 `radar_config.example` 生成 `radar_config`：
@@ -119,7 +142,7 @@ RIGHT_ANGLE=10
 ANGLE_ALPHA=0.35
 DIRECTION_SAMPLES=3
 DASHBOARD_PORT=8080
-RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
+RADAR_LOG_DIR=/usr/local/helmet/radar_experiments
 BLE_LED_ENABLED=1
 BLE_LED_UART=/dev/ttySTM0
 ```
@@ -180,10 +203,14 @@ http://<开发板IP>:8080
 不提供控制入口。每次控制写入 `control_events.csv`；暂停融合业务不会停止独立
 Dashboard、M33 或 WiFi。
 
+同页“设备运维”区域提供TF挂载/安全弹出、安全停止项目和安全关机，所有动作均有
+二次确认。命令行等价入口是`scripts/tf_card_control.sh`和
+`scripts/project_safe_stop.sh`。录像主存储为板载ext4，所以TF弹出不影响录像服务。
+
 五类测试事件均可点击开始/结束，结果保存到：
 
 ```text
-/run/media/mmcblk0p1/dvr/radar_experiments/
+/usr/local/helmet/radar_experiments/
 ├── radar_data.csv
 ├── radar_state.json
 ├── sensor_events.csv
@@ -239,8 +266,19 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 
 - 系统日志：`/xxl/camera_detect/dvr_system.log`
 - 雷达 Dashboard 日志：`/xxl/camera_detect/radar_dashboard.log`
-- 紧急视频：`/run/media/mmcblk0p1/dvr/emergency_*.mp4`
-- 雷达实验数据：`/run/media/mmcblk0p1/dvr/radar_experiments/`
+- 紧急视频：`/usr/local/helmet/dvr/emergency_*.mp4`
+- 雷达实验数据：`/usr/local/helmet/radar_experiments/`
+
+比赛录像以板载 `userfs` ext4 为主存储，不再直接写 TF 卡。编码 worker 会在
+`/tmp` 生成并完整解码，复制到 ext4 后再次解码，通过后才原子提交正式 MP4。
+最多保留最近 12 段或约 2 GiB。故障 TF 卡不能作为比赛录像介质，详见
+[DVR可靠性与TF故障复盘](docs/DVR_RELIABILITY.md)。
+
+同一进程两次间隔触发以及三段正式MP4整段解码已通过板端回归。比赛前仍应执行：
+
+```bash
+/xxl/camera_detect/scripts/verify_dvr_videos.sh --full
+```
 
 `start_dvr.sh` 会启动日志容量维护：系统日志最多约 40 MiB，Dashboard 日志
 最多约 20 MiB；雷达、同步传感器和 IMU 投递 CSV 分别保留固定数量的轮转文件。
@@ -258,6 +296,7 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [STM32WBA54 BLE Central、CH9140和V2V方向灯固件](../../../E04-2G4M10S1AX/README.md)
 - [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
 - [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
+- [DVR可靠性、板载ext4与故障TF复盘](docs/DVR_RELIABILITY.md)
 - [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)
 - [Android 使用的 OTA HTTP API](docs/OTA_API.md)
 - [Android/云端 OTA 分工与联调交接](docs/OTA_HANDOFF.md)

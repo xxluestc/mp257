@@ -81,8 +81,8 @@ echo
 curl -fsS --max-time 3 http://127.0.0.1:8090/api/ota/version || true
 echo
 ls -l \
-    /run/media/mmcblk0p1/dvr/radar_experiments/radar_state.json \
-    /run/media/mmcblk0p1/dvr/radar_experiments/sensor_events.csv 2>/dev/null || true
+    /usr/local/helmet/radar_experiments/radar_state.json \
+    /usr/local/helmet/radar_experiments/sensor_events.csv 2>/dev/null || true
 
 echo "=== failed_units ==="
 systemctl --failed --no-pager

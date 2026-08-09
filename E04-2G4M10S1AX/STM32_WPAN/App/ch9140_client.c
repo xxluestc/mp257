@@ -194,16 +194,16 @@ static void CH9140_SetLed(uint8_t enabled)
 
 static void CH9140_SetLeftLed(uint8_t enabled)
 {
-  /* External LEFT LED: PA7 -> resistor -> LED -> GND, active high. */
+  /* Installed LEFT LED/MOS input on PA7 is active low. */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7,
-                    (enabled != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                    (enabled != 0U) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 static void CH9140_SetRightLed(uint8_t enabled)
 {
-  /* External RIGHT LED: PA5 -> resistor -> LED -> GND, active high. */
+  /* Installed RIGHT LED/MOS input on PA5 is active low. */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
-                    (enabled != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                    (enabled != 0U) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 static void CH9140_SetRiskLeds(uint8_t left, uint8_t right)

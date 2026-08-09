@@ -105,26 +105,38 @@ Type-C 的 VBUS 会先经过稳压电路生成 3.3 V，不建议从焊盘私自�
 
 | 用途 | MCU 引脚 | 测试底板排针序号 | 电平 |
 |---|---|---:|---|
-| 左后方风险灯 | PA7 | 3 | 高电平点亮 |
-| 右后方风险灯 | PA5 | 5 | 高电平点亮 |
+| 左后方风险灯 | PA7 | 3 | 低电平点亮 |
+| 右后方风险灯 | PA5 | 5 | 低电平点亮 |
 
-普通小 LED 接法：`GPIO -> 680Ω~1kΩ 电阻 -> LED 正极`，LED 负极接 GND。
-不要省略限流电阻，也不要由 GPIO 直接驱动大功率 LED。若灯具必须使用 5 V，
-请使用独立 5 V 电源和两路 MOSFET 开关，WBA 与 5 V 电源必须共地，PA7/PA5
-只接 MOSFET 控制输入。
+当前实物采用低电平有效的 LED/MOS 输入，固件已按该极性配置。若改成
+`GPIO -> 电阻 -> LED -> GND` 的普通高电平有效接法，必须同时把固件极性改回
+高电平有效。不要省略限流电阻，也不要由 GPIO 直接驱动大功率 LED。若灯具
+必须使用 5 V，请使用独立 5 V 电源和两路 MOSFET 开关，WBA 与 5 V 电源必须
+共地，PA7/PA5 只接 MOSFET 控制输入。
 
 蓝牙断开或 WBA 复位时，两路外接方向灯默认熄灭。
 
 ## 编译和烧录 WBA
 
-1. 安装支持 STM32WBA54 的 STM32WBA Device Family Pack。
-2. 打开 `MDK-ARM/02_test.uvprojx`。
+从新电脑获取完整仓库：
+
+```bash
+git clone https://github.com/xxluestc/mp257.git
+cd mp257/E04-2G4M10S1AX
+```
+
+1. 在Windows安装Keil MDK及支持STM32WBA54的STM32WBA Device Family Pack。
+2. 打开`MDK-ARM/02_test.uvprojx`；不要只复制单个`.c`文件。
 3. 选择目标 `E04_BLE_UART`，执行 Rebuild。
 4. 通过 ST-LINK 下载新固件。
 
 之前烧录的 `WBA-UART` Peripheral 版不能连接 CH9140，必须重新编译并烧录
 当前 Central 版。工程沿用 Ebyte 官方示例的芯片、Flash、时钟和无线协议栈
 设置。
+
+仓库保留了Keil工程、启动文件、链接脚本、CMSIS/HAL、无线协议栈与应用源码；
+忽略`Objects/`、`Listings/`、`.hex`等本机生成物。新电脑Rebuild后会重新生成
+可烧录文件，因此不依赖旧电脑的构建目录。
 
 ## MP257 当前状态
 

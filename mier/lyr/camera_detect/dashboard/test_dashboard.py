@@ -45,6 +45,13 @@ class FakeController:
             raise PermissionError("invalid test control")
         return {"ok": True, "task": task, "action": action}
 
+    def perform_maintenance(
+        self, action: str, confirmation: str, token: str
+    ) -> dict[str, object]:
+        if token != "test-token" or confirmation != f"maintenance:{action}":
+            raise PermissionError("invalid test maintenance control")
+        return {"ok": True, "action": action}
+
 
 class DashboardTest(unittest.TestCase):
     def test_control_audit_appears_in_current_boot_events(self) -> None:
@@ -111,6 +118,8 @@ class DashboardTest(unittest.TestCase):
                 self.assertIn("系统状态", html)
                 self.assertIn("关键时间", html)
                 self.assertIn("任务控制", html)
+                self.assertIn("设备运维", html)
+                self.assertIn("安全关机", html)
                 self.assertIn("系统版本", html)
                 self.assertNotIn(">APP <", html)
                 control_request = Request(
@@ -127,6 +136,19 @@ class DashboardTest(unittest.TestCase):
                 with opener.open(control_request, timeout=2) as response:
                     control_result = json.load(response)
                 self.assertTrue(control_result.get("ok"))
+                maintenance_request = Request(
+                    base + "/api/maintenance",
+                    data=json.dumps({
+                        "action": "tf_mount",
+                        "confirmation": "maintenance:tf_mount",
+                        "control_token": "test-token",
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with opener.open(maintenance_request, timeout=2) as response:
+                    maintenance_result = json.load(response)
+                self.assertTrue(maintenance_result.get("ok"))
             finally:
                 server.shutdown()
                 server.server_close()

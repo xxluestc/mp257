@@ -29,6 +29,10 @@
 确认，当前业务使用的`/dev/video7`是Sonix/Microdia `0c45:636b` USB 2.0 UVC
 摄像头，由`uvcvideo`驱动。文档中的硬件链路以这次实机确认结果为准。
 
+同日录像可靠性排查确认当前TF介质落盘不可靠。当前主存储已经切换到板载
+`/usr/local/helmet`（userfs/ext4），TF仅作为可更换的人工导入导出介质。文中TF
+启动耗时和FAT修复内容保留为历史案例，不再代表当前录像依赖。
+
 ## 2. 先建立完整分层
 
 ### 2.1 从硬件到业务
@@ -231,7 +235,7 @@ extlinux菜单仍约有2秒窗口。它也是内核无法启动时的重要恢�
 | Linux kernel完成 | 约2.06 s | 进入userspace |
 | M33 running | 3.908 s | remoteproc状态正常 |
 | USB UVC摄像头节点就绪 | 约8.50～9.20 s | `/dev/video7`，最晚业务设备之一；多为并行项 |
-| TF检查/挂载 | 约9 s量级 | 完整录像的前置条件 |
+| TF检查/挂载 | 约9 s量级 | 历史测量；当前不再是录像前置条件 |
 | systemd总启动 | 11.841 s | 不含bootloader |
 | Fusion core ready | 12.602 s | 融合主业务初始化完成 |
 | RPMsg ready发送 | 13.605 s | 含线程固定1秒等待 |
@@ -459,7 +463,7 @@ device@address {
 - `/proc`：进程和系统运行状态，也包含部分历史接口；
 - `/run`：本次启动的运行时数据，通常在tmpfs中；
 - `/var`：长期状态和日志；
-- `/run/media/mmcblk0p1`：当前TF卡挂载点。
+- `/run/media/mmcblk0p1`：可移除TF的约定挂载点；当前故障卡已安全卸载。
 
 本项目例子：
 
@@ -901,7 +905,7 @@ BLE操作。
 此外保留`LED ON/OFF`、`LEFT ON/OFF`和`RIGHT ON/OFF`用于分层测试。未知命令返回
 `ERR UNKNOWN CMD`，超过缓冲长度返回`ERR CMD TOO LONG`。
 
-PA7和PA5为高电平点亮；底板PA2诊断LED为低电平点亮。外接大功率灯不能直接由GPIO
+当前实物的PA7和PA5方向灯/MOS输入为低电平点亮；底板PA2诊断LED同样为低电平点亮。外接大功率灯不能直接由GPIO
 驱动，应使用限流、MOSFET和独立供电，并保证共地。
 
 ### 10.10 失败处理和安全状态
@@ -1334,12 +1338,13 @@ CLOCK_BOOTTIME里程碑：应用内部
 
 ### 17.5 下一阶段应该考虑“分级ready”
 
-当前完整业务把摄像头、TF、融合和部分网络准备绑得较紧。候选结构：
+早期完整业务把摄像头、TF、融合和部分网络准备绑得较紧。当前已实现存储动态接入，
+并将主录像迁到板载ext4；该分级模型仍可用于解释故障隔离：
 
 ```text
 Level 1：M33 + RPMsg + 雷达基础告警
 Level 2：摄像头 + NPU融合
-Level 3：TF卡 + 事件录像
+Level 3：板载ext4 + 事件录像（TF仅人工导入导出）
 Level 4：Wi-Fi + Dashboard + 手机协同
 ```
 
@@ -1355,7 +1360,7 @@ Level 4：Wi-Fi + Dashboard + 手机协同
 | M33/RPMsg | 固件未启动、endpoint未出现 | 会影响IMU/V2X，但雷达可考虑保留 |
 | 摄像头/NPU | 节点晚到、模型失败 | 可退化为纯雷达 |
 | 雷达 | 串口不存在、协议错误 | 核心融合无法工作，应明确失败 |
-| 存储 | TF未挂载、空间不足 | 告警可继续，录像不可用 |
+| 存储 | userfs未挂载、空间不足 | 告警可继续，录像不可用 |
 | 音频/灯光 | PCM或GPIO失败 | 其他输出可继续 |
 | Dashboard | HTTP进程失败 | 不应停止核心融合 |
 | OTA | 服务失败 | 不影响当前release运行 |

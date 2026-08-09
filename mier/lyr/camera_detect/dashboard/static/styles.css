@@ -374,7 +374,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .runtime-event-row.source-radar { border-left: 3px solid var(--danger); padding-left: 10px; }
 
 /* 独立控制台：可操作与受保护任务使用不同的结构，避免误触。 */
-.control-layout { height: 100%; display: grid; grid-template-rows: 92px minmax(0, 1fr) 150px; gap: 10px; }
+.control-layout { height: 100%; display: grid; grid-template-rows: 92px minmax(240px, 1fr) 142px 130px; gap: 10px; }
 .control-guard { padding: 14px 18px; display: grid; grid-template-columns: 250px minmax(0, 1fr) auto; align-items: center; gap: 20px; border-left: 4px solid var(--radar); box-shadow: none; }
 .control-guard p { color: var(--muted); font-size: 14px; }
 .guard-state { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; font: 700 13px ui-monospace, monospace; }
@@ -382,7 +382,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .guard-state.blocked { color: var(--danger); border-color: var(--danger); background: #fff0ef; }
 .guard-state.waiting { color: var(--amber); }
 .control-columns { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.control-panel, .protected-panel, .control-audit-panel { padding: 14px 16px; box-shadow: none; }
+.control-panel, .protected-panel, .maintenance-panel, .control-audit-panel { padding: 14px 16px; box-shadow: none; }
 .control-task-list { height: calc(100% - 56px); margin-top: 6px; display: grid; grid-template-rows: repeat(2, 1fr); gap: 10px; }
 .control-task { min-height: 0; padding: 16px; display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
 .control-task > i, .protected-task > i { width: 11px; height: 11px; border-radius: 50%; background: var(--muted); }
@@ -405,6 +405,23 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .protected-task span { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
 .protected-task code { color: var(--radar); font: 700 13px ui-monospace, monospace; }
 .protected-task.offline code { color: var(--danger); }
+.maintenance-panel { display: grid; grid-template-columns: minmax(270px, .72fr) minmax(0, 1.5fr); align-items: center; gap: 18px; border-left: 4px solid var(--amber); }
+.maintenance-head { min-width: 0; align-items: center; }
+.storage-state { min-width: 0; margin-left: 18px; text-align: right; }
+.storage-state strong, .storage-state code { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.storage-state strong { color: var(--muted); font-size: 13px; }
+.storage-state strong.mounted { color: var(--radar); }
+.storage-state strong.inserted { color: var(--amber); }
+.storage-state strong.missing { color: var(--muted); }
+.storage-state code { margin-top: 5px; color: var(--lane); font-size: 11px; }
+.maintenance-actions { display: grid; grid-template-columns: repeat(4, minmax(112px, 1fr)); gap: 9px; }
+.maintenance-button { min-height: 48px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); cursor: pointer; font-size: 13px; font-weight: 800; }
+.maintenance-button.storage { color: var(--radar); border-color: var(--radar); }
+.maintenance-button.warning { color: var(--amber); border-color: var(--amber); }
+.maintenance-button.danger { color: var(--danger); border-color: var(--danger); }
+.maintenance-button:hover { color: #fff; background: var(--lane); }
+.maintenance-button.danger:hover { background: var(--danger); }
+.maintenance-button:disabled { opacity: .4; cursor: not-allowed; }
 .control-audit-panel .panel-head time { color: var(--muted); font: 12px ui-monospace, monospace; }
 .control-audit-list { height: calc(100% - 52px); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .control-audit-row { padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
@@ -445,6 +462,8 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
   .control-guard { grid-template-columns: 1fr; }
   .control-columns { grid-template-columns: 1fr; grid-template-rows: 470px 430px; }
   .control-audit-list { grid-template-columns: 1fr 1fr; }
+  .maintenance-panel { grid-template-columns: 1fr; }
+  .maintenance-actions { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 700px) {

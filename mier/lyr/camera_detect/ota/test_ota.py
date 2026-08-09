@@ -116,6 +116,15 @@ def assert_package_scope(package: Path, version: str) -> None:
     unexpected = files & forbidden
     if unexpected:
         raise AssertionError(f"runtime package contains forbidden files: {unexpected}")
+    required_runtime = {
+        "scripts/dvr_encode_worker.py",
+        "scripts/project_safe_stop.sh",
+        "scripts/tf_card_control.sh",
+        "scripts/verify_dvr_videos.sh",
+    }
+    missing = required_runtime - files
+    if missing:
+        raise AssertionError(f"runtime package is missing required files: {missing}")
 
 
 def runtime_file_digests(package: Path) -> dict[str, str]:

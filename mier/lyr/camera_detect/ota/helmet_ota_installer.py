@@ -43,6 +43,9 @@ class Installer:
         self.last_success_path = self.state_dir / "last_success.json"
         self.lock_path = self.state_dir / "install.lock"
         self.service = args.service
+        self.dashboard_service = getattr(
+            args, "dashboard_service", "radar-dashboard.service"
+        )
         self.health_timeout = args.health_timeout
         self.test_mode = args.test_mode
         self.lock_file: Any = None
@@ -62,11 +65,13 @@ class Installer:
         atomic_write_json(self.status_path, value)
         return value
 
-    def run_systemctl(self, action: str, check: bool = True) -> bool:
+    def run_systemctl_unit(
+        self, action: str, unit: str, check: bool = True
+    ) -> bool:
         if self.test_mode:
             return True
         result = subprocess.run(
-            ["systemctl", action, self.service],
+            ["systemctl", action, unit],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -74,15 +79,24 @@ class Installer:
         )
         if check and result.returncode != 0:
             raise OTAError(
-                f"systemctl {action} {self.service} failed: {result.stderr.strip()}"
+                f"systemctl {action} {unit} failed: {result.stderr.strip()}"
             )
         return result.returncode == 0
+
+    def run_systemctl(self, action: str, check: bool = True) -> bool:
+        return self.run_systemctl_unit(action, self.service, check)
 
     def stop_application(self) -> None:
         self.run_systemctl("stop")
 
     def start_application(self) -> None:
         self.run_systemctl("start")
+        # Dashboard is intentionally independent from dvr.service, but its
+        # Python backend lives inside the switched release. Restart it after
+        # every switch/rollback so the backend and static assets use one version.
+        self.run_systemctl_unit(
+            "restart", self.dashboard_service, check=False
+        )
 
     def dashboard_port(self) -> int:
         config = self.app_path / "radar_config"
@@ -537,6 +551,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--xxl-root", type=Path, default=DEFAULT_XXL_ROOT)
     parser.add_argument("--service", default="dvr.service")
+    parser.add_argument("--dashboard-service", default="radar-dashboard.service")
     parser.add_argument("--health-timeout", type=int, default=45)
     parser.add_argument("--test-mode", action="store_true")
     args = parser.parse_args()

@@ -32,7 +32,7 @@
 #define APP_BROADCAST_PORT 8889        // 广播给 APP 的端口
 #define BROADCAST_IP "192.168.152.255" // 广播地址
 #define ALERT_COOLDOWN 60              // 冷却时间（秒）
-#define DELIVERY_LOG_DIR "/run/media/mmcblk0p1/dvr/radar_experiments"
+#define DELIVERY_LOG_DIR "/usr/local/helmet/radar_experiments"
 #define DELIVERY_LOG_PATH DELIVERY_LOG_DIR "/imu_delivery.csv"
 #define DELIVERY_LOG_MAX_BYTES (10U * 1024U * 1024U)
 #define DELIVERY_LOG_BACKUPS 4

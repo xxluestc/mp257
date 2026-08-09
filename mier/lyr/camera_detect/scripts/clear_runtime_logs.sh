@@ -4,7 +4,7 @@
 set -eu
 
 CAMERA_DIR="${CAMERA_DIR:-/xxl/camera_detect}"
-RADAR_LOG_DIR="${RADAR_LOG_DIR:-/run/media/mmcblk0p1/dvr/radar_experiments}"
+RADAR_LOG_DIR="${RADAR_LOG_DIR:-/usr/local/helmet/radar_experiments}"
 DVR_SERVICE="${DVR_SERVICE:-dvr.service}"
 SERVICE_WAS_ACTIVE=0
 SERVICE_RESTARTED=0

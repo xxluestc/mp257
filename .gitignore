@@ -4,5 +4,6 @@
 # firmware project. Files elsewhere are local reference material.
 /*
 !/.gitignore
+!/README.md
 !/mier/
 !/E04-2G4M10S1AX/

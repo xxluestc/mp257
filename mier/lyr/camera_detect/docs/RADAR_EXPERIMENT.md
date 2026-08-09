@@ -59,7 +59,7 @@ RIGHT_ANGLE=10
 ANGLE_ALPHA=0.35
 DIRECTION_SAMPLES=3
 DASHBOARD_PORT=8080
-RADAR_LOG_DIR=/run/media/mmcblk0p1/dvr/radar_experiments
+RADAR_LOG_DIR=/usr/local/helmet/radar_experiments
 ```
 
 其中 `LEFT_ANGLE` 必须小于 `RIGHT_ANGLE`。当前后向安装方式经实测确认：
@@ -129,7 +129,7 @@ http://<开发板IP>:8080
 python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
   --host 0.0.0.0 \
   --port 8080 \
-  --data-dir /run/media/mmcblk0p1/dvr/radar_experiments
+  --data-dir /usr/local/helmet/radar_experiments
 ```
 
 ## 一屏栏目与系统观测
@@ -162,7 +162,7 @@ M33、WiFi 热点和 DHCP/DNS 永远只读。前端二次确认之外，后端�
 ## 输出文件
 
 ```text
-/run/media/mmcblk0p1/dvr/radar_experiments/
+/usr/local/helmet/radar_experiments/
 ├── radar_data.csv      # 每帧、每个 objId 的雷达数据
 ├── radar_state.json    # Dashboard 最新状态；无目标时保持 1 Hz 在线心跳
 ├── sensor_events.csv   # 摄像头/NPU、M33 IMU、A35→HUD 同步事件
@@ -202,9 +202,9 @@ M33、WiFi 热点和 DHCP/DNS 永远只读。前端二次确认之外，后端�
 
 ### 连续测试漏录的已确认根因
 
-板端 `1.0.2/1.0.3` 历史日志证明，TF 卡、MJPEG 摄像头和 GStreamer 编码器
-当时都正常：旧程序曾成功启动预缓存约 100 次，也成功保存了雷达碰撞视频。
-因此“缓存首次启动失败”不是这次连续测试漏录的真实原因。
+板端`1.0.2/1.0.3`历史日志证明MJPEG摄像头和GStreamer编码器当时工作过；TF在线
+读取也曾表现正常，但后续“卸载—重挂—哈希”测试已经证实该卡持久写入不可靠，
+不能再把在线可读当作介质正常。连续测试漏录还存在一个独立的软件状态缺陷。
 
 真实缺陷位于录像结束后的重新武装状态：编码器退出后旧代码清零了
 `npu_confirmed`，却保留 `npu_has_target=1`；而 `dvr_start()` 只在
@@ -226,8 +226,9 @@ M33、WiFi 热点和 DHCP/DNS 永远只读。前端二次确认之外，后端�
    “危险接近（预期告警）”动作。
 4. 动作完全结束后点击“结束标记”。
 5. 如果要求每组碰撞测试都生成独立 MP4，应等告警后 15 秒录像和异步编码
-   完成，并确认时间线重新出现 `A35/DVR buffer started` 后再开始下一组；建议
-   两组至少间隔 35 秒。只做雷达标定、不要求每组视频时可以连续打标签。
+   完成，并确认日志出现`State reset, ready for next trigger`后再开始下一组；建议
+   两组至少间隔50秒。只做雷达标定、不要求每组视频时可以连续打标签；连续
+   LEFT/CENTER/RIGHT会延长同一录像窗口，最长连续事件跨度60秒。
 6. 每种场景至少重复 10 次，并包含不同速度、距离和横向角度。
 7. 下载 `radar_data.csv` 与 `labels.csv`，按同一 `event_id` 的
    `start/end timestamp_ms` 截取雷达数据。

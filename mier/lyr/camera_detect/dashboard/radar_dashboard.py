@@ -98,6 +98,25 @@ CONTROL_TASKS = {
     },
 }
 
+MAINTENANCE_ACTIONS = {
+    "tf_mount": {
+        "name": "挂载 TF 卡",
+        "unit": "/dev/mmcblk0p1",
+    },
+    "tf_eject": {
+        "name": "安全弹出 TF 卡",
+        "unit": "/dev/mmcblk0p1",
+    },
+    "project_stop": {
+        "name": "安全停止项目",
+        "unit": "dvr.service + radar-dashboard.service",
+    },
+    "system_poweroff": {
+        "name": "安全关机",
+        "unit": "system",
+    },
+}
+
 PROTECTED_TASKS = [
     ("dashboard", "radar-dashboard.service", "控制面板", "始终在线，不允许暂停"),
     ("m33", "dvr-m33.service", "M33 核心", "安全告警底座，不允许远程暂停"),
@@ -112,7 +131,7 @@ BOOT_MILESTONES = [
     ("fusion_ready", "风险核心就绪", "fusion_risk_core_ready"),
     ("audio_ready", "音频输出就绪", "audio_output_ready"),
     ("rpmsg_ready", "RPMsg ready", "rpmsg_ready_sent"),
-    ("storage_ready", "TF/日志就绪", "business_storage_initialized"),
+    ("storage_ready", "板载存储/日志就绪", "business_storage_initialized"),
     ("camera_stream", "摄像头开始采集", "camera_stream_started"),
     ("npu_ready", "NPU 模型就绪", "npu_model_load_done"),
     ("vision_ready", "视觉融合就绪", "fusion_vision_initialized"),
@@ -146,7 +165,7 @@ class RadarStore:
         self._activate_storage()
 
     def _storage_available(self) -> bool:
-        """Do not create hidden directories below an unmounted TF mountpoint."""
+        """Keep legacy custom TF paths from writing below an unmounted mountpoint."""
         tf_mount = Path("/run/media/mmcblk0p1")
         try:
             self.data_dir.resolve(strict=False).relative_to(tf_mount)
@@ -448,7 +467,7 @@ class RadarStore:
 
     def record_label(self, event_type: str, action: str) -> dict[str, Any]:
         if not self._activate_storage():
-            raise RuntimeError("TF 存储尚未就绪，请稍后重试")
+            raise RuntimeError("实验数据存储尚未就绪，请稍后重试")
         if event_type not in EVENT_TYPES:
             raise ValueError("unknown event_type")
         if action not in {"start", "end"}:
@@ -871,6 +890,7 @@ class TaskController:
         self.audit_path = data_dir / "control_events.csv"
         self.lock = threading.Lock()
         self.control_token = uuid.uuid4().hex
+        self.project_root = Path(__file__).resolve().parent.parent
 
     @staticmethod
     def _unit_state(unit: str) -> dict[str, Any]:
@@ -919,6 +939,9 @@ class TaskController:
                 "controllable": True,
                 **self._unit_state(item["unit"]),
             })
+        tf_device = Path("/dev/mmcblk0p1")
+        tf_mount = Path("/run/media/mmcblk0p1")
+        tf_mounted = os.path.ismount(tf_mount)
         return {
             "ok": True,
             "timestamp_ms": int(time.time() * 1000),
@@ -927,13 +950,22 @@ class TaskController:
             "control_token": self.control_token,
             "protected": protected,
             "tasks": tasks,
+            "maintenance": {
+                "tf_inserted": tf_device.exists(),
+                "tf_mounted": tf_mounted,
+                "tf_device": str(tf_device),
+                "tf_mount": str(tf_mount),
+                "recording_storage": "/usr/local/helmet/dvr",
+            },
             "audit": self._recent_audit(),
         }
 
     def _record(
         self, task: str, action: str, result: str, details: str
     ) -> None:
-        item = CONTROL_TASKS[task]
+        item = CONTROL_TASKS.get(task) or MAINTENANCE_ACTIONS.get(task)
+        if item is None:
+            raise ValueError(f"unknown control audit task: {task}")
         now_ms = int(time.time() * 1000)
         row = {
             "timestamp": time.strftime(
@@ -1015,6 +1047,68 @@ class TaskController:
                 "task": task,
                 "action": action,
                 "state": state,
+            }
+
+    def perform_maintenance(
+        self, action: str, confirmation: str, token: str
+    ) -> dict[str, Any]:
+        if token != self.control_token:
+            raise PermissionError("控制令牌无效，请刷新页面后重试")
+        if action not in MAINTENANCE_ACTIONS:
+            raise ValueError("该维护动作不在远程控制白名单中")
+        if confirmation != f"maintenance:{action}":
+            raise PermissionError("维护操作确认不匹配")
+
+        storage_script = self.project_root / "scripts" / "tf_card_control.sh"
+        stop_script = self.project_root / "scripts" / "project_safe_stop.sh"
+        with self.lock:
+            if action in {"tf_mount", "tf_eject"}:
+                verb = "mount" if action == "tf_mount" else "eject"
+                try:
+                    result = subprocess.run(
+                        [str(storage_script), verb],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=30,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    details = str(exc)
+                    self._record(action, verb, "failed", details)
+                    raise RuntimeError(f"TF 操作失败：{details}") from exc
+                details = result.stdout.strip() or f"TF {verb} completed"
+                if result.returncode != 0:
+                    self._record(action, verb, "failed", details)
+                    raise RuntimeError(details)
+                self._record(action, verb, "ok", details)
+                return {"ok": True, "action": action, "details": details}
+
+            mode = "stop" if action == "project_stop" else "poweroff"
+            try:
+                environment = dict(os.environ)
+                environment["SAFE_STOP_DELAY_SEC"] = "2"
+                subprocess.Popen(
+                    [str(stop_script), mode],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    start_new_session=True,
+                    env=environment,
+                )
+            except OSError as exc:
+                self._record(action, mode, "failed", str(exc))
+                raise RuntimeError(f"安全操作调度失败：{exc}") from exc
+            details = "scheduled after 2 seconds; storage sync is mandatory"
+            self._record(action, mode, "ok", details)
+            return {
+                "ok": True,
+                "action": action,
+                "scheduled": True,
+                "delay_seconds": 2,
             }
 
 
@@ -1190,18 +1284,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path not in {"/api/labels", "/api/control"}:
+        if path not in {"/api/labels", "/api/control", "/api/maintenance"}:
             self._error(HTTPStatus.NOT_FOUND, "unknown endpoint")
             return
         try:
             payload = self._read_json_body()
-            if path == "/api/control":
+            if path in {"/api/control", "/api/maintenance"}:
                 origin = self.headers.get("Origin", "")
                 host = self.headers.get("Host", "")
                 if origin and urlparse(origin).netloc != host:
                     raise PermissionError("拒绝跨站控制请求")
+            if path == "/api/control":
                 result = self.server.controller.perform(
                     str(payload.get("task", "")),
+                    str(payload.get("action", "")),
+                    str(payload.get("confirmation", "")),
+                    str(payload.get("control_token", "")),
+                )
+                self._json_response(result)
+                return
+            if path == "/api/maintenance":
+                result = self.server.controller.perform_maintenance(
                     str(payload.get("action", "")),
                     str(payload.get("confirmation", "")),
                     str(payload.get("control_token", "")),
@@ -1240,7 +1343,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path("/run/media/mmcblk0p1/dvr/radar_experiments"),
+        default=Path("/usr/local/helmet/radar_experiments"),
     )
     parser.add_argument("--pid-file", type=Path, default=None)
     return parser.parse_args()
