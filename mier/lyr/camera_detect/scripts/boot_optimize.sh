@@ -6,6 +6,9 @@
 #   2. 安装提前启动的 dvr.service；
 #   3. 禁用与本项目无关、且已确认不参与关键链路的服务。
 #
+# apply-optee-rng / rollback-optee-rng:
+#   只应用或回退 optee_rng 预加载，供冷启动 A/B 使用，不触碰其他优化项。
+#
 # rollback:
 #   恢复服务启用状态、dvr.service 和原有 U-Boot M33 固件文件。
 
@@ -19,6 +22,8 @@ M33_UNIT_BACKUP="${STATE_DIR}/dvr-m33.service.before"
 M33_UNIT_MARKER="${STATE_DIR}/dvr-m33-unit-was-absent"
 DNSMASQ_OVERRIDE_BACKUP="${STATE_DIR}/dnsmasq-override.before"
 DNSMASQ_OVERRIDE_MARKER="${STATE_DIR}/dnsmasq-override-was-absent"
+OPTEE_RNG_BACKUP="${STATE_DIR}/optee-rng.modules-load.before"
+OPTEE_RNG_MARKER="${STATE_DIR}/optee-rng.modules-load-was-absent"
 PROJECT_DIR="/xxl/camera_detect"
 UNIT_SOURCE="${PROJECT_DIR}/dvr.service.example"
 UNIT_TARGET="/etc/systemd/system/dvr.service"
@@ -26,6 +31,8 @@ M33_UNIT_SOURCE="${PROJECT_DIR}/dvr-m33.service.example"
 M33_UNIT_TARGET="/etc/systemd/system/dvr-m33.service"
 DNSMASQ_OVERRIDE_SOURCE="${PROJECT_DIR}/dnsmasq.service.override.example"
 DNSMASQ_OVERRIDE_TARGET="/etc/systemd/system/dnsmasq.service.d/override.conf"
+OPTEE_RNG_SOURCE="${PROJECT_DIR}/optee-rng.modules-load.example"
+OPTEE_RNG_TARGET="/etc/modules-load.d/90-dvr-optee-rng.conf"
 
 # 保留 WiFi AP、DNS/DHCP、网络、音频、TF 卡、OP-TEE、M33、日志和本项目服务。
 # 下列均为当前骑行辅助产品不使用的桌面、监控、SNMP、蓝牙、TSN 或调试服务。
@@ -69,12 +76,80 @@ show_status() {
     echo "DVR service:"
     systemctl is-enabled dvr.service 2>/dev/null || true
     systemctl is-active dvr.service 2>/dev/null || true
+    echo "OP-TEE RNG preload:"
+    if [ -f "$OPTEE_RNG_TARGET" ]; then
+        printf "  config="
+        tr '\n' ' ' < "$OPTEE_RNG_TARGET"
+        echo
+    else
+        echo "  config=absent"
+    fi
+    printf "  module="
+    if grep -q '^optee_rng ' /proc/modules 2>/dev/null; then
+        echo "loaded"
+    else
+        echo "not-loaded"
+    fi
+    if [ -r /sys/class/misc/hw_random/rng_current ]; then
+        printf "  rng_current="
+        cat /sys/class/misc/hw_random/rng_current
+    fi
     echo "Optional services:"
     for unit in $OPTIONAL_SERVICES; do
         printf "  %-38s enabled=%-10s active=%s\n" "$unit" \
             "$(systemctl is-enabled "$unit" 2>/dev/null || true)" \
             "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
+}
+
+save_optee_rng_state_once() {
+    mkdir -p "$STATE_DIR"
+    if [ ! -e "$OPTEE_RNG_BACKUP" ] && [ ! -e "$OPTEE_RNG_MARKER" ]; then
+        if [ -f "$OPTEE_RNG_TARGET" ]; then
+            cp -a "$OPTEE_RNG_TARGET" "$OPTEE_RNG_BACKUP"
+        else
+            : > "$OPTEE_RNG_MARKER"
+        fi
+    fi
+}
+
+install_optee_rng_preload() {
+    [ -f "$OPTEE_RNG_SOURCE" ] || {
+        echo "OP-TEE RNG module-load template not found: $OPTEE_RNG_SOURCE" >&2
+        exit 1
+    }
+    modinfo optee_rng >/dev/null 2>&1 || {
+        echo "Kernel module optee_rng is unavailable" >&2
+        exit 1
+    }
+    save_optee_rng_state_once
+    install -m 0644 "$OPTEE_RNG_SOURCE" "$OPTEE_RNG_TARGET"
+}
+
+restore_optee_rng_preload() {
+    if [ -f "$OPTEE_RNG_BACKUP" ]; then
+        cp -a "$OPTEE_RNG_BACKUP" "$OPTEE_RNG_TARGET"
+    elif [ -f "$OPTEE_RNG_MARKER" ]; then
+        rm -f "$OPTEE_RNG_TARGET"
+    else
+        echo "No saved OP-TEE RNG preload state at $STATE_DIR" >&2
+        return 1
+    fi
+}
+
+apply_optee_rng_only() {
+    require_root
+    install_optee_rng_preload
+    sync
+    echo "OP-TEE RNG preload applied; reboot is required for cold-start A/B."
+    echo "Rollback: $0 rollback-optee-rng"
+}
+
+rollback_optee_rng_only() {
+    require_root
+    restore_optee_rng_preload
+    sync
+    echo "OP-TEE RNG preload rolled back; reboot is required to validate."
 }
 
 save_state_once() {
@@ -136,7 +211,6 @@ apply_optimization() {
         echo "dnsmasq override template not found: $DNSMASQ_OVERRIDE_SOURCE" >&2
         exit 1
     }
-
     save_state_once
     install -m 0644 "$UNIT_SOURCE" "$UNIT_TARGET"
     install -m 0644 "$M33_UNIT_SOURCE" "$M33_UNIT_TARGET"
@@ -187,6 +261,7 @@ rollback_optimization() {
     elif [ -f "$DNSMASQ_OVERRIDE_MARKER" ]; then
         rm -f "$DNSMASQ_OVERRIDE_TARGET"
     fi
+    restore_optee_rng_preload || true
     systemctl disable dvr-m33.service >/dev/null 2>&1 || true
 
     if [ -f "$STATE_FILE" ]; then
@@ -222,8 +297,10 @@ case "$ACTION" in
     status) show_status ;;
     apply) apply_optimization ;;
     rollback) rollback_optimization ;;
+    apply-optee-rng) apply_optee_rng_only ;;
+    rollback-optee-rng) rollback_optee_rng_only ;;
     *)
-        echo "Usage: $0 {status|apply|rollback}" >&2
+        echo "Usage: $0 {status|apply|rollback|apply-optee-rng|rollback-optee-rng}" >&2
         exit 2
         ;;
 esac

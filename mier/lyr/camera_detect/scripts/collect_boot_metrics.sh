@@ -15,7 +15,12 @@ systemd-analyze blame --no-pager | head -30
 
 echo "=== unit_monotonic_timestamps ==="
 for unit in \
+    systemd-modules-load.service \
+    rng-tools.service \
+    sysinit.target \
+    basic.target \
     dvr-m33.service \
+    radar-dashboard.service \
     dvr.service \
     systemd-udev-settle.service \
     systemd-fsck@dev-mmcblk0p1.service \
@@ -31,6 +36,19 @@ for unit in \
         -p ExecMainExitTimestampMonotonic \
         -p ActiveEnterTimestampMonotonic
 done
+
+echo "=== random_subsystem ==="
+printf 'crng_init='; dmesg | sed -n '/random: crng init done/{s/^.*\[ *\([^]]*\)\].*/\1/;p;q}'
+printf 'entropy_avail='; cat /proc/sys/kernel/random/entropy_avail 2>/dev/null || true
+printf 'rng_current='; cat /sys/class/misc/hw_random/rng_current 2>/dev/null || true
+printf 'optee_rng_module='; \
+    grep -q '^optee_rng ' /proc/modules 2>/dev/null && echo loaded || echo missing
+if [ -e /dev/hwrng ]; then
+    udevadm info -q property -n /dev/hwrng 2>/dev/null |
+        sed -n 's/^USEC_INITIALIZED=/hwrng_usec_initialized=/p'
+else
+    echo 'hwrng=missing'
+fi
 
 echo "=== application_milestones ==="
 journalctl -b -u dvr-m33.service -u dvr.service \

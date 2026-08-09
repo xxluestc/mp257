@@ -108,7 +108,7 @@ M33 核通过 `/dev/ttyRPMSG0` 发送两类消息：
 | 消息前缀 | 含义 | 处理 |
 |---|---|---|
 | `IMU_ALERT` | `fall / hard_brake / road_bump` | 摔倒时置 `g_imu_fall_alert` 并保存 DVR；全部事件写同步日志并转发 HUD/App |
-| `V2X:` | V2X 预警（如盲区来车） | 解析方向字段，播放对应方向 `v2x_*.wav`，2 秒冷却避免连播 |
+| `V2X_ALERT` | V2X预警（如盲区来车） | 解析`direction`字段，播放对应方向`v2x_*.wav`，2秒冷却避免连播 |
 
 HUD 对三类 IMU 事件分别执行 60 秒同类冷却，再广播到手机 UDP 8889。
 该协议目前没有手机或短信回执，所以 LED 亮、开发板 UDP 成功都不能证明短信已发出。

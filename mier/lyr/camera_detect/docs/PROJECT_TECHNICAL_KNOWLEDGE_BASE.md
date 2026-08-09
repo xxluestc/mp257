@@ -25,9 +25,9 @@
 遇到“Linux通常如何工作”和“本项目当前如何实现”不一致时，以项目源码为准；源码
 与板端运行状态不一致时，以板端版本、日志和设备状态为准。
 
-一个例子是摄像头：仓库设备树包含 OV5640、CSI 和 DCMIPP 媒体拓扑，而旧启动脚本
-把 `/dev/video7`描述为USB摄像头。当前开发板暂时不在线，不能用`media-ctl`和sysfs
-完成最后确认。因此本文把它称为“V4L2摄像头节点”，并将具体总线归属标记为待核实。
+一个例子是摄像头：2026-08-09在线实机已经通过sysfs、`v4l2-ctl`和`media-ctl`
+确认，当前业务使用的`/dev/video7`是Sonix/Microdia `0c45:636b` USB 2.0 UVC
+摄像头，由`uvcvideo`驱动。文档中的硬件链路以这次实机确认结果为准。
 
 ## 2. 先建立完整分层
 
@@ -52,7 +52,7 @@ Linux内核子系统
   Device Tree / platform bus / clocks / resets / pinctrl / DMA / IRQ
         │
 SoC与外设
-  Cortex-A35 / Cortex-M33 / NPU / DCMIPP / SAI / UART / GPIO
+  Cortex-A35 / Cortex-M33 / NPU / USB / SAI / UART / GPIO
   摄像头 / 60GHz雷达 / TF卡 / MAX98357A / CH9140 / STM32WBA
 ```
 
@@ -64,7 +64,7 @@ SoC与外设
 
 | 层 | 主要职责 | 本项目例子 |
 |---|---|---|
-| 硬件 | 实际采样、传输、运算和输出 | OV5640、雷达、NPU、M33、SAI、TF卡 |
+| 硬件 | 实际采样、传输、运算和输出 | USB UVC摄像头、雷达、NPU、M33、SAI、TF卡 |
 | Bootloader/固件 | 建立可信启动、DDR、装载内核和设备树 | TF-A、OP-TEE、U-Boot、extlinux |
 | Linux内核 | 进程调度、内存、文件系统、网络和驱动 | V4L2、TTY、remoteproc、ASoC、MMC |
 | systemd/udev | 用户空间启动、依赖和设备事件管理 | `dvr.service`、设备节点就绪、日志 |
@@ -181,7 +181,16 @@ ARM Trusted Firmware。负责早期平台初始化、安全状态和后续固件
 
 **OP-TEE**
 
-运行在安全世界的可信执行环境。当前项目没有为了启动速度关闭它。
+OP-TEE是运行在Arm TrustZone安全世界中的可信执行环境，Linux运行在普通世界。
+它不是普通systemd服务，也不等同于一个`optee_rng`内核模块：TF-A负责世界切换，
+Linux侧`optee`驱动建立通信，`tee-supplicant`为部分可信应用提供普通世界协助，
+`optee_rng`只是通过OP-TEE取得硬件随机数的客户端驱动。
+
+即使当前业务代码没有直接调用TEE，也不能据此关闭整个OP-TEE。平台安全服务、密钥、
+随机数、固件接口或后续安全启动能力可能依赖它；错误修改还可能影响TF-A到Linux的
+启动链。2026-08-09只测试了提前加载Linux侧`optee_rng`模块，OP-TEE和`rng-tools`
+始终保留。该测试让`sysinit.target`提前约3.5秒，但没有缩短Fusion ready，反而使
+摄像头模块在三次重启中更晚完成，因此板端已回退，未纳入默认优化。
 
 **U-Boot**
 
@@ -221,7 +230,7 @@ extlinux菜单仍约有2秒窗口。它也是内核无法启动时的重要恢�
 |---|---:|---|
 | Linux kernel完成 | 约2.06 s | 进入userspace |
 | M33 running | 3.908 s | remoteproc状态正常 |
-| V4L2摄像头节点就绪 | 约8.50～9.20 s | 当前最晚业务设备，具体总线待复核 |
+| USB UVC摄像头节点就绪 | 约8.50～9.20 s | `/dev/video7`，最晚业务设备之一；多为并行项 |
 | TF检查/挂载 | 约9 s量级 | 完整录像的前置条件 |
 | systemd总启动 | 11.841 s | 不含bootloader |
 | Fusion core ready | 12.602 s | 融合主业务初始化完成 |
@@ -550,34 +559,35 @@ readlink -f /sys/.../driver
 - I2C/SPI sensor先由控制器驱动建立总线，再由子设备驱动匹配；
 - USB设备可以运行时枚举，不一定写入DT；
 - V4L2、ALSA、TTY、GPIO等是内核子系统，统一用户接口；
-- media controller还描述sensor、CSI、处理单元和video node之间的图关系。
+- USB摄像头由USB核心完成枚举，`uvcvideo`接入V4L2并创建视频节点。
 
-所以确认摄像头究竟是USB UVC还是OV5640/CSI/DCMIPP，会影响驱动枚举路径、启动瓶颈
-和排障工具。当前只能根据DTS判断存在后者，必须等板端在线后核对`/sys`和
-`media-ctl`，不能仅凭`/dev/video7`名称判断。
+当前摄像头是USB UVC设备，因此排查重点是USB主控和Hub枚举、`uvcvideo`加载、
+V4L2节点创建及格式协商。当前`/dev/video7`的归属来自sysfs驱动路径和实机媒体
+信息，而不是根据设备节点编号猜测。
 
 ## 7. 摄像头和V4L2
 
-### 7.1 可能的内核链路
+### 7.1 当前实机链路
 
-仓库DTS包含：
+当前业务实机链路：
 
 ```text
-OV5640 sensor
-  → CSI receiver
-  → DCMIPP
-  → media controller / V4L2 video node
-  → /dev/video7
+Sonix/Microdia USB 2.0 Camera（0c45:636b）
+  → EHCI host / USB hub
+  → uvcvideo
+  → /dev/video7（Video Capture）
+  → /dev/video8（Metadata Capture）
+  → /dev/media2
 ```
 
-旧脚本把它写成USB摄像头，当前板离线，具体`/dev/video7`的sysfs归属仍待核实。确认
-方法不是看设备节点编号，而是：
+启动脚本中的“USB摄像头”标签与当前业务硬件相符。确认方法不是只看设备节点编号，
+而是同时检查USB身份、sysfs驱动路径和V4L2信息：
 
 ```bash
 readlink -f /sys/class/video4linux/video7/device
 cat /sys/class/video4linux/video7/name
 v4l2-ctl --list-devices
-media-ctl -p
+media-ctl -d /dev/media2 -p
 ```
 
 `video7`编号可能随驱动和枚举顺序变化，长期产品配置最好使用稳定udev符号链接或按
@@ -1451,8 +1461,8 @@ SHA-256回答“文件传输后是否相同”，不能回答“谁发布了这�
 
 **`/dev/video7`不存在**
 
-先看media topology和dmesg，再看sensor/CSI/DCMIPP probe、endpoint、clock和pinctrl，
-不要先改应用重试次数。
+先看`lsusb -t`、sysfs驱动路径、`dmesg`中的USB/`uvcvideo`日志和V4L2节点，
+再检查供电、Hub连接及驱动加载，不要先改应用重试次数。
 
 **串口存在但没有雷达数据**
 
@@ -1526,7 +1536,8 @@ SHA-256回答“文件传输后是否相同”，不能回答“谁发布了这�
 2. 多线程进程fork后在exec前执行大量非安全函数，存在继承锁状态的理论风险；
 3. 多个全局状态跨线程读写，`volatile`不能替代atomic或mutex；
 4. DVR帧索引有界但TF原始文件持续append，写入量未真正有界；
-5. `/dev/video7`编号和实际媒体归属需要板端在线后确认；
+5. 实机已确认当前`/dev/video7`为USB UVC，但`video7`编号仍依赖枚举顺序，产品配置
+   最好使用稳定udev链接或按设备属性匹配；
 6. RPMsg ready仍依赖固定1秒等待，缺少显式双向握手；
 7. UDP手机链路缺少端到端ACK；
 8. 完整业务ready仍与摄像头和TF较强耦合；
@@ -1548,6 +1559,8 @@ SHA-256回答“文件传输后是否相同”，不能回答“谁发布了这�
 - [DEVICE_TREE.md](../board/DEVICE_TREE.md)：板级音频和PWM；
 - [E04 WBA README](../../../../E04-2G4M10S1AX/README.md)：BLE Central、GATT和方向灯；
 - [INTERVIEW_PREPARATION.md](INTERVIEW_PREPARATION.md)：表达和问题清单。
+- [COMPETITION_PREPARATION.md](COMPETITION_PREPARATION.md)：按现场事件梳理逻辑链、
+  演示证据和排查节点。
 
 建议提示词：
 

@@ -1,0 +1,3 @@
+# Preload the OP-TEE hardware RNG client before the large udev coldplug queue.
+# rng-tools.service and /dev/hwrng dependency semantics remain unchanged.
+optee_rng

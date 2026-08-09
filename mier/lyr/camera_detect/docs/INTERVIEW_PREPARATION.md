@@ -106,7 +106,7 @@ A35 适合运行 Linux、NPU、视频和网络程序。M33 更适合周期采样
 - `remoteproc`：Linux 侧管理 M33 固件的加载、启动、停止和状态。
 - `OpenAMP`：异构多核通信框架，包含 remoteproc/RPMsg 相关能力。
 - `RPMsg`：建立核间消息通道。本项目在 Linux 用户态通过 `/dev/ttyRPMSG0` 收取
-  `IMU_ALERT` 和 `V2X:` 消息。
+  `IMU_ALERT` 和 `V2X_ALERT` 消息。
 
 一句话回答：remoteproc 解决“远端核有没有运行”，RPMsg 解决“两个核运行后怎样
 传递业务消息”。`remoteproc0/state=running` 不代表 RPMsg 一定可用。
@@ -453,9 +453,10 @@ Fusion ready:      24.38 s
 
 - Linux 内核约 2.06 秒；
 - M33 在约 3.91 秒运行，不是当前瓶颈；
-- V4L2 摄像头节点约在 8.50～9.20 秒完成枚举，是最晚的业务设备；仓库DTS指向
-  OV5640→CSI→DCMIPP，但旧脚本称其为USB摄像头，具体`/dev/video7`归属待板端在线
-  后通过sysfs和`media-ctl`复核；
+- V4L2 摄像头节点约在8.50～9.20秒完成udev初始化，是最晚业务设备之一；
+  2026-08-09实机已确认`/dev/video7`为USB UVC摄像头。硬件约1.29秒已被USB发现，
+  延后主要来自udev冷插拔与媒体模块按需加载，而且本次节点早于`dvr.service`，
+  没有实际阻塞业务；
 - TF 卡 fsck 约 1.3～1.8 秒，随后挂载，录像功能依赖它；
 - Wi-Fi AP 和 DHCP 是当前 systemd 关键链中的必要功能；
 - 主程序入口到融合就绪约 1.34 秒，其中雷达初始化约 0.93 秒；
@@ -747,10 +748,10 @@ OTA 只更新 A35 Linux 应用，不更新 M33、U-Boot、内核、设备树和 
    具体业务设备和Wi-Fi AP。
 6. M33改为Linux sysinit阶段的oneshot服务启动，主业务保留失败回退。曾测试U-Boot
    启动M33，但因Linux缺少可靠接管证据而撤回。
-7. 当前剩余大项是V4L2摄像头节点约8.5~9.2秒才完成枚举、TF fsck约1.3~1.8秒、
-   Wi-Fi AP/DHCP和主程序约1.34秒初始化。仓库DTS指向OV5640→CSI→DCMIPP，旧脚本
-   却称/dev/video7为USB摄像头，具体归属需要板端在线后复核。多个项目并行，不能
-   直接相加。
+7. V4L2摄像头节点约8.5~9.2秒完成udev初始化。2026-08-09实机确认`/dev/video7`
+   是`uvcvideo`驱动的USB 2.0 UVC摄像头；硬件约1.29秒已被USB总线发现，主要延后
+   来自udev冷插拔和媒体模块按需加载。本次节点在`dvr.service`前约0.56秒就绪，
+   没有阻塞业务ready。TF fsck、Wi-Fi AP/DHCP和主程序初始化等并行项也不能相加。
 
 运行和OTA：
 1. dvr.service使用systemd管理并配置Restart=on-failure；业务健康不能只看unit
@@ -816,6 +817,8 @@ BLE-V2X协同预警；另外完成或维护了Linux启动优化、systemd服务�
 - 雷达阈值、实验数据和标注：[RADAR_EXPERIMENT.md](RADAR_EXPERIMENT.md)
 - M33事件到手机链路：[FALL_SMS_PIPELINE.md](FALL_SMS_PIPELINE.md)
 - MP257到WBA方向灯：[BLUETOOTH_DIRECTION_LED.md](BLUETOOTH_DIRECTION_LED.md)
+- 比赛现场事件链与演示节点：
+  [COMPETITION_PREPARATION.md](COMPETITION_PREPARATION.md)
 - WBA BLE Central固件与实测：
   [E04-2G4M10S1AX/README.md](../../../../E04-2G4M10S1AX/README.md)
 - A35应用OTA：[OTA.md](OTA.md)

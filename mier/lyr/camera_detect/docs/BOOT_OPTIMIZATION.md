@@ -289,9 +289,9 @@ radar_fusion ready:      24.38 s → 17.79 s
 fsck 仅丢弃该临时缓存目录。最终冷启动 fsck 降至 1.615 秒，验证结果为
 22 个有效文件、无剩余错误。正式录像和 `radar_experiments` 均保留。
 
-目前仍保留 `systemd-networkd-wait-online`（约 2.3 秒）和完整 udev settle
-（约 4.8 秒）：前者保护 WiFi AP/DHCP 启动顺序，后者保护 OV5640/CSI/DCMIPP
-媒体拓扑和串口设备节点。没有为继续压缩几秒而牺牲可重复启动。
+第一阶段仍保留 `systemd-networkd-wait-online`（约 2.3 秒）和完整 udev settle
+（约 4.8 秒）：前者保护 WiFi AP/DHCP 启动顺序，后者保护当时尚未逐项确认的
+摄像头和串口设备节点。没有为继续压缩几秒而牺牲可重复启动。
 
 ## 第二阶段：持续启动优化
 
@@ -438,8 +438,8 @@ HUD、Dashboard、hostapd、dnsmasq 和 TF 挂载检查通过，Dashboard
 设备枚举竞态，`start_dvr.sh` 改为只等待实际使用的设备：
 
 - `/dev/ttySTM1`：雷达硬前提，10 s 超时后失败并由 systemd 重启；
-- `/dev/video7`：V4L2 摄像头节点，等待后仍沿用 radar-only 降级。仓库DTS包含
-  OV5640→CSI→DCMIPP拓扑，旧启动脚本的“USB摄像头”标签需待板端在线后复核；
+- `/dev/video7`：USB UVC摄像头节点，等待后仍沿用radar-only降级。2026-08-09
+  实机确认其为Sonix/Microdia `0c45:636b`，由`uvcvideo`驱动；
 - `/dev/ttySTM0`：启用 BLE 方向灯时等待，超时后沿用现有串口失败处理；
 - `/dev/gpiochip3`：本机告警 GPIO，超时后沿用现有 LED disabled 处理；
 - `/dev/ttyRPMSG0`：继续由原有 M33/RPMsg 15 s 有界等待负责。
@@ -508,6 +508,114 @@ SHA-256 均为
 偶发打开失败。当前关键链为 WLAN hostapd 启动后再启动 dnsmasq，这是产品热点
 和 DHCP 功能所需，未为缩短 target 时间而解除依赖。
 
+#### 2026-08-09：USB摄像头晚就绪专项排查
+
+开发板恢复在线后进行了纯只读复核。`/dev/video7`的sysfs路径位于
+`.../482f0000.usb/usb3/3-1/3-1.1/...`，驱动为`uvcvideo`；`v4l2-ctl`和
+`media-ctl -d /dev/media2 -p`确认它是Sonix/Microdia `0c45:636b` USB 2.0 UVC
+摄像头，输出1280×720 MJPEG 25 FPS。
+
+本次冷启动关键时间：
+
+| 里程碑 | 内核单调时间 | 判断 |
+|---|---:|---|
+| EHCI USB 2.0主控启动 | 0.576 s | 主控不是慢项 |
+| 外接USB Hub枚举 | 0.999 s | 正常 |
+| 摄像头USB设备发现 | 1.288 s | 硬件并未等待8秒才上电 |
+| `mc`媒体核心加载 | 7.148 s | udev冷插拔/模块加载较晚 |
+| `videodev`加载 | 7.206 s | UVC依赖开始就绪 |
+| `uvcvideo`识别摄像头 | 8.276 s | 驱动绑定完成 |
+| `/dev/video7` udev完成 | 8.288 s | `USEC_INITIALIZED=8287671` |
+| `dvr.service`脚本开始 | 8.843 s | 摄像头提前约0.56秒就绪 |
+
+因此8.29秒是从内核入口计算的绝对时间，不是摄像头枚举函数连续运行8.29秒。
+真正的延后位于大规模udev冷插拔与`mc`、`videodev`、`uvcvideo`按需加载，USB硬件
+本身约1.29秒已被发现。可以把`uvcvideo`加入`modules-load.d`制作可回退冷启动A/B，
+但本次它不在业务关键路径上，提前节点预计不会改善Fusion ready，还可能与TF、Wi-Fi
+模块加载争用存储I/O。因此当前只记录候选，不修改生产板配置。
+
+#### 2026-08-09：`dvr.service` 到8.84秒才执行的直接原因
+
+本节使用同一次冷启动的内核单调时钟。`systemd-analyze critical-chain`显示的
+userspace相对时间容易与内核绝对时间混用，以下统一采用`journalctl -o
+short-monotonic`和`systemctl show`中的单调时间。
+
+| 里程碑 | 内核单调时间 | 含义 |
+|---|---:|---|
+| PID 1排队并开始userspace | 约2.17 s | systemd开始组织启动事务 |
+| systemd开始等待`/dev/hwrng` | 2.698 s | `rng-tools.service`是`sysinit.target`前置项 |
+| 内核CRNG初始化完成 | 5.220 s | 早于`rngd`启动 |
+| systemd确认`/dev/hwrng` | 8.258 s | 当前随机源为`optee-rng` |
+| `rng-tools.service`启动 | 8.299 s | `rngd -f -r /dev/hwrng` |
+| `sysinit.target`到达 | 8.303 s | 上游主要阻塞解除 |
+| `basic.target`到达 | 8.377 s | 普通服务开始并行调度 |
+| `radar-dashboard.service`进程启动 | 8.622 s | `dvr.service`显式排在它之后 |
+| systemd标记DVR已启动 | 8.726 s | `ExecStart`已经派生 |
+| `start_dvr.sh`首条日志 | 8.843 s | 所谓“DVR到8.84秒才执行” |
+
+当前`dvr.service`的显式顺序是：
+
+```text
+basic.target + local-fs.target → radar-dashboard.service ─┐
+local-fs.target + dvr-m33.service ────────────────────────┼→ dvr.service
+```
+
+其中`local-fs.target`在4.330秒完成，M33服务在3.868秒完成，都不是本次最后阻塞项。
+Dashboard采用普通systemd默认依赖，必须等`basic.target`；DVR又显式
+`After=radar-dashboard.service`。真正把`basic.target`拖到8.377秒的是
+`rng-tools.service`：其vendor unit配置了`DefaultDependencies=no`、
+`Before=sysinit.target`和`After=dev-hwrng.device`，因此OP-TEE随机数设备未被systemd
+确认前，整个`sysinit.target`不能完成。USB摄像头在8.276秒绑定只是时间相邻，
+`dvr.service`没有依赖`/dev/video7`设备单元，不能把它当成服务晚启动的原因。
+
+DVR脚本启动后还有第二段独立等待：本次TF卡dirty bit触发FAT检查，fsck从7.832秒
+运行到9.570秒，挂载在10.068秒完成；脚本从8.939秒等待到10.518秒后才继续，
+`radar_fusion`主入口在10.896秒，runtime ready在13.126秒。因此要区分：
+
+1. 8.84秒之前是systemd基础启动链，主要受`rng-tools`与`/dev/hwrng`影响；
+2. 8.84～10.52秒是脚本为避免FAT检查与业务写盘并发而等待TF挂载；
+3. 10.90～13.13秒是雷达、摄像头、NPU和融合线程的真实应用初始化。
+
+当前不直接禁用`rng-tools`，也不跳过TF fsck。前者关系到系统熵源，后者保护录像和
+CSV数据完整性。`optee_rng`当前是模块，未出现在默认`modules-load.d`中；结合模块
+TEE modalias和板端配置，可判断它由udev冷插拔过程按设备事件加载。
+
+##### `optee_rng`预加载A/B：基础target提前，但业务无收益，已回退
+
+为验证能否安全解除上游阻塞，新增独立、可回退的`apply-optee-rng`动作，仅向
+`modules-load.d`加入`optee_rng`。实验没有关闭OP-TEE，没有禁用`rng-tools`，也没有
+改变`After=dev-hwrng.device`和`Before=sysinit.target`关系。配置连续重启三次后，
+再执行`rollback-optee-rng`并重启确认恢复。
+
+| 指标 | 改动前本次基线 | 预加载三次范围 | 预加载中位数 | 结果 |
+|---|---:|---:|---:|---|
+| `/dev/hwrng` udev完成 | 6.773 s | 3.755～3.912 s | 3.858 s | 设备事件明显提前 |
+| `sysinit.target` | 8.301 s | 4.791～5.060 s | 4.801 s | 提前约3.5 s |
+| `dvr.service` active | 8.724 s | 5.213～5.421 s | 5.241 s | 提前约3.48 s |
+| USB摄像头节点 | 8.288 s | 9.988～10.659 s | 10.556 s | 反而延后约2.27 s |
+| Fusion runtime ready | 13.126 s | 13.082～13.466 s | 13.246 s | 没有业务收益 |
+| systemd总启动 | 12.250 s | 12.301～12.427 s | 12.381 s | 没有整机收益 |
+
+现象表明，提前加载随机数驱动确实消除了`rng-tools`对基础target的表面阻塞，但也让
+普通用户态服务约提前3.5秒进入启动，与尚未完成的udev冷插拔和存储I/O并发。三次
+实验中摄像头节点均比原基线晚；结合回退后摄像头恢复到8.719秒，可以合理推断启动
+资源争用抵消了target提前收益，但不能仅凭这组数据把所有波动都归因于单一模块。
+
+工程结论是：本项目以`radar_fusion_runtime_ready`和首帧为优化目标，不以
+`sysinit.target`单项为目标，因此拒绝把该预加载纳入默认`apply`。板端已经回退，
+仓库保留独立A/B及回退动作，便于以后在不同镜像上复测：
+
+```bash
+/xxl/camera_detect/scripts/boot_optimize.sh apply-optee-rng
+# 重启并采集至少三次
+/xxl/camera_detect/scripts/boot_optimize.sh rollback-optee-rng
+```
+
+也不继续尝试取消`rng-tools`的`Before=sysinit.target`：刚才的实验已经证明，即使DVR
+service提前约3.5秒，当前单体脚本仍要等待摄像头和TF，完整业务不会因此提前。下一
+个真正的大项应是把“雷达/RPMsg告警初始化”和“TF存储接入”解耦；TF侧应保证正常
+关机、降低dirty bit出现率，不能简单删除fsck或并发手工挂载。
+
 最终功能回归如下：
 
 | 功能 | SSH 可验证结果 |
@@ -534,9 +642,9 @@ AP 并获取 DHCP 地址的验收。本阶段没有触发告警来制造录像�
    缩短可能让 ready 早于对端端点可用。
 3. TF fsck 约 1.3~1.8 s，不能直接关闭。若要继续明显提前告警功能，应设计
    “雷达/RPMsg 先启动、存储稍后热接入”的架构，并验证启动期间事件不丢失。
-4. hostapd、摄像头枚举、random-seed、udev-trigger 和分区挂载仍各有约 1 s
-   量级耗时，但多为并行项，不能把 `blame` 数字直接相加。下一阶段应先做关键
-   路径 trace，再分别制作可回退 A/B 镜像。
+4. USB摄像头硬件约1.29秒已被发现，`uvcvideo`和udev约8.29秒完成，但本次仍早于
+   `dvr.service`。hostapd、random-seed、udev-trigger和分区挂载也多为并行项，
+   不能把`blame`数字直接相加。下一阶段应先证明候选位于关键路径，再做可回退A/B。
 
 板端原配置和每阶段二进制均保存在
 `/etc/dvr-boot-optimization/`。`boot_optimize.sh rollback` 可恢复其管理的服务、
@@ -748,7 +856,7 @@ ready；再用单调时钟、关键链和协议 ACK 找到真正的大项；区�
 当前不能裁掉的关键部分包括：
 
 - STM32 remoteproc/RPMsg
-- OV5640、CSI、DCMIPP、V4L2 media controller
+- USB主控、`uvcvideo`和V4L2
 - `galcore` 和 STAI/OpenVX 依赖
 - `brcmfmac/cfg80211` WiFi
 - STM32 SAI、MAX98357A ALSA
@@ -887,10 +995,11 @@ remoteproc 管理异构核的固件加载、启动、停止和状态；RPMsg 建
 
 ### 7. 第一阶段为什么保留、第二阶段为什么能移除完整 udev settle？
 
-摄像头由 OV5640、CSI、DCMIPP 和 V4L2 media controller 组成异步枚举拓扑，
-雷达串口等节点也依赖 udev。第一阶段尚未证明具体节点的最晚时间，所以保留全局
-等待。第二阶段加入 `/dev/video7`、`ttySTM0/1`、`gpiochip3` 和 RPMsg 的有界
-精确等待，并审计、禁用空闲 iiod 后，才移除 settle；连续冷启动未出现枚举竞态。
+第一阶段尚未确认实际业务摄像头归属，也没有证明具体节点的最晚时间，所以连同雷达
+串口等设备一起保留全局udev等待。第二阶段加入`/dev/video7`、`ttySTM0/1`、
+`gpiochip3`和RPMsg的有界精确等待，并审计、禁用空闲iiod后，才移除settle；连续
+冷启动未出现枚举竞态。后续实机确认`/dev/video7`实际为USB UVC，这不改变
+“等待业务实际使用节点”的原则。
 
 ### 8. 下一步如何继续优化？
 
