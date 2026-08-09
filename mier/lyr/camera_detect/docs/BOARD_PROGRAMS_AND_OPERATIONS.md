@@ -69,8 +69,8 @@ Linux systemd
 ### 2.2 当前版本目录
 
 ```text
-/xxl/camera_detect       -> /xxl/releases/1.0.5
-/xxl/releases/.previous -> /xxl/releases/1.0.4
+/xxl/camera_detect       -> /xxl/releases/1.0.7
+/xxl/releases/.previous -> /xxl/releases/1.0.6
 /xxl/persistent/camera_detect/radar_config
 /opt/helmet-ota/
 /var/lib/helmet-ota/
@@ -621,15 +621,14 @@ cd /home/alientek/dvr_project/mier/lyr/camera_detect
 make
 make dashboard-check
 make script-check
-make ota-test
-make ota-package VERSION=1.0.6
+make ota-package VERSION=1.0.8
 ```
 
 生成：
 
 ```text
-dist/helmet-a35-1.0.6.tar.gz
-dist/helmet-a35-1.0.6.tar.gz.sha256
+dist/helmet-a35-1.0.8.tar.gz
+dist/helmet-a35-1.0.8.tar.gz.sha256
 ```
 
 版本号必须是尚未安装过的新版本。相同VERSION不能重复安装，目标release目录已经存在时
@@ -641,7 +640,7 @@ dist/helmet-a35-1.0.6.tar.gz.sha256
 
 ```bash
 BOARD=192.168.88.10
-PKG=dist/helmet-a35-1.0.6.tar.gz
+PKG=dist/helmet-a35-1.0.8.tar.gz
 SHA=$(sha256sum "$PKG" | awk '{print $1}')
 
 curl "http://${BOARD}:8090/api/ota/version"
@@ -672,21 +671,21 @@ watch -n 1 "curl -s http://${BOARD}:8090/api/ota/status"
 需要避开HTTP上传流程时，可以先复制完整OTA包：
 
 ```bash
-scp dist/helmet-a35-1.0.6.tar.gz \
-  root@192.168.88.10:/var/lib/helmet-ota/uploads/ssh-1.0.6.tar.gz
+scp dist/helmet-a35-1.0.8.tar.gz \
+  root@192.168.88.10:/var/lib/helmet-ota/uploads/ssh-1.0.8.tar.gz
 ```
 
 SSH进入开发板后执行：
 
 ```bash
-PKG=/var/lib/helmet-ota/uploads/ssh-1.0.6.tar.gz
+PKG=/var/lib/helmet-ota/uploads/ssh-1.0.8.tar.gz
 SHA=$(sha256sum "$PKG" | awk '{print $1}')
 
 /usr/bin/python3 /opt/helmet-ota/helmet_ota_installer.py \
   --install \
   --package "$PKG" \
   --sha256 "$SHA" \
-  --package-id ssh-manual-1.0.6
+  --package-id ssh-manual-1.0.8
 ```
 
 这种方式仍经过包校验、原子切换、服务重启、健康检查和失败自动回退，但不会经过HTTP服务
@@ -718,7 +717,7 @@ ln -sfn /xxl/releases/1.0.3 /xxl/camera_detect
 - `last_success.json`和`.previous`维护。
 
 如果需要恢复`1.0.3`的代码，推荐从对应Git提交检出旧代码，再以一个未使用的新版本号，
-例如`1.0.6`，重新构建OTA包。这样代码内容可以来自旧版本，但发布过程仍受完整事务保护。
+例如`1.0.9`，重新构建OTA包。这样代码内容可以来自旧版本，但发布过程仍受完整事务保护。
 
 后续如果确实需要经常选择任意历史release，应扩展安装器，增加带健康检查和自动恢复的
 `activate-version`操作，而不是提供手工修改软链接的运维命令。

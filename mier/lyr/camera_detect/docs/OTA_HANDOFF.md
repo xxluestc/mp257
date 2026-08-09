@@ -46,9 +46,10 @@ Android 展示最终 success / rolled_back / failed
 - 手机断开后，已经受理的安装继续由板端后台完成；
 - A35 升级过程中不升级、也不主动停止独立运行的 M33。
 
-真实开发板已完成 `1.0.0 → 1.0.1 → 1.0.2`、手工回滚和故障包自动回滚。
-当前验证稳定版为 `1.0.2`，后续正式联调包应使用新的 VERSION，例如 `1.0.3`，
-不要重复安装已经存在或当前正在运行的版本。
+真实开发板已完成多轮正向升级、手工回滚和故障包自动回滚。当前板端稳定基线为
+`1.0.7`，已准备的唯一下一版联调包为`1.0.8`。为了保留真实OTA演示起点，
+`1.0.8`尚未安装到开发板。该包的精确信息与验收步骤见
+[RELEASE_1.0.8.md](RELEASE_1.0.8.md)。
 
 ## 3. 三方职责
 
@@ -73,11 +74,11 @@ Android 展示最终 success / rolled_back / failed
 ```json
 {
   "product": "helmet-a35",
-  "version": "1.0.3",
-  "download_url": "https://example.invalid/ota/helmet-a35-1.0.3.tar.gz",
-  "sha256": "<64位小写十六进制>",
-  "size_bytes": 8238247,
-  "release_notes": "本次更新说明",
+  "version": "1.0.8",
+  "download_url": "https://example.invalid/ota/helmet-a35-1.0.8.tar.gz",
+  "sha256": "0110247cd9fe50e8e28fe702539dfe449781b6f1256e3f45636e7d7b98182301",
+  "size_bytes": 8274938,
+  "release_notes": "A35稳定版更新；升级后Dashboard切换OTA演示主题。",
   "mandatory": false
 }
 ```
@@ -178,21 +179,21 @@ Android 应先在有互联网的网络下完整下载包，再连接开发板 Wi
 
 ```bash
 cd mier/lyr/camera_detect
-make ota-package VERSION=1.0.3
+make ota-package VERSION=1.0.8
 ```
 
 交给云端的文件：
 
 ```text
-dist/helmet-a35-1.0.3.tar.gz
-dist/helmet-a35-1.0.3.tar.gz.sha256
+dist/helmet-a35-1.0.8.tar.gz
+dist/helmet-a35-1.0.8.tar.gz.sha256
 ```
 
 发布前必须检查：
 
 ```bash
-(cd dist && sha256sum -c helmet-a35-1.0.3.tar.gz.sha256)
-tar -tzf dist/helmet-a35-1.0.3.tar.gz
+(cd dist && sha256sum -c helmet-a35-1.0.8.tar.gz.sha256)
+tar -tzf dist/helmet-a35-1.0.8.tar.gz
 ```
 
 `dist/` 是本机构建产物，不提交 Git。给队友源码时应发 GitHub 分支或干净源码；

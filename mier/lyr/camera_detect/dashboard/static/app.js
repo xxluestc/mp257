@@ -355,7 +355,13 @@ function drawChart(chart) {
 }
 
 function renderState(state) {
-  $("system-version").textContent = state.system_version || state.app_version || "unknown";
+  const systemVersion = state.system_version || state.app_version || "unknown";
+  $("system-version").textContent = systemVersion;
+  document.body.dataset.release = systemVersion === "1.0.8" ? "1.0.8" : "baseline";
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) {
+    themeColor.content = systemVersion === "1.0.8" ? "#172d68" : "#142833";
+  }
   const online = !state.stale;
   const chip = $("connection-chip");
   chip.className = `status-chip ${online ? "status-online" : "status-offline"}`;

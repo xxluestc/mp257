@@ -80,11 +80,12 @@ make deploy-radar BOARD_IP=192.168.88.10
 生成 A35 运行时 OTA 包：
 
 ```bash
-make ota-package VERSION=1.0.1
+make ota-package VERSION=1.0.8
 ```
 
 输出位于 `dist/`。完整的目录迁移、板端服务部署和回滚方法见
-[A35 OTA 操作指南](docs/OTA.md)。
+[A35 OTA 操作指南](docs/OTA.md)。当前`1.0.8`包的唯一SHA-256、云端元数据和
+主题切换验收见[1.0.8发布说明](docs/RELEASE_1.0.8.md)。
 
 MP257、CH9140 与 WBA 左右碰撞方向灯的接线、协议、烧录、测试和实机联调
 记录见 [蓝牙方向灯联调文档](docs/BLUETOOTH_DIRECTION_LED.md)。
@@ -301,4 +302,5 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)
 - [Android 使用的 OTA HTTP API](docs/OTA_API.md)
 - [Android/云端 OTA 分工与联调交接](docs/OTA_HANDOFF.md)
+- [OTA 1.0.8 发布包、云端元数据与演示验收](docs/RELEASE_1.0.8.md)
 - [设备树与 MAX98357A 配置](board/DEVICE_TREE.md)

@@ -42,4 +42,5 @@ make
 - [启动优化与回退](lyr/camera_detect/docs/BOOT_OPTIMIZATION.md)
 - [A35 应用层 OTA](lyr/camera_detect/docs/OTA.md)
 - [Android OTA HTTP API](lyr/camera_detect/docs/OTA_API.md)
+- [OTA 1.0.8 发布与队友交付说明](lyr/camera_detect/docs/RELEASE_1.0.8.md)
 - [设备树说明](lyr/camera_detect/board/DEVICE_TREE.md)

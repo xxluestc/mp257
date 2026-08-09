@@ -34,6 +34,30 @@ body {
   background-size: 30px 30px;
 }
 
+/* 1.0.8 OTA demo identity: one version-gated visual layer, no layout changes. */
+body[data-release="1.0.8"] {
+  --night: #172d68;
+  --canvas: #f3f0e9;
+  --panel: #fffdf8;
+  --panel-2: #f7f3ea;
+  --panel-3: #e9e2d4;
+  --line: #c7bda9;
+  --line-soft: rgba(75, 64, 43, .16);
+  --ink: #17213d;
+  --muted: #675f53;
+  --radar: #e46618;
+  --lane: #087f8c;
+  --amber: #b94b12;
+  --danger: #bb2f3a;
+  --ok-soft: #fff0dc;
+  --shadow: rgba(37, 45, 77, .14);
+  background:
+    linear-gradient(rgba(23, 45, 104, .048) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 45, 104, .048) 1px, transparent 1px),
+    var(--canvas);
+  background-size: 30px 30px;
+}
+
 button, input { font: inherit; }
 h1, h2, p, dl { margin: 0; }
 h1, h2, .direction-readout strong {
@@ -45,6 +69,7 @@ h1 { font-size: clamp(23px, 2.2vw, 33px); font-weight: 600; }
 h2 { font-size: 20px; font-weight: 650; }
 
 .topbar {
+  position: relative;
   height: 70px;
   padding: 10px clamp(16px, 2.7vw, 42px);
   display: flex;
@@ -54,6 +79,20 @@ h2 { font-size: 20px; font-weight: 650; }
   border-bottom: 1px solid var(--line);
   color: #f7fbfc;
   background: var(--night);
+}
+body[data-release="1.0.8"] .topbar {
+  border-bottom: 3px solid #ff9b3f;
+  background:
+    linear-gradient(112deg, #172d68 0 68%, #214485 68% 82%, #172d68 82%);
+}
+body[data-release="1.0.8"] .topbar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -3px;
+  width: min(34vw, 520px);
+  height: 3px;
+  background: repeating-linear-gradient(90deg, #ff9b3f 0 28px, #ffd5a8 28px 36px);
 }
 .brand-lockup { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .brand-mark {
@@ -91,6 +130,27 @@ h2 { font-size: 20px; font-weight: 650; }
 }
 .version-chip { color: #d7e3e7; letter-spacing: .02em; }
 .version-chip strong { margin-left: 6px; color: #8fc6ff; }
+body[data-release="1.0.8"] .version-chip {
+  color: #fff8ec;
+  border-color: rgba(255, 177, 94, .8);
+  background: rgba(228, 102, 24, .2);
+}
+body[data-release="1.0.8"] .version-chip strong { color: #ffd29d; }
+body[data-release="1.0.8"] .version-chip::after {
+  content: "OTA DEMO";
+  margin-left: 9px;
+  padding-left: 9px;
+  border-left: 1px solid rgba(255, 210, 157, .55);
+  color: #ffffff;
+  font-size: 10px;
+  letter-spacing: .1em;
+}
+body[data-release="1.0.8"] .topbar .eyebrow { color: #ffb15e; }
+body[data-release="1.0.8"] .brand-mark {
+  border-color: #ffb15e;
+  background: #fff0dc;
+}
+body[data-release="1.0.8"] .topbar .brand-mark i { background: #e46618; }
 .status-chip { gap: 7px; }
 .status-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .status-online { color: #74eadf; border-color: rgba(101, 224, 211, .65); }
@@ -107,6 +167,13 @@ h2 { font-size: 20px; font-weight: 650; }
   border-bottom: 1px solid var(--line);
   background: #ffffff;
   box-shadow: 0 3px 12px rgba(30, 55, 68, .08);
+}
+body[data-release="1.0.8"] .mode-rail {
+  background: #fffdf8;
+  box-shadow: 0 3px 14px rgba(23, 45, 104, .12);
+}
+body[data-release="1.0.8"] .mode-tab.active {
+  background: linear-gradient(180deg, #fffdf8, #ffead3);
 }
 .mode-tab {
   position: relative;

@@ -54,6 +54,18 @@ class FakeController:
 
 
 class DashboardTest(unittest.TestCase):
+    def test_manual_labels_are_utf8_bom_and_close_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = RadarStore(Path(temporary))
+            started = store.record_label("left_rear_fast_collision", "start")
+            finished = store.record_label("left_rear_fast_collision", "end")
+            content = store.labels_path.read_bytes()
+            self.assertTrue(content.startswith(b"\xef\xbb\xbf"))
+            text = content.decode("utf-8-sig")
+            self.assertIn("左后方快速碰撞", text)
+            self.assertEqual(started["event_id"], finished["event_id"])
+            self.assertEqual(store.active_labels(), {})
+
     def test_control_audit_appears_in_current_boot_events(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = RadarStore(Path(temporary))
@@ -84,6 +96,14 @@ class DashboardTest(unittest.TestCase):
             "view-radar", "view-sensors", "view-system", "view-boot", "view-control"
         ):
             self.assertIn(view, ids)
+
+    def test_ota_demo_theme_is_strictly_version_gated(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        app = (static_dir / "app.js").read_text(encoding="utf-8")
+        styles = (static_dir / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('systemVersion === "1.0.8"', app)
+        self.assertIn('body[data-release="1.0.8"]', styles)
+        self.assertIn('content: "OTA DEMO"', styles)
 
     def test_read_only_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

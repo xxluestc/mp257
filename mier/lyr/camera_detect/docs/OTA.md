@@ -14,11 +14,11 @@
 /xxl/persistent/camera_detect/
 └── radar_config                    # 现场配置，所有 release 共用
 /xxl/releases/
-├── 1.0.0/
-├── 1.0.1/
+├── 1.0.7/                         # 当前稳定基线
+├── 1.0.8/                         # OTA成功后出现
 ├── legacy-YYYYmmdd-HHMMSS/         # 首次 OTA 时迁移的旧普通目录
 └── .previous -> 上一稳定版本
-/xxl/camera_detect -> /xxl/releases/1.0.1
+/xxl/camera_detect -> /xxl/releases/1.0.7（升级前）
 ```
 
 一次安装由板端独立执行：
@@ -44,7 +44,8 @@ HTTP 请求和手机连接运行，因此手机断开 WiFi 不会中止已经开
 `make deploy-radar` 直接覆盖当前 release。后者只保留作初次部署和临时开发调试。
 
 现场`radar_config`整体继承、不由OTA包覆盖。为兼容早期版本，若其中
-`RADAR_LOG_DIR`仍指向`/run/media/mmcblk0p1`，新启动脚本会仅将该运行时路径迁移到
+`RADAR_LOG_DIR`仍指向`/run/media/mmcblk0`或`/run/media/mmcblk0p1`，新启动脚本
+会仅将该运行时路径迁移到
 `/usr/local/helmet/radar_experiments`；TTC、距离、角度、滤波和BLE配置保持不变。
 
 ## 2. OTA 包内容
@@ -53,14 +54,14 @@ HTTP 请求和手机连接运行，因此手机断开 WiFi 不会中止已经开
 
 ```bash
 cd /home/alientek/dvr_project/mier/lyr/camera_detect
-make ota-package VERSION=1.0.1
+make ota-package VERSION=1.0.8
 ```
 
 该命令先编译 A35 主程序和 HUD、检查 Shell/Python，再生成：
 
 ```text
-dist/helmet-a35-1.0.1.tar.gz
-dist/helmet-a35-1.0.1.tar.gz.sha256
+dist/helmet-a35-1.0.8.tar.gz
+dist/helmet-a35-1.0.8.tar.gz.sha256
 ```
 
 包内只包含运行文件：
@@ -80,8 +81,8 @@ dist/helmet-a35-1.0.1.tar.gz.sha256
 检查包内容：
 
 ```bash
-tar -tzf dist/helmet-a35-1.0.1.tar.gz
-(cd dist && sha256sum -c helmet-a35-1.0.1.tar.gz.sha256)
+tar -tzf dist/helmet-a35-1.0.8.tar.gz
+(cd dist && sha256sum -c helmet-a35-1.0.8.tar.gz.sha256)
 ```
 
 ## 3. 首次部署 OTA 服务
@@ -223,7 +224,7 @@ Linux 6.6.48、Python 3.12.4、约 1.7 GiB RAM，测试前
 频率很低，因此第一版可用，后续可把包校验隔离到短生命周期子进程进一步控制
 常驻内存。
 
-板端最终状态：
+该轮板端结束状态（历史记录）：
 
 ```text
 /xxl/camera_detect       -> /xxl/releases/1.0.2
@@ -244,7 +245,28 @@ M33 remoteproc           running
 3. 做一次有串口监控和可靠供电保护的可控掉电恢复测试；
 4. 室外环境验证摄像头/NPU、真实雷达告警、IMU 摔倒上报和手机短信链。
 
-## 8. 第一版安全边界
+## 8. 1.0.7基线与1.0.8演示包（2026-08-09）
+
+当前真实板端保持：
+
+```text
+/xxl/camera_detect       -> /xxl/releases/1.0.7
+/xxl/releases/.previous -> /xxl/releases/1.0.6
+Dashboard/API版本        1.0.7
+OTA状态                  success
+```
+
+已为手机和云端联合演示生成`1.0.8`包，但没有提前安装到板端。包的唯一SHA-256为：
+
+```text
+0110247cd9fe50e8e28fe702539dfe449781b6f1256e3f45636e7d7b98182301
+```
+
+安装成功后Dashboard根据`system_version=1.0.8`自动切换为钴蓝/安全橙主题并显示
+`OTA DEMO`；1.0.7仍显示原主题。准确文件大小、云端元数据和演示检查见
+[RELEASE_1.0.8.md](RELEASE_1.0.8.md)。
+
+## 9. 第一版安全边界
 
 第一版使用 HTTPS 之外的局域网 HTTP，并以 SHA-256 保证传输完整性；SHA-256
 不能证明发布者身份。测试期间应只在开发板私有 WiFi 使用 8090，不要暴露到
