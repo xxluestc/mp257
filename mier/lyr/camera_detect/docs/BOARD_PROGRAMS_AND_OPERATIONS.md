@@ -5,9 +5,11 @@
 1. 项目相关程序在开发机仓库和开发板上的位置、作用、启动关系及维护方法；
 2. 通过 SSH 或串口进行 A35 应用 OTA 升级、回退和版本核验的方法。
 
-本文以 2026-08-09 对 `192.168.88.10` 开发板的在线只读检查和当前仓库代码为依据。
-当时板端 A35 应用为 `1.0.5`，上一稳定版本为 `1.0.4`。文中的 PID、USB 设备编号和
-磁盘占用会随重启或设备连接发生变化，排查时应以现场命令结果为准。
+本文以 2026-08-09 对 `192.168.88.10` 开发板的在线检查和当前仓库代码为依据。
+当前板端 A35 应用仍为 `1.0.7`，上一稳定版本为 `1.0.6`；本轮界面与TF修复采用
+开发态直接部署，没有修改VERSION，也没有生成新OTA包。等全部功能定稿后再统一
+选择新版本号并把最终包交给手机/云端队友。文中的 PID、USB 设备编号和磁盘占用
+会随重启或设备连接发生变化，排查时应以现场命令结果为准。
 
 > 本文中的 OTA 只覆盖 Cortex-A35 Linux 应用，不更新 M33 固件、WBA 固件、U-Boot、
 > Linux 内核、设备树或根文件系统。
@@ -256,7 +258,7 @@ HTTP接口，手机端不属于本手册中的板端可执行程序。
 | 骨传导音频 | `/dev/snd/pcmC0D0p` | ALSA/aplay，由主业务调用 |
 | 告警GPIO | `/dev/gpiochip3` | `radar_fusion` |
 | 板载userfs | `/dev/mmcblk1p9`，ext4，挂载到`/usr/local` | 比赛录像和业务数据 |
-| 外置TF卡 | `/dev/mmcblk0p1` | 当前故障卡，仅保留历史数据，不参与业务写入 |
+| 外置TF卡 | `/dev/mmcblk0`或`/dev/mmcblk0p1` | 自动识别，仅用于导入/导出，不参与业务写入 |
 
 ### 6.2 网络端口
 
@@ -349,7 +351,7 @@ systemctl is-enabled dvr-m33 dvr radar-dashboard helmet-ota hostapd dnsmasq
 cat /sys/class/remoteproc/remoteproc0/state
 pgrep -a radar_fusion
 pgrep -a hud
-findmnt /run/media/mmcblk0p1
+/xxl/camera_detect/scripts/tf_card_control.sh status
 
 test -e /dev/ttySTM0 && echo 'BLE UART OK'
 test -e /dev/ttySTM1 && echo 'RADAR UART OK'
@@ -495,7 +497,7 @@ systemctl start dvr.service
 重新插入后先确认挂载。主业务使用板载 ext4，不必因 TF 插拔而重启：
 
 ```bash
-findmnt /run/media/mmcblk0p1
+/xxl/camera_detect/scripts/tf_card_control.sh status
 ```
 
 Dashboard“设备运维”页提供等价的TF挂载/弹出、安全停止项目和安全关机按钮。
@@ -554,8 +556,8 @@ STM32MP>
 当前现场状态是：
 
 ```text
-current  -> 1.0.5
-previous -> 1.0.4
+current  -> 1.0.7
+previous -> 1.0.6
 ```
 
 ### 12.1 回退前检查

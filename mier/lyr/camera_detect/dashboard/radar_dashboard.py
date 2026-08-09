@@ -101,11 +101,11 @@ CONTROL_TASKS = {
 MAINTENANCE_ACTIONS = {
     "tf_mount": {
         "name": "挂载 TF 卡",
-        "unit": "/dev/mmcblk0p1",
+        "unit": "/dev/mmcblk0 或首分区",
     },
     "tf_eject": {
         "name": "安全弹出 TF 卡",
-        "unit": "/dev/mmcblk0p1",
+        "unit": "/dev/mmcblk0 或首分区",
     },
     "project_stop": {
         "name": "安全停止项目",
@@ -166,12 +166,13 @@ class RadarStore:
 
     def _storage_available(self) -> bool:
         """Keep legacy custom TF paths from writing below an unmounted mountpoint."""
-        tf_mount = Path("/run/media/mmcblk0p1")
-        try:
-            self.data_dir.resolve(strict=False).relative_to(tf_mount)
-        except ValueError:
-            return True
-        return os.path.ismount(tf_mount)
+        for tf_mount in (Path("/run/media/mmcblk0p1"), Path("/run/media/mmcblk0")):
+            try:
+                self.data_dir.resolve(strict=False).relative_to(tf_mount)
+            except ValueError:
+                continue
+            return os.path.ismount(tf_mount)
+        return True
 
     def _activate_storage(self) -> bool:
         if self._storage_initialized:
@@ -750,14 +751,15 @@ class SystemMonitor:
         return {"celsius": round(temperature, 1), "source": source}
 
     def _storage(self) -> dict[str, Any]:
-        tf_mount = Path("/run/media/mmcblk0p1")
-        try:
-            self.data_dir.resolve(strict=False).relative_to(tf_mount)
-            if not os.path.ismount(tf_mount):
-                return {"mounted": False, "total_gib": None,
-                        "used_gib": None, "used_percent": None}
-        except ValueError:
-            pass
+        for tf_mount in (Path("/run/media/mmcblk0p1"), Path("/run/media/mmcblk0")):
+            try:
+                self.data_dir.resolve(strict=False).relative_to(tf_mount)
+                if not os.path.ismount(tf_mount):
+                    return {"mounted": False, "total_gib": None,
+                            "used_gib": None, "used_percent": None}
+                break
+            except ValueError:
+                continue
         try:
             stat = os.statvfs(self.data_dir)
             total = stat.f_blocks * stat.f_frsize
@@ -917,6 +919,49 @@ class TaskController:
         rows = RadarStore._tail_csv(self.audit_path, max_rows=40)
         return list(reversed(rows[-limit:]))
 
+    def _tf_status(self) -> dict[str, Any]:
+        """Read the removable-card state from the same helper used for actions."""
+        storage_script = self.project_root / "scripts" / "tf_card_control.sh"
+        values: dict[str, str] = {}
+        try:
+            result = subprocess.run(
+                [str(storage_script), "status"],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
+            )
+            if result.returncode == 0:
+                for token in result.stdout.strip().split():
+                    if "=" in token:
+                        key, value = token.split("=", 1)
+                        values[key] = value
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+        state = values.get("state", "")
+        if not state:
+            device = Path("/dev/mmcblk0p1")
+            if not device.exists() and Path("/dev/mmcblk0").exists():
+                device = Path("/dev/mmcblk0")
+            mount = Path("/run/media/mmcblk0p1" if device.name.endswith("p1")
+                         else "/run/media/mmcblk0")
+            state = "mounted" if os.path.ismount(mount) else (
+                "inserted_not_mounted" if Path("/dev/mmcblk0").exists()
+                else "not_inserted"
+            )
+            values.update(device=str(device), mount=str(mount))
+        return {
+            "tf_inserted": state != "not_inserted",
+            "tf_mounted": state == "mounted",
+            "tf_status": state,
+            "tf_device": values.get("device", "/dev/mmcblk0p1"),
+            "tf_mount": values.get("mount", "/run/media/mmcblk0p1"),
+        }
+
     def status(self) -> dict[str, Any]:
         dashboard_state = self._unit_state("radar-dashboard.service")
         protected = []
@@ -939,9 +984,7 @@ class TaskController:
                 "controllable": True,
                 **self._unit_state(item["unit"]),
             })
-        tf_device = Path("/dev/mmcblk0p1")
-        tf_mount = Path("/run/media/mmcblk0p1")
-        tf_mounted = os.path.ismount(tf_mount)
+        tf_status = self._tf_status()
         return {
             "ok": True,
             "timestamp_ms": int(time.time() * 1000),
@@ -951,10 +994,7 @@ class TaskController:
             "protected": protected,
             "tasks": tasks,
             "maintenance": {
-                "tf_inserted": tf_device.exists(),
-                "tf_mounted": tf_mounted,
-                "tf_device": str(tf_device),
-                "tf_mount": str(tf_mount),
+                **tf_status,
                 "recording_storage": "/usr/local/helmet/dvr",
             },
             "audit": self._recent_audit(),
@@ -980,13 +1020,14 @@ class TaskController:
             "details": details[:240],
         }
         try:
-            tf_mount = Path("/run/media/mmcblk0p1")
-            try:
-                self.audit_path.resolve(strict=False).relative_to(tf_mount)
-                if not os.path.ismount(tf_mount):
-                    raise OSError("TF storage is not mounted")
-            except ValueError:
-                pass
+            for tf_mount in (Path("/run/media/mmcblk0p1"), Path("/run/media/mmcblk0")):
+                try:
+                    self.audit_path.resolve(strict=False).relative_to(tf_mount)
+                    if not os.path.ismount(tf_mount):
+                        raise OSError("TF storage is not mounted")
+                    break
+                except ValueError:
+                    continue
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
             needs_header = not self.audit_path.exists() or self.audit_path.stat().st_size == 0
             with self.audit_path.open("a", encoding="utf-8", newline="") as audit_file:

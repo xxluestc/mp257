@@ -9,10 +9,14 @@
 /usr/local/helmet/radar_experiments/   # CSV、labels、radar_state.json
 ```
 
-当前这张`/dev/mmcblk0p1` TF卡不能用于比赛数据。实测同一文件在写入后可读取、
-哈希正确，但卸载并重新挂载后内容和哈希发生变化，MP4丢失`moov`。`fsync`、FAT
-修复以及`sync,flush`挂载均不能解决，属于介质/卡接口持久写入不可靠。
-2026-08-09已通过Dashboard维护接口安全卸载，当前业务在TF未挂载时正常运行。
+先前的`/dev/mmcblk0p1`旧卡不能用于比赛数据：同一文件在线读取正常，但卸载重挂后
+内容和哈希发生变化，MP4丢失`moov`，已停用。2026-08-09更换的新卡采用无分区的
+整盘FAT布局，设备为`/dev/mmcblk0`。新卡执行`fsck.fat -n`返回0；写入256 MiB
+随机数据和43 MiB有效视频后，三轮卸载重挂的两个SHA-256均保持一致，视频再次
+整段解码成功，测试文件随后已清理。
+
+Dashboard和命令行脚本现会自动区分`/dev/mmcblk0`与`/dev/mmcblk0p1`。未挂载或
+未插卡时请求“安全弹出”会返回失败，不再显示虚假的成功状态。
 `start_dvr.sh`还会识别旧版本现场配置中的TF日志路径，并仅把运行时CSV目录迁移到
 板载ext4，防止OTA继承旧配置后重新写回故障卡或未挂载目录。
 
@@ -159,6 +163,17 @@ SHA-256 41d4725be927a9a4da80cfd985cdff97ab85381b23d313afc32a6e00d9fcbf21
 两次触发相隔50秒，日志均出现`VALIDATED`、`Encoder finished (exit=0)`和
 `State reset, ready for next trigger`。三段现存正式录像执行`verify_dvr_videos.sh
 --full`结果为`检查=3 失败=0 未提交part=0 恢复目录=0`。
+
+更换新卡后又执行了一次独立的新鲜录像回归（测试文件验证后删除）：
+
+```text
+H.264 1280x720, 20 fps, 15.15 s, 46,776,152 bytes
+SHA-256 65b385ff1f081946a0ed9f16d37bbca1af23f7421143a79a7d8d33a61192ba11
+```
+
+该轮出现`Save triggered`、`Post-trigger recording complete`、
+`Encoder finished (exit=0)`和`State reset, ready for next trigger`，并通过ffprobe与
+ffmpeg整段解码。正常`dvr.service`随后恢复；原有三段正式录像保持不变。
 
 ## 9. 安全停止与异常断电
 

@@ -544,7 +544,7 @@ test -e /dev/gpiochip3
 
 cat /sys/class/remoteproc/remoteproc0/state
 curl -fsS http://127.0.0.1:8080/api/state
-mountpoint /run/media/mmcblk0p1
+/xxl/camera_detect/scripts/tf_card_control.sh status
 ```
 
 通过标准不是全显示`active`，而是Dashboard `stale=false`、NPU事件持续刷新、雷达

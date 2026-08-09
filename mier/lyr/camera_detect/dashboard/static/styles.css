@@ -143,7 +143,7 @@ h2 { font-size: 20px; font-weight: 650; }
   padding: 12px clamp(12px, 1.8vw, 28px) 14px;
   overflow: hidden;
 }
-.view { height: 100%; min-height: 0; }
+.view { height: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
 .view[hidden] { display: none !important; }
 .view.active { animation: view-in 160ms ease-out; }
 @keyframes view-in { from { opacity: .25; transform: translateY(3px); } to { opacity: 1; transform: none; } }
@@ -337,18 +337,18 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .health-rail time { align-self: center; padding: 10px 13px; color: var(--muted); text-align: right; font: 12.5px ui-monospace, monospace; }
 
 /* 启动时间栏目 */
-.boot-layout { height: 100%; display: grid; grid-template-rows: 78px 126px minmax(0, 1fr) 18px; gap: 9px; }
+.boot-layout { min-height: 100%; display: grid; grid-template-rows: 78px 148px minmax(360px, 1fr) 18px; gap: 9px; }
 .boot-summary { padding: 10px 14px; display: grid; grid-template-columns: 230px minmax(0, 1fr) auto; align-items: center; gap: 18px; border-left: 2px solid var(--radar); box-shadow: none; }
 .boot-summary p { color: var(--ink); font: 14px ui-monospace, monospace; }
 .boot-summary > div:last-child { max-width: 310px; text-align: right; }
 .boot-summary > div:last-child span { display: block; color: var(--muted); font: 12px ui-monospace, monospace; }
 .boot-summary code { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; color: var(--lane); font-size: 12.5px; }
-.milestone-grid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
-.milestone-card { position: relative; min-width: 0; padding: 11px 9px; border: 1px solid var(--line); background: var(--panel); overflow: hidden; }
+.milestone-grid { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: minmax(68px, 1fr); gap: 6px; }
+.milestone-card { position: relative; min-width: 0; padding: 8px 9px; border: 1px solid var(--line); background: var(--panel); overflow: hidden; }
 .milestone-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--muted); }
 .milestone-card.ready::before { background: var(--radar); }
-.milestone-card span { display: block; height: 34px; color: var(--muted); font-size: 12.5px; }
-.milestone-card strong { display: block; margin-top: 7px; color: var(--radar); font: 650 22px ui-monospace, monospace; }
+.milestone-card span { display: block; min-height: 28px; color: var(--muted); font-size: 12.5px; }
+.milestone-card strong { display: block; margin-top: 3px; color: var(--radar); font: 650 19px ui-monospace, monospace; }
 .milestone-card strong small { color: var(--muted); font-size: 12px; }
 .boot-log-panel { padding: 12px 14px; box-shadow: none; }
 .boot-log-list { height: calc(100% - 56px); margin-top: 5px; display: grid; grid-template-rows: repeat(6, 1fr); overflow: hidden; }
@@ -374,7 +374,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .runtime-event-row.source-radar { border-left: 3px solid var(--danger); padding-left: 10px; }
 
 /* 独立控制台：可操作与受保护任务使用不同的结构，避免误触。 */
-.control-layout { height: 100%; display: grid; grid-template-rows: 92px minmax(240px, 1fr) 142px 130px; gap: 10px; }
+.control-layout { min-height: 100%; display: grid; grid-template-rows: 92px minmax(330px, 1fr) 142px minmax(150px, auto); gap: 10px; }
 .control-guard { padding: 14px 18px; display: grid; grid-template-columns: 250px minmax(0, 1fr) auto; align-items: center; gap: 20px; border-left: 4px solid var(--radar); box-shadow: none; }
 .control-guard p { color: var(--muted); font-size: 14px; }
 .guard-state { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; font: 700 13px ui-monospace, monospace; }
@@ -405,9 +405,9 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .protected-task span { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
 .protected-task code { color: var(--radar); font: 700 13px ui-monospace, monospace; }
 .protected-task.offline code { color: var(--danger); }
-.maintenance-panel { display: grid; grid-template-columns: minmax(270px, .72fr) minmax(0, 1.5fr); align-items: center; gap: 18px; border-left: 4px solid var(--amber); }
-.maintenance-head { min-width: 0; align-items: center; }
-.storage-state { min-width: 0; margin-left: 18px; text-align: right; }
+.maintenance-panel { display: grid; grid-template-columns: minmax(420px, .8fr) minmax(700px, 1.45fr); align-items: center; gap: 18px; border-left: 4px solid var(--amber); }
+.maintenance-head { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 24px; border-bottom: 0; }
+.storage-state { min-width: 0; margin-left: 0; text-align: right; }
 .storage-state strong, .storage-state code { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .storage-state strong { color: var(--muted); font-size: 13px; }
 .storage-state strong.mounted { color: var(--radar); }
@@ -441,7 +441,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .dialog-confirm { color: #ffffff; border-color: var(--radar) !important; background: var(--radar); }
 .dialog-confirm.danger { color: #ffffff; border-color: var(--danger) !important; background: var(--danger); }
 
-.toast { position: fixed; right: 18px; bottom: 18px; z-index: 10; max-width: min(380px, calc(100vw - 36px)); padding: 11px 14px; color: var(--ink); border: 1px solid var(--radar); background: var(--panel-3); box-shadow: 0 14px 40px var(--shadow); transform: translateY(18px); opacity: 0; pointer-events: none; transition: 180ms ease; font-size: 14px; }
+.toast { position: fixed; right: 18px; top: 130px; z-index: 10; max-width: min(380px, calc(100vw - 36px)); padding: 11px 14px; color: var(--ink); border: 1px solid var(--radar); background: var(--panel-3); box-shadow: 0 14px 40px var(--shadow); transform: translateY(-18px); opacity: 0; pointer-events: none; transition: 180ms ease; font-size: 14px; }
 .toast.visible { opacity: 1; transform: none; }
 .toast.error { border-color: var(--danger); }
 
@@ -463,6 +463,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
   .control-columns { grid-template-columns: 1fr; grid-template-rows: 470px 430px; }
   .control-audit-list { grid-template-columns: 1fr 1fr; }
   .maintenance-panel { grid-template-columns: 1fr; }
+  .maintenance-head { grid-template-columns: 1fr; }
   .maintenance-actions { grid-template-columns: 1fr 1fr; }
 }
 
@@ -500,7 +501,7 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
   .sensor-layout { grid-template-rows: 132px auto minmax(0, 1fr); }
   .sensor-card { padding-top: 9px; }
   .system-layout { grid-template-rows: 102px minmax(0, 1fr) 68px; }
-  .boot-layout { grid-template-rows: 72px 116px minmax(0, 1fr) 16px; }
+  .boot-layout { grid-template-rows: 72px 148px minmax(340px, 1fr) 16px; }
   th, td { padding-top: 6px; padding-bottom: 6px; }
 }
 

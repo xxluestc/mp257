@@ -103,6 +103,7 @@ load_radar_config
 # 1.0.6以前的现场配置可能仍把CSV写到可移除TF。保留所有标定阈值和BLE参数，
 # 但拒绝继续使用已退出业务链的旧TF路径，避免卡未挂载时写入根文件系统隐藏目录。
 case "$RADAR_LOG_DIR" in
+    /run/media/mmcblk0|/run/media/mmcblk0/*|\
     /run/media/mmcblk0p1|/run/media/mmcblk0p1/*)
         printf '%s\n' "警告: 旧RADAR_LOG_DIR=${RADAR_LOG_DIR}已迁移到板载ext4" >&2
         RADAR_LOG_DIR="/usr/local/helmet/radar_experiments"

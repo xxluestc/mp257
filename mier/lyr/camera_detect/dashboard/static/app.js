@@ -720,7 +720,7 @@ function requestControl(task, action) {
 const maintenanceCopy = {
   tf_mount: {
     title: "识别并挂载 TF 卡？",
-    message: "仅挂载已经插入的 /dev/mmcblk0p1。录像主存储位于板载 ext4，不依赖 TF 卡。",
+    message: "自动识别整盘格式或带分区的 TF 卡并挂载。录像主存储位于板载 ext4，不依赖 TF 卡。",
     confirm: "确认挂载",
   },
   tf_eject: {
@@ -778,7 +778,10 @@ function renderControl(payload) {
   }
   $("recording-storage").textContent = `录像：${maintenance.recording_storage || "/usr/local/helmet/dvr"}`;
   document.querySelectorAll("[data-maintenance]").forEach((button) => {
-    button.disabled = !payload.controls_enabled;
+    const action = button.dataset.maintenance;
+    button.disabled = !payload.controls_enabled
+      || (action === "tf_mount" && (!maintenance.tf_inserted || maintenance.tf_mounted))
+      || (action === "tf_eject" && !maintenance.tf_mounted);
   });
 
   const tasks = $("controllable-task-list");
@@ -868,7 +871,15 @@ async function performControl() {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    showToast(maintenance ? `${request.name}已调度` : `${request.name}${request.action === "pause" ? "已暂停" : "已运行"}`);
+    const maintenanceMessages = {
+      tf_mount: "TF 卡已正确挂载",
+      tf_eject: "TF 卡已安全卸载，现在可以拔出",
+      project_stop: "安全停止项目已调度",
+      system_poweroff: "安全关机已调度",
+    };
+    showToast(maintenance
+      ? (maintenanceMessages[request.action] || payload.details || `${request.name}已完成`)
+      : `${request.name}${request.action === "pause" ? "已暂停" : "已运行"}`);
     await pollControl();
     pollSystem();
     pollBoot();
