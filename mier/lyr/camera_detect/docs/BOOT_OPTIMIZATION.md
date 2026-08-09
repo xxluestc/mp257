@@ -11,6 +11,9 @@
 - [`dvr.service.example`](../dvr.service.example)：主业务 systemd 单元
 - [`start_dvr.sh`](../start_dvr.sh)：设备、TF 卡、M33 和业务进程的启动编排
 - [`boot_optimize.sh`](../scripts/boot_optimize.sh)：可重复执行、可回退的优化脚本
+- [`collect_boot_metrics.sh`](../scripts/collect_boot_metrics.sh)：单调时钟和健康状态采集
+- [`dnsmasq.service.override.example`](../dnsmasq.service.override.example)：AP/DHCP 精确依赖
+- [`helmet_ota_recover_if_needed.sh`](../ota/helmet_ota_recover_if_needed.sh)：OTA 恢复快速检查
 
 ## 优化目标与约束
 
@@ -174,7 +177,7 @@ dvr-m33.service --成功--> M33 running
 - Dashboard 数据是否新鲜；
 - TF 卡正式录像、CSV 和实验数据是否保留。
 
-最终结果从 103.005 秒缩短到 13.572 秒，M33 提前到 4.42 秒运行，且保留了
+第一阶段结果从 103.005 秒缩短到 13.572 秒，M33 提前到 4.42 秒运行，且保留了
 失败回退和原始状态恢复方式。
 
 ## M33 启动结论与实机验证
@@ -290,6 +293,452 @@ fsck 仅丢弃该临时缓存目录。最终冷启动 fsck 降至 1.615 秒，�
 （约 4.8 秒）：前者保护 WiFi AP/DHCP 启动顺序，后者保护 OV5640/CSI/DCMIPP
 媒体拓扑和串口设备节点。没有为继续压缩几秒而牺牲可重复启动。
 
+## 第二阶段：持续启动优化
+
+第二阶段遵循以下约束：先测量、一次只改一个点、每次冷启动并检查完整功能，
+不能以摄像头、NPU、雷达、M33/RPMsg、WiFi AP、Dashboard、DVR 或数据完整性
+回归来换取启动数字。所有板端配置修改必须先保存原状态并提供回退方式。
+
+只读采集脚本为：
+
+```bash
+/xxl/camera_detect/scripts/collect_boot_metrics.sh
+```
+
+### 2026-07-27 第二阶段基线（冷启动 1）
+
+本次开发板 RTC 初值不正确，启动中途又发生校时，因此所有结论使用内核单调时钟，
+不使用墙钟时间。板端内核为 `6.6.48-gbebcf479fd77`，OpenSTLinux
+`5.0.3-snapshot-20250320`。
+
+| 里程碑/项目 | 单调时间或耗时 | 结论 |
+|---|---:|---|
+| kernel | 2.061 s | 当前不是主要瓶颈 |
+| userspace | 11.234 s | `multi-user.target` 在 11.179 s 到达 |
+| systemd 总启动 | 13.296 s | 本轮对照基线 |
+| M33 running | 3.912 s | 正常，early service 耗时 588 ms |
+| `/dev/ttyRPMSG0` udev ready | 4.117 s | 正常 |
+| 雷达 `/dev/ttySTM1` udev ready | 4.670 s | 正常 |
+| 摄像头 `/dev/video7` udev ready | 8.675 s | 当前最晚的业务设备 |
+| TF fsck | 1.272 s | 约 9.19 s 完成，检测并清除了 dirty bit |
+| TF 挂载 | 约 9.28 s | 仍是完整 DVR 的前置条件 |
+| udev settle | 4.713 s | 9.358 s 完成；由 `dvr` 和 `iiod` 共同拉起 |
+| `dvr.service` ExecStart | 9.473 s | 在 udev settle、local-fs 和 M33 之后 |
+| `radar_fusion` 进程启动 | 11.384 s | 启动脚本自身约耗时 1.9 s |
+| Fusion 初始化完成 | 16.935 s | 应用内部初始化约耗时 5.5 s |
+| RPMsg ready 消息 | 17.937 s | 线程中另有固定 1 s 等待 |
+| network wait-online | 2.790 s | 阻塞 `dnsmasq` 和 `multi-user.target` |
+
+基线功能检查全部通过：M33 为 `running`，RPMsg、雷达、BLE LED 和摄像头设备
+节点存在；`radar_fusion`、HUD、Dashboard、hostapd、dnsmasq 正常；Dashboard
+`stale=false`；TF 卡以读写方式挂载。板端仍有两个既有失败单元：
+`eeprom-pnsn.service` 连续重试后失败，`rc-local.service` 因 Exec format error
+失败。它们不在本次关键链上，在确认产品职责前不直接禁用。
+
+### 第二阶段候选点及初步判断
+
+1. 全局 `systemd-udev-settle`：服务已经被 systemd 标记为 deprecated。不过完整
+   业务仍需等待 8.675 s 才出现的 V4L2 摄像头节点，所以仅删除 settle 预计只能让完整
+   DVR 提前约 0.7 s；需要同时将等待收窄到具体设备，并审计产品不使用的 `iiod`。
+2. TF 卡：当前主脚本要求 TF 完成 fsck/挂载后才继续，但主程序本身具备无 TF
+   降级逻辑。后续应评估将 M33/RPMsg/雷达告警先启动，DVR 存储后接入；fsck
+   必须保留。
+3. 应用初始化：从进程启动到 Fusion ready 约 5.5 s，当前为编码器探测、GPIO、
+   雷达、摄像头和 NPU 模型串行初始化。已增加 `[启动] [boot=...]` 里程碑，下一次
+   冷启动后再依据精确数据调整顺序。
+4. RPMsg：接收线程打开设备后固定等待 1 s 才发送 ready 消息。必须先确认 M33
+   协议和多次冷启动稳定性，再考虑缩短或用握手替代。
+5. 启动脚本：HUD、Dashboard、固定 sleep、日志和资源清理均位于主程序之前，
+   可在保持进程生命周期和事件投递顺序的前提下拆分或并行。
+6. 网络：只有 dnsmasq 明确依赖 `network-online.target`。应确认 AP 静态地址和
+   DHCP 启动条件后，再决定是否改为等待 `wlan0`/指定地址，而不是全局 online。
+
+### 优化 1：收到匹配 ACK 后结束雷达命令等待
+
+启动里程碑证明，NPU 模型加载约 61 ms、摄像头启动约 289 ms，而
+`radar_init()` 耗时约 4.92 s。原实现依次发送四条配置命令；每条命令即使已经
+读到回复，仍继续等待完整的 1000 ms 超时，之后再保留 200 ms 稳定间隔。
+
+只读观测到的四条完整回复如下：
+
+| 命令 | 回复命令字 | 首次收到数据 |
+|---|---:|---:|
+| `group7_cmd1e` | `0xFE` | 0~30 ms |
+| `group6_cmd11` | `0xD1` | 0 ms |
+| `group0_cmd02` | `0x02` | 0 ms |
+| `group6_cmd12` | `0xD2` | 0~29 ms |
+
+优化后的等待器按协议帧长度解析串口流，只在收到“完整且命令字匹配”的
+`HEAD_REPLY` 后提前结束；异步 `HEAD_REPORT` 会被识别并跳过。每条命令原有的
+1000 ms 超时和 200 ms 稳定间隔均保留，因此雷达不回复时仍沿用原来的最坏等待
+和继续启动行为。
+
+首次服务重启对比：
+
+| 指标 | 优化前 | 优化后 | 收益 |
+|---|---:|---:|---:|
+| 雷达初始化 | 4.923 s | 0.930 s | 3.993 s |
+| 主程序入口到 Fusion core ready | 5.326 s | 1.341 s | 3.985 s |
+
+服务重启后四条 ACK 均匹配，摄像头首帧、NPU 推理、M33/RPMsg、BLE LED 串口、
+HUD、Dashboard、hostapd、dnsmasq 和 TF 挂载检查通过，Dashboard
+`stale=false`。雷达串口的 ACK 证明模块通信正常；现场目标检测仍需在实物进入
+雷达视场时做最终功能回归。
+
+板端回退文件：
+
+```text
+/etc/dvr-boot-optimization/stage2-baseline/radar_fusion.before-radar-ack-opt
+```
+
+### 优化 2：减少启动脚本的纯管理开销
+
+原脚本每读取一个配置项都启动一组 `grep | cut`，每条日志又启动 `date | tee`；
+此外在主程序自身的设备占用恢复之前，脚本重复执行两次 `fuser -k` 并固定等待
+200 ms，HUD 和 Dashboard 启动后也分别固定等待 200 ms。
+
+本次保持现场配置格式、启动顺序、PID 检查和主程序设备占用恢复不变，仅做：
+
+1. 单次 shell 循环解析白名单配置键，不 `source` 现场文件；
+2. 使用 Bash 内建时间格式和 `printf` 同时写终端/日志；
+3. 删除脚本层重复的 `fuser` 与 200 ms 等待，保留主程序打开设备前的恢复；
+4. 删除 HUD、Dashboard 的固定等待，保留可执行文件检查、PID 检查和失败日志。
+
+服务重启分步测量：
+
+| 状态 | `dvr.service` 启动到主程序入口 |
+|---|---:|
+| 冷启动基线 | 2.010 s |
+| 单次配置解析 + 内建日志 | 约 0.837 s |
+| 再删除重复设备清理 | 约 0.535 s |
+| 再删除两个固定等待 | 约 0.131 s |
+
+现场 `radar_config` SHA-256 前后均为
+`bfad967d6c5567f35a7bb215f06d365e9c993572035878b7d31e238472cff326`，
+最终主程序参数与基线完全一致。每一步均检查了 M33、RPMsg、雷达 ACK、摄像头
+首帧、NPU、HUD、Dashboard 和 TF 状态。
+
+### 优化 3：禁用空闲的 IIO 网络守护进程
+
+`iiod.service` 是全局 udev settle 的两个拉起者之一。板端审计结果：
+
+- `/sys/bus/iio/devices` 下没有 IIO 设备；
+- `radar_fusion`、HUD 没有打开 IIO/sysfs 文件；
+- 仓库没有 `iiod`、libiio 或 `/dev/iio:*` 业务引用；
+- 没有其他服务依赖 `iiod`，它只被 `multi-user.target` 拉起。
+
+因此将 `iiod.service` 纳入 `boot_optimize.sh` 的可回退可选服务列表。禁用守护
+进程不会禁用内核 IIO 子系统；若将来接入 Linux IIO 传感器或远程 IIO 客户端，
+可由 rollback 恢复。单独禁用它不会消除 settle，因为当前 `dvr.service` 仍在
+拉起 settle；收益要与下一项精确设备等待配合并在重启后测量。
+
+### 优化 4：用精确设备等待替代全局 udev settle
+
+移除 `dvr.service` 对 `systemd-udev-settle.service` 的 `Wants/After`。为避免
+设备枚举竞态，`start_dvr.sh` 改为只等待实际使用的设备：
+
+- `/dev/ttySTM1`：雷达硬前提，10 s 超时后失败并由 systemd 重启；
+- `/dev/video7`：V4L2 摄像头节点，等待后仍沿用 radar-only 降级。仓库DTS包含
+  OV5640→CSI→DCMIPP拓扑，旧启动脚本的“USB摄像头”标签需待板端在线后复核；
+- `/dev/ttySTM0`：启用 BLE 方向灯时等待，超时后沿用现有串口失败处理；
+- `/dev/gpiochip3`：本机告警 GPIO，超时后沿用现有 LED disabled 处理；
+- `/dev/ttyRPMSG0`：继续由原有 M33/RPMsg 15 s 有界等待负责。
+
+基线中这些设备最晚的 `/dev/video7` 在 8.675~8.857 s 完成 udev 初始化，早于
+TF 挂载和 `dvr.service` 启动，因此当前硬件组合预计不会新增等待。这个改动的
+主要系统收益是：在产品未使用的 `iiod` 也被禁用后，`sysinit.target`、网络和
+其他 userspace 服务不必等整个 udev 队列清空。
+
+首次整机重启结果：settle 未启动，`sysinit.target` 从 7.280 s 提前到
+6.301 s，`dvr.service` ExecStart 从 9.441 s 提前到 8.499 s。Fusion core
+在 12.669 s ready，相对第二阶段基线 16.935 s 累计提前 4.266 s。由于本次
+`networkd-wait-online` 从 1.669 s 波动到 2.888 s，systemd 总时间不能用于单独
+评价本项收益。
+
+### 优化 5：dnsmasq 只等待产品 AP，不等待全局 network-online
+
+板端反向依赖确认，只有 dnsmasq 拉起 `network-online.target`。当前 WLAN 使用
+静态地址 `192.168.152.119/24`，hostapd 成功记录 `AP-ENABLED` 后 AP 已可用；
+全局 wait-online 还会继续等待 networkd 的链路状态和 IPv6LL，对 DHCP 服务没有
+额外价值。
+
+将 dnsmasq drop-in 从 `After/Wants=network-online.target` 改为明确
+`After/Wants=hostapd.service`，仍保留 `network.target`。原 drop-in 由
+`boot_optimize.sh` 首次保存，rollback 可恢复。预期 `systemd-networkd-wait-online`
+在没有其他消费者后不再进入启动事务，同时 dnsmasq 不早于 WiFi AP 启动。
+
+首次整机重启中 wait-online 未启动，dnsmasq 在 hostapd 之后正常启动；systemd
+总时间为 12.648 s。新的关键链转移到 `helmet-ota.service`。
+
+### 优化 6：OTA 无待恢复事务时不加载完整安装器
+
+`helmet-ota.service` 原先每次启动都执行 Python `--recover`。当前状态为
+`success` 时，恢复器读取 833 字节的 `status.json` 后立即返回，但导入
+tarfile、urllib、dataclasses 和完整 OTA 公共模块在板上热缓存仍需约 0.88 s，
+冷启动 I/O 竞争时本次实测为 2.523 s。
+
+新增 `helmet_ota_recover_if_needed.sh`：只用 grep 检查事务状态，只有明确出现
+`"state": "installing"` 时才 `exec` 原 Python 恢复器。状态文件缺失、损坏或
+处于其他状态时，原 `read_json()` 同样不会执行恢复，因此快速路径不改变事务
+判断。完整的安装中断回滚逻辑、锁和 Python 安装器均保留。
+
+板端无待恢复事务时，原 Python 检查热缓存约 0.87~0.88 s，轻量检查连续五次
+均低于 `time` 的 0.01 s 显示精度。完整 `make ota-test` 已覆盖上传、安装、版本
+切换、旧版迁移、手工回滚、健康检查失败和自动回滚。部署前后 `status.json`
+SHA-256 均为
+`1f4230f3dfcf972aeef5efe004aefdf8387a66caeb42d4085f3fcf2ac4447b41`，
+证明快速检查没有改写事务状态。
+
+### 第二阶段最终结果（连续冷启动 3 次）
+
+最终配置连续冷启动三次，均等待板端重新建立 SSH 后再读取本次 boot 的单调时钟
+日志。SSH 从主机侧恢复约需 50 s，只代表管理网络可达时间，不能作为系统或业务
+启动耗时；下表使用 `systemd-analyze` 和应用 `CLOCK_BOOTTIME` 里程碑。
+
+| 指标 | 第二阶段基线 | 最终 3 次范围 | 最终中位数 | 累计收益 |
+|---|---:|---:|---:|---:|
+| systemd 总启动 | 13.296 s | 11.837~11.945 s | 11.841 s | 1.455 s |
+| M33 running | 3.912 s | 3.881~3.945 s | 3.908 s | 基本不变 |
+| Fusion core ready | 16.935 s | 12.386~12.638 s | 12.602 s | 4.333 s |
+| RPMsg ready 已发送 | 17.937 s | 13.389~13.639 s | 13.605 s | 4.332 s |
+
+最终三次中 `systemd-udev-settle` 和 `systemd-networkd-wait-online` 均未进入启动
+事务。`multi-user.target` 最终两次分别在 userspace 9.488 s、9.407 s 到达；
+摄像头设备枚举仍有约 8.50~9.20 s 波动，但精确等待覆盖了该波动，没有发生
+偶发打开失败。当前关键链为 WLAN hostapd 启动后再启动 dnsmasq，这是产品热点
+和 DHCP 功能所需，未为缩短 target 时间而解除依赖。
+
+最终功能回归如下：
+
+| 功能 | SSH 可验证结果 |
+|---|---|
+| M33 / RPMsg | remoteproc 为 `running`，`/dev/ttyRPMSG0` 存在，每次均发送 ready |
+| 雷达 | `/dev/ttySTM1` 存在，四条初始化命令每次均收到匹配完整 ACK |
+| 摄像头 / NPU | `/dev/video7` 存在，每次有首帧里程碑和 NPU 推理日志 |
+| BLE 方向灯 | `/dev/ttySTM0` 存在，CH9140 UART ready |
+| HUD / Dashboard | 两个进程均存活，Dashboard `stale=false`、版本 1.0.5 |
+| WiFi AP / DHCP | hostapd、dnsmasq 均 active，dnsmasq 严格在 hostapd 后启动 |
+| TF / 数据记录 | TF 读写挂载，fsck 保留，状态与传感器 CSV 持续更新 |
+| OTA | 服务 active，版本和状态 API 正常，当前 1.0.5 / success |
+
+SSH 能证明接口、进程和数据链路正常，但无法代替现场实物验证：仍应由人在板旁
+完成一次雷达真实目标、摄像头画面质量、骨传导音频、LED/OLED 显示、手机连接
+AP 并获取 DHCP 地址的验收。本阶段没有触发告警来制造录像或声音，避免把远程
+检查本身误当成无副作用操作。
+
+### 暂缓的进一步优化点
+
+1. 雷达四条命令之间仍保留 200 ms 稳定间隔，约占 0.8 s。没有协议手册和多种
+   雷达固件/温度条件验证前不继续缩短。
+2. RPMsg 线程打开设备后仍固定等待 1 s。缺少 M33 对端源码和明确握手协议时，
+   缩短可能让 ready 早于对端端点可用。
+3. TF fsck 约 1.3~1.8 s，不能直接关闭。若要继续明显提前告警功能，应设计
+   “雷达/RPMsg 先启动、存储稍后热接入”的架构，并验证启动期间事件不丢失。
+4. hostapd、摄像头枚举、random-seed、udev-trigger 和分区挂载仍各有约 1 s
+   量级耗时，但多为并行项，不能把 `blame` 数字直接相加。下一阶段应先做关键
+   路径 trace，再分别制作可回退 A/B 镜像。
+
+板端原配置和每阶段二进制均保存在
+`/etc/dvr-boot-optimization/`。`boot_optimize.sh rollback` 可恢复其管理的服务、
+dvr unit 和 dnsmasq drop-in；雷达与启动脚本的阶段备份位于
+`/etc/dvr-boot-optimization/stage2-baseline/`，便于单项比对或回退。
+
+## 第三阶段：Bootloader、Linux 工具与响应时间方法
+
+这一阶段先做只读审计，不修改 U-Boot 环境、FIP、TF-A、OP-TEE、DTB、内核或
+生产 extlinux 配置。原因是当前无法持续进行板旁实物回归，而 bootloader 错误
+可能让 SSH 和正常 Linux 回退路径同时消失。
+
+只读审计脚本：
+
+```bash
+/xxl/camera_detect/scripts/collect_bootloader_audit.sh
+```
+
+### Linux 能测到什么，不能测到什么
+
+`systemd-analyze` 的 kernel 起点已经晚于 BootROM、TF-A、OP-TEE 和 U-Boot，
+所以它报告的 11.8 s 不包含 bootloader。`dmesg` 的 0.000 s 也只是 Linux 内核
+入口，不能反推出上电到内核入口的耗时。
+
+完整的上电时间线应使用 UART 采集并在主机侧给每行加单调时间戳，至少标记：
+
+```text
+上电
+  → TF-A / OP-TEE 首条输出
+  → U-Boot banner
+  → extlinux 菜单
+  → Starting kernel
+  → Linux [0.000000]
+  → M33 running
+  → Fusion ready
+  → RPMsg ready
+```
+
+U-Boot 已编入 bootstage 相关代码，但当前没有可供 Linux 读取的 stash 区域；下次
+接 UART 时，应先在 U-Boot 命令行确认 `bootstage report` 是否可用。官方建议先用
+bootstage 获取总体阶段时间，需要函数级定位时再使用 U-Boot trace；trace 本身会
+改变耗时，最终端到端数据仍应在关闭 trace 后测量：
+[U-Boot bootstage](https://docs.u-boot.org/en/latest/develop/pytest/test_bootstage.html)、
+[U-Boot tracing](https://docs.u-boot.org/en/latest/develop/trace.html)。
+
+### 2026-08-08 Bootloader 只读审计结果
+
+| 项目 | 当前状态 | 判断 |
+|---|---|---|
+| U-Boot | `2023.10-stm32mp-r1` | FIP 中只读识别，未修改 |
+| `bootdelay` | `0` | 已无 U-Boot 倒计时收益 |
+| `boot_targets` | 仅 `mmc1` | 已排除 USB/PXE/多介质扫描 |
+| boot 分区 | eMMC `mmc1p6`，ext4 | 当前有效分区已缓存为 `devplist=6` |
+| extlinux | 板级配置，`TIMEOUT 20` | 按 U-Boot 语义为 2.0 s 菜单等待 |
+| Kernel | `Image.gz` 约 12 MiB，解压后约 29 MiB | 压缩/非压缩需 A/B，不能凭文件大小判断 |
+| initramfs | 压缩约 8 MiB，解压后约 24 MiB | 内核解包实测约 0.420 s |
+| resize 状态 | `/etc/.resized` 存在 | 一次性扩容已完成，但 initramfs 仍负责挂载根分区 |
+| DTB | 当前明确加载 2GB 板 DTB | 不允许为启动时间盲目替换或裁节点 |
+| 串口采集 | SSH 主机当前没有 `/dev/ttyUSB*`/`ttyACM*` | 暂时无法给出 bootloader 总耗时 |
+
+U-Boot extlinux 文档明确说明 `timeout` 单位为 0.1 s，因此 `TIMEOUT 20` 是 2 s：
+[U-Boot PXE/extlinux 配置语义](https://docs.u-boot.org/en/stable/usage/pxe.html)。
+
+当前 `boot_prefixes=/mmc1_`、`boot_syslinux_conf` 已直接指向存在的板级配置，
+extlinux 又排在 boot script 扫描之前；成功启动时不会继续执行后面的
+`boot.scr.uimg`。所以“改成直接 bootcmd、删除通用扫描”在当前状态很可能只有
+毫秒或小数秒收益，不属于本项目当前的大项。
+
+### Bootloader 优化会不会导致内核崩溃
+
+需要区分三类后果：
+
+| 修改类型 | 典型后果 | 当前策略 |
+|---|---|---|
+| 菜单 timeout、搜索顺序、启动画面 | 通常不改变内核本身，但可能失去恢复入口 | 有 UART/备用项后才 A/B |
+| initramfs、Image 格式、bootargs、DTB | 可能无法挂载 rootfs、kernel panic 或驱动异常 | 只新增备用启动项，不覆盖已知正常项 |
+| DDR/时钟、电源、TF-A、OP-TEE、FIP、secure boot、M33 接管 | 可能随机崩溃、数据损坏、安全能力丢失或完全无法启动 | 本阶段禁止修改 |
+
+因此“bootloader 优化不会影响内核”并不成立。菜单等待本身不会让运行中的内核
+崩溃，但错误 DTB、内存训练、电源时序、reserved-memory 或 M33 生命周期修改
+完全可能在 Linux 中表现为 panic、驱动 probe 失败、DMA 越界或偶发死机。
+
+当前 M33 已验证不适合从 U-Boot 提前启动：Linux 缺少可靠 detach mailbox，
+再次尝试会扩大 remoteproc/RPMsg 双重接管风险。TF-A/OP-TEE 和镜像校验也不能
+为了速度关闭。
+
+### 大收益候选及安全实施顺序
+
+#### 候选 A：缩短 extlinux 菜单等待
+
+- 理论上限约 2 s，是当前最明确的大项；
+- 但 `bootdelay=0`，extlinux 菜单也是当前主要人工恢复窗口；
+- 无 UART、bootcount/altbootcmd 或硬件恢复验证时，不改生产配置；
+- 有板旁条件后先从 `TIMEOUT 20 → 5` 做 A/B，保留 0.5 s 窗口，不直接改 0；
+- 若输入窗口不可靠，应先建立 bootcount + 已知正常启动项回退。U-Boot 的
+  bootcount 在连续失败超过 `bootlimit` 后可执行 `altbootcmd`，但 Linux 成功后
+  还必须可靠清零：
+  [U-Boot Boot Count Limit](https://docs.u-boot.org/en/latest/api/bootcount.html)。
+
+#### 候选 B：验证不使用 resize initramfs 的启动项
+
+当前内核已将 MMC、MMC block、SDHCI 和 EXT4 编入内核，bootargs 也有明确
+`root=PARTUUID=... rootwait rw`，具备直接挂载 rootfs 的必要条件。initramfs
+一次性扩容标记也已存在。但它目前还负责挂载根分区和 `switch_root`，所以只能：
+
+1. 保留现有 label 为默认；
+2. 新增一个不带 `INITRD` 的测试 label；
+3. 在 UART 菜单手工选择测试项；
+4. 检查 rootfs、bootfs、vendorfs、userfs、TF、M33、摄像头和网络；
+5. 完成多轮冷启动和异常断电恢复后，才讨论切换默认项。
+
+预期收益包括 U-Boot 少读取 8 MiB、内核少解包约 0.420 s，以及省去 initramfs
+shell/switch_root；真实收益必须由 UART A/B 决定。
+
+#### 候选 C：压缩与非压缩 Image A/B
+
+压缩 Image 少读约 17 MiB，但需要解压；非压缩 Image 读取更多，却可能减少 CPU
+解压时间。结果取决于 eMMC 吞吐和 A35/U-Boot 解压性能，不能直接假设哪种更快。
+当前 bootfs 只剩约 30 MiB，几乎无法同时安全保存两份完整 Image，因此在没有
+独立测试分区或完整恢复镜像前不做。
+
+#### 当前不做的细节项
+
+关闭少量串口输出、删除 258 KiB splash、把已经收窄的 distro scan 改成硬编码
+load/booti，都可能只有毫秒到小数秒收益，却会降低诊断和恢复能力。除非 UART
+bootstage 证明它们进入关键路径，否则不投入修改和回归成本。
+
+### Linux 启动问题检测工具
+
+| 阶段 | 工具 | 能回答的问题 | 注意事项 |
+|---|---|---|---|
+| 全局 | UART 时间戳、示波器/GPIO | 上电到 U-Boot、内核和业务的真实端到端时间 | 唯一能覆盖 BootROM/TF-A/U-Boot 的方法 |
+| U-Boot | `bootstage report` | U-Boot 各阶段累计耗时 | 需要串口命令行和编译支持 |
+| U-Boot | trace + `proftool`/`trace-cmd` | 慢函数调用路径 | 有明显测量扰动，只用于定位 |
+| Kernel | `dmesg`/printk 单调时间 | 大致找出设备枚举与 rootfs 阶段 | 两行间空白不等于 CPU 一直阻塞 |
+| Kernel | `initcall_debug` | 每个内建驱动 initcall 的耗时和返回值 | 日志量大，只放在诊断启动项 |
+| Kernel | ftrace boot-time tracing、`trace-cmd`、KernelShark | driver probe、调度、I/O 的精确时间线 | 当前生产内核未启用 FTRACE，应使用独立诊断内核 |
+| userspace | `systemd-analyze time/blame/critical-chain/plot` | target、unit 和关键依赖链 | blame 不能相加，plot 也不含 bootloader |
+| userspace | `journalctl -b -o short-monotonic` | 服务与业务日志的统一单调时间轴 | 避免 RTC/NTP 跳变误判 |
+| 设备 | `udevadm info/monitor` | 设备节点何时完成初始化 | 应等待具体设备，不做全局 settle |
+| 进程 | `perf stat/record`、`strace -ff -ttT` | CPU 热点、系统调用/I/O 等待 | 工具有开销，只在复现环境使用 |
+| 应用 | `CLOCK_BOOTTIME`/`CLOCK_MONOTONIC` 里程碑 | 进程入口到设备、模型、首帧、输出 ready | 本项目已经接入并用于第二阶段 |
+
+Linux 官方支持 `initcall_debug` 内核参数；复杂的启动期设备初始化还可以通过
+bootconfig 配置 ftrace 事件和函数过滤：
+[内核启动参数](https://docs.kernel.org/admin-guide/kernel-parameters.html)、
+[Linux boot-time tracing](https://docs.kernel.org/trace/boottime-trace.html)。当前板端
+只有 `CONFIG_PRINTK_TIME=y`，没有启用 FTRACE，因此不能在生产镜像上假装已有
+函数级数据。
+
+### Dashboard 常态化观测
+
+Dashboard 的 `TIMING` 栏目把 `systemd-analyze`、本次启动日志、已有
+`CLOCK_BOOTTIME` 业务里程碑，以及启动后的雷达/NPU/IMU/录像/人工标注/控制事件
+集中展示；`HEALTH` 栏目只读展示关键服务、进程、
+CPU、内存、温度、TF 和设备节点。它用于快速发现“服务 active 但业务节点未
+ready”或“启动后 CPU 持续繁忙”等大项，不替代完整采集脚本和冷启动测试。
+
+为避免观测工具影响被观测对象，系统状态只在栏目激活时每 5 秒刷新，启动信息
+每 60 秒刷新并由后端缓存，运行事件每 10 秒更新，浏览器隐藏时停止轮询；正常 API
+访问日志每个接口最多每 60 秒写一条。
+
+控制能力与观测接口隔离：独立 `radar-dashboard.service` 不属于 `dvr.service`
+cgroup，暂停融合业务后仍保持在线。POST 控制只对白名单中的 DVR 与 OTA 开放，
+Dashboard、M33 和网络服务不可控；每次操作要求二次确认、同源校验和服务端令牌，
+并写入审计 CSV。启动优化采集仍是只读操作，不会触发控制动作。
+
+### 启动优化与响应优化要分开验收
+
+启动优化指标是“上电到功能 ready”；响应优化指标应是“事件发生到执行器动作”。
+不能把初始化推迟到第一次事件来制造更好的启动数字，否则首个告警会变慢。
+
+建议给响应链增加统一单调时钟：
+
+```text
+雷达/IMU/摄像头输入
+  → 完整帧接收
+  → 解析完成
+  → 融合决策
+  → GPIO/BLE/音频命令发出
+  → Dashboard/录像状态发布
+```
+
+统计至少记录 p50、p95、p99 和最大值，并分别测试 CPU 空闲、NPU 推理、录像编码、
+TF 写入和网络访问并发时的结果。先定位 100 ms 以上或关键链上 0.5~1 s 以上的
+问题；不优先追逐不影响用户感知的几毫秒。
+
+### 无法持续实物测试时的变更门禁
+
+1. SSH 能验证但不改变启动介质的只读采集，可以立即做；
+2. systemd/应用改动必须有精确依赖、超时回退、板端备份和自动健康检查；
+3. bootloader、DTB、initramfs、Image 只能新增 A/B 项，不覆盖唯一正常启动项；
+4. 没有 UART、硬件启动模式或可确认的自动回退时，不部署可能失去 SSH 的改动；
+5. 远程检查不能替代雷达实物目标、画面、音频、LED/OLED 和手机 DHCP 验收；
+6. 无法完成现场验收的改动只记录为候选，不宣称“功能完全无影响”。
+
+面试讲述时重点不是“删了多少服务”，而是证据链：先定义系统 ready 与业务
+ready；再用单调时钟、关键链和协议 ACK 找到真正的大项；区分并行耗时与关键
+路径；为高风险假设做 A/B 和回退；最后说明哪些方案因证据不足被主动拒绝。
+“没有修改”也可以是有价值的工程决策，例如本次拒绝无回退地取消 extlinux
+菜单、删除 initramfs，以及再次让 U-Boot 启动 M33。
+
 ## 内核模块和设备树是否需要裁剪
 
 需要，但应放在最后一阶段。当前 90 秒级问题来自失败的 systemd 服务，不是
@@ -369,14 +818,17 @@ DVR、WiFi Dashboard、LED 和音频。开发板冷启动进入 multi-user 需�
 4. 有边界地测试 U-Boot remoteproc，因 Linux 接管条件不成立而撤回；
 5. 新增 sysinit 阶段的 M33 oneshot 服务，并在主业务中保留原路径回退；
 6. 发现业务挂载与 fsck 的竞态，先备份数据，再离线修复 FAT 并修正等待逻辑；
-7. 通过冷启动、设备节点、API、网络和数据完整性做回归验证。
+7. 解析雷达完整 ACK，将四个无条件 1 s 等待改为“匹配即结束、超时仍保留”；
+8. 将 udev/network-online 全局等待收窄到业务设备和 WiFi AP 的精确依赖；
+9. 压缩 shell 管理开销与 OTA 无事务快速路径，并连续冷启动做功能回归。
 
 ### Result（结果）
 
-- systemd 总启动时间：`103.005 s → 13.572 s`，下降约 86.8%；
-- userspace：`100.792 s → 11.499 s`，下降约 88.6%；
-- M33 running：最早约 11.7 秒提前到 4.42 秒；
-- 主雷达融合业务 ready：`24.38 s → 17.79 s`；
+- systemd 总启动时间：`103.005 s → 11.841 s`（最终三次中位数），下降约 88.5%；
+- userspace：`100.792 s → 9.820 s`（最终三次中位数），下降约 90.3%；
+- M33 running：最早约 11.7 秒提前到最终中位数 3.908 秒；
+- 主雷达融合业务 ready：`24.38 s → 12.602 s`，提前约 48.3%；
+- RPMsg ready 最终中位数为 13.605 秒；
 - 保留 WiFi、摄像头、雷达、RPMsg、音频和数据记录功能；
 - 所有服务调整均可由脚本回退，未修改内核、DTB 和 U-Boot `bootcmd`。
 
@@ -389,8 +841,10 @@ DVR、WiFi Dashboard、LED 和音频。开发板冷启动进入 multi-user 需�
 > 被较晚的业务脚本启动。我测试过 U-Boot remoteproc，但由于内核缺少可靠的
 > detach/attach 接管证据，没有冒险保留，而是新增 Linux sysinit 阶段的 M33
 > oneshot 服务，并给主业务保留原启动路径回退。优化中还发现 TF 卡 fsck 和业务
-> 手工挂载存在竞态，我先备份数据再离线修复，并修正状态判断。最终整机 systemd
-> 启动从 103 秒降到 13.6 秒，M33 在 4.42 秒运行，同时保留了功能验证和回退能力。
+> 手工挂载存在竞态，我先备份数据再离线修复，并修正状态判断。第二阶段再按雷达
+> 完整 ACK 提前结束无效等待，把 udev 和网络等待收窄到具体设备/AP，并压缩启动
+> 脚本与 OTA 快速路径。最终三次冷启动中位数从 103 秒降到 11.84 秒，融合业务
+> 从 24.38 秒提前到 12.60 秒，同时保留了功能验证和回退能力。
 
 ## 常见追问与参考回答
 
@@ -431,18 +885,19 @@ remoteproc 管理异构核的固件加载、启动、停止和状态；RPMsg 建
 启动回归。不能只凭服务名称判断。对不确定单元选择保留；被禁用的单元用脚本
 记录原状态，出现回归时可立即恢复。
 
-### 7. 为什么保留完整 udev settle？
+### 7. 第一阶段为什么保留、第二阶段为什么能移除完整 udev settle？
 
 摄像头由 OV5640、CSI、DCMIPP 和 V4L2 media controller 组成异步枚举拓扑，
-雷达串口等节点也依赖 udev。当前约 4.8 秒存在进一步优化空间，但在没有把等待
-收窄到明确设备节点并完成多轮冷启动验证前，直接删除会制造偶发竞态。
+雷达串口等节点也依赖 udev。第一阶段尚未证明具体节点的最晚时间，所以保留全局
+等待。第二阶段加入 `/dev/video7`、`ttySTM0/1`、`gpiochip3` 和 RPMsg 的有界
+精确等待，并审计、禁用空闲 iiod 后，才移除 settle；连续冷启动未出现枚举竞态。
 
 ### 8. 下一步如何继续优化？
 
-先把完整 udev settle 改为等待项目必需的具体设备或 udev tag，再评估网络
-wait-online 是否能改为只等待 AP 所需接口。之后用 bootchart/ftrace 定位内核
-阶段，再制作独立 Image/DTB 做 A/B 测试。每一步都应记录功能 ready 时间和
-失败率，而不是只看一次最好成绩。
+剩余高价值点是让雷达/RPMsg 告警链不再串行等待 TF 存储，但这需要支持存储稍后
+热接入并证明启动期间事件不丢失。雷达命令间隔和 RPMsg 固定等待需先拿到协议或
+M33 对端源码。之后再用 bootchart/ftrace 定位内核阶段，制作独立 Image/DTB
+做 A/B；每一步仍应记录业务 ready 时间和失败率，而不是只看一次最好成绩。
 
 ### 9. 为什么没有把所有 failed unit 都禁用？
 
@@ -460,10 +915,12 @@ wait-online 是否能改为只等待 AP 所需接口。之后用 bootchart/ftrac
 可根据岗位侧重点选用：
 
 - 基于 `systemd-analyze`、critical chain 与 monotonic journal 优化
-  STM32MP257 Linux 启动链路，将整机启动时间从 103.0 秒降至 13.6 秒，
-  userspace 耗时下降 88.6%。
+  STM32MP257 Linux 启动链路，将整机启动时间从 103.0 秒降至最终三次中位数
+  11.84 秒，userspace 耗时下降 90.3%。
 - 设计 A35/M33 的 Linux early-boot remoteproc 启动与 RPMsg 就绪检查机制，
-  将 M33 running 提前至 4.42 秒，并保留失败自动回退路径。
+  将 M33 running 提前至最终中位数 3.91 秒，并保留失败自动回退路径。
+- 根据毫米波雷达完整 ACK 重构初始化等待，将融合业务 ready 从 24.38 秒提前至
+  最终三次中位数 12.60 秒，同时保留原超时与命令稳定间隔。
 - 定位并修复 systemd fsck 与业务手工挂载并发导致的 FAT 数据风险，完成 DVR
   数据备份、离线修复与冷启动回归。
 - 将无关服务裁减、业务前移、状态备份、rollback 和验收命令脚本化，在不修改

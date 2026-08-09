@@ -151,14 +151,31 @@ systemctl start dvr.service
 
 ## Dashboard 与实验标注
 
-`start_dvr.sh` 会同时启动 Dashboard。电脑连接开发板 WiFi 后访问：
+Dashboard 由独立的 `radar-dashboard.service` 常驻托管；旧系统没有该 unit 时，
+`start_dvr.sh` 仍保留兼容启动路径。电脑连接开发板 WiFi 后访问：
 
 ```text
 http://<开发板IP>:8080
 ```
 
-页面显示当前危险目标、四条实时曲线、摄像头/NPU 状态、M33 IMU 事件、
-摔倒 UDP 投递链和跨传感器同步时间线。五类测试事件均可点击开始/结束，结果保存到：
+页面按 `RADAR / FUSION / HEALTH / TIMING / CONTROL` 五个栏目切换。桌面宽度下每个栏目
+尽量完整放入一屏：既保留危险目标、四条实时曲线、摄像头/NPU、M33 IMU、
+摔倒 UDP 投递链和跨传感器时间线，也增加关键服务/进程、CPU/内存/温度、设备
+节点、启动里程碑、启动后的关键业务事件和任务控制。窄屏会退化为栏目内部滚动，
+避免压缩到无法阅读。
+
+新增观测接口均为只读：`/api/system` 读取 `/proc`、`/sys` 和 systemd 状态，
+`/api/boot` 汇总 systemd、单调时钟启动日志和本次开机后的关键业务事件。只有打开
+对应栏目时才轮询：系统/控制状态间隔 5 秒，关键事件 10 秒，启动信息缓存 60 秒；
+浏览器切到后台后暂停请求。成功的高频 API
+访问日志也按接口最多每 60 秒记录一次，避免 Dashboard 自身制造无意义磁盘 I/O。
+
+`CONTROL` 只允许运行/暂停 `dvr.service` 和 `helmet-ota.service`，并要求二次确认、
+同源请求和服务端控制令牌。Dashboard、M33、hostapd 和 dnsmasq 是受保护服务，
+不提供控制入口。每次控制写入 `control_events.csv`；暂停融合业务不会停止独立
+Dashboard、M33 或 WiFi。
+
+五类测试事件均可点击开始/结束，结果保存到：
 
 ```text
 /run/media/mmcblk0p1/dvr/radar_experiments/
@@ -166,6 +183,7 @@ http://<开发板IP>:8080
 ├── radar_state.json
 ├── sensor_events.csv
 ├── imu_delivery.csv
+├── control_events.csv
 └── labels.csv
 ```
 
@@ -175,6 +193,15 @@ http://<开发板IP>:8080
 python3 dashboard/radar_dashboard.py \
   --host 0.0.0.0 --port 8080 \
   --data-dir /tmp/radar_experiment
+```
+
+接口快速检查：
+
+```bash
+curl -fsS http://127.0.0.1:8080/api/state
+curl -fsS http://127.0.0.1:8080/api/system
+curl -fsS http://127.0.0.1:8080/api/boot
+curl -fsS http://127.0.0.1:8080/api/control
 ```
 
 详细的字段、危险目标算法和现场测试步骤见
@@ -217,10 +244,13 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 
 ## 维护文档
 
+- [项目技术知识库：Linux、内核、驱动与业务分层](docs/PROJECT_TECHNICAL_KNOWLEDGE_BASE.md)
+- [嵌入式 Linux 岗位面试准备与项目讲解](docs/INTERVIEW_PREPARATION.md)
 - [日常操作指南](docs/操作指南.md)
 - [完整数据流](docs/DATA_FLOW.md)
 - [雷达实验、CSV 与人工标注](docs/RADAR_EXPERIMENT.md)
 - [M33 摔倒判断与手机短信链路](docs/FALL_SMS_PIPELINE.md)
+- [STM32WBA54 BLE Central、CH9140和V2V方向灯固件](../../../E04-2G4M10S1AX/README.md)
 - [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
 - [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
 - [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)

@@ -132,6 +132,33 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
   --data-dir /run/media/mmcblk0p1/dvr/radar_experiments
 ```
 
+## 一屏栏目与系统观测
+
+Dashboard 使用五个固定栏目，避免在桌面浏览器中依赖整页上下滚动：
+
+| 栏目 | 主要内容 | 数据刷新策略 |
+|---|---|---|
+| `RADAR` | 威胁扇形、危险目标、全部目标和四条曲线 | `/api/state` 500 ms |
+| `FUSION` | 摄像头/NPU、M33/IMU、投递状态、标注和时间线 | 栏目激活时 `/api/events` 2 s |
+| `HEALTH` | CPU、负载、内存、温度、服务、关键进程和设备节点 | 栏目激活时 `/api/system` 5 s |
+| `TIMING` | systemd 总时间、启动里程碑、启动后关键事件和异常日志 | 事件 10 s，启动信息缓存 60 s |
+| `CONTROL` | 可控制任务、受保护服务和控制审计 | 栏目激活时 `/api/control` 5 s |
+
+`/api/system` 只读访问 `/proc`、`/sys`、`systemctl show`；`/api/boot` 只读调用
+`systemd-analyze` 和 `journalctl -b`。后端分别使用 5 秒和 60 秒缓存，浏览器不可见
+时暂停请求，未打开的栏目不做周期采集。正常轮询的访问日志按接口限频为每 60 秒
+最多一条，错误、标注写入和静态资源请求仍即时记录。
+
+Dashboard 已从 `dvr.service` 拆分为独立的 `radar-dashboard.service`。控制 API 只
+白名单放行 `dvr.service` 与 `helmet-ota.service` 的 start/stop；控制面板自身、
+M33、WiFi 热点和 DHCP/DNS 永远只读。前端二次确认之外，后端还校验同源请求、
+服务端令牌和任务白名单，操作结果持久化到 `control_events.csv`。这保证暂停融合
+业务后控制页面仍在线，也避免任意 unit 名称注入。
+
+桌面布局以单屏可读为目标；小于约 1120 px 时允许当前栏目内部滚动，手机宽度下
+允许页面滚动。这是为了保留字段可读性，不会隐藏关键状态。键盘可使用左右方向键、
+`Home` 和 `End` 切换栏目。
+
 ## 输出文件
 
 ```text
@@ -140,6 +167,7 @@ python3 /xxl/camera_detect/dashboard/radar_dashboard.py \
 ├── radar_state.json    # Dashboard 最新状态；无目标时保持 1 Hz 在线心跳
 ├── sensor_events.csv   # 摄像头/NPU、M33 IMU、A35→HUD 同步事件
 ├── imu_delivery.csv    # HUD 接收、冷却与 App UDP 广播结果
+├── control_events.csv  # 任务运行/暂停操作审计
 └── labels.csv          # 人工开始/结束标注
 ```
 

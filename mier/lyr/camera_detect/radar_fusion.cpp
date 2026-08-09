@@ -168,6 +168,22 @@ static int   g_direction_stable_samples = DIRECTION_STABLE_SAMPLES_DEFAULT;
 static char  g_radar_log_dir[PATH_MAX] = RADAR_LOG_DIR_DEFAULT;
 static char  g_ble_led_uart[PATH_MAX] = BLE_LED_UART_DEFAULT;
 static bool  g_ble_led_enabled = true;
+static bool  g_first_camera_frame_logged = false;
+static bool  g_first_radar_frame_logged = false;
+
+/*
+ * 启动优化统一使用 CLOCK_BOOTTIME。它不受 NTP/RTC 校时影响，并与
+ * journalctl -o short-monotonic、systemd 的启动时间处于同一时间基准。
+ */
+static double boot_time_seconds(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0) return -1.0;
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+}
+
+static void startup_mark(const char *milestone) {
+    printf("[启动] [boot=%.3fs] %s\n", boot_time_seconds(), milestone);
+}
 
 /* ======================== 信号处理 ======================== */
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
@@ -1055,28 +1071,92 @@ static void radar_telemetry_close(void) {
 static int radar_init(int fd) {
     printf("[RADAR] Initializing...\n"); fflush(stdout);
     uint8_t rx_buf[512];
-    auto wait_reply = [&](int timeout_ms) {
-        struct timeval start, now;
-        gettimeofday(&start, NULL);
+    auto wait_reply = [&](const char *command, uint8_t expected_command,
+                          int timeout_ms) {
+        uint8_t pending[1024];
+        int pending_len = 0;
+        int first_rx_ms = -1;
+        int total_rx = 0;
+        int reply_ms = -1;
+        double start = boot_time_seconds();
         while (g_running) {
-            gettimeofday(&now, NULL);
-            int elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_usec - start.tv_usec) / 1000;
+            int elapsed = (int)((boot_time_seconds() - start) * 1000.0);
             if (elapsed >= timeout_ms) break;
             int remain = timeout_ms - elapsed;
             struct timeval tv = { remain / 1000, (remain % 1000) * 1000 };
             fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
             if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) break;
-            (void)read(fd, rx_buf, sizeof(rx_buf));
+            ssize_t count = read(fd, rx_buf, sizeof(rx_buf));
+            if (count > 0) {
+                if (first_rx_ms < 0)
+                    first_rx_ms =
+                        (int)((boot_time_seconds() - start) * 1000.0);
+                total_rx += (int)count;
+                if (count > (ssize_t)(sizeof(pending) - pending_len))
+                    pending_len = 0;
+                int copy_len = count < (ssize_t)(sizeof(pending) - pending_len)
+                                   ? (int)count
+                                   : (int)(sizeof(pending) - pending_len);
+                memcpy(pending + pending_len, rx_buf, copy_len);
+                pending_len += copy_len;
+
+                int offset = 0;
+                while (offset < pending_len) {
+                    int available = pending_len - offset;
+                    uint8_t head = pending[offset];
+                    int frame_total;
+                    if (head == HEAD_REPLY) {
+                        if (available < 3) break;
+                        frame_total = 5 + pending[offset + 2];
+                    } else if (head == HEAD_REPORT) {
+                        if (available < 2) break;
+                        frame_total = 2 + pending[offset + 1] + 1;
+                    } else {
+                        offset++;
+                        continue;
+                    }
+                    if (frame_total <= 0 ||
+                        frame_total > (int)sizeof(pending)) {
+                        offset++;
+                        continue;
+                    }
+                    if (available < frame_total) break;
+                    if (head == HEAD_REPLY &&
+                        pending[offset + 1] == expected_command) {
+                        reply_ms =
+                            (int)((boot_time_seconds() - start) * 1000.0);
+                        offset += frame_total;
+                        break;
+                    }
+                    offset += frame_total;
+                }
+                if (offset > 0) {
+                    memmove(pending, pending + offset,
+                            (size_t)(pending_len - offset));
+                    pending_len -= offset;
+                }
+                if (reply_ms >= 0) break;
+            }
         }
+        printf("[启动] [RADAR_INIT] command=%s first_rx_ms=%d reply_ms=%d total_rx=%d\n",
+               command, first_rx_ms, reply_ms, total_rx);
     };
     flush_rx(fd);
-    send_cmd(fd, 7, 0x1E, NULL, 0); wait_reply(1000); usleep(200000);
+    send_cmd(fd, 7, 0x1E, NULL, 0);
+    wait_reply("group7_cmd1e", (uint8_t)((7 << 5) | 0x1E), 1000);
+    usleep(200000);
     flush_rx(fd);
-    { uint8_t p = 0x01; send_cmd(fd, 6, 0x11, &p, 1); } wait_reply(1000); usleep(200000);
+    { uint8_t p = 0x01; send_cmd(fd, 6, 0x11, &p, 1); }
+    wait_reply("group6_cmd11", (uint8_t)((6 << 5) | 0x11), 1000);
+    usleep(200000);
     flush_rx(fd);
-    { uint8_t p = 0x00; send_cmd(fd, 0, 0x02, &p, 1); } wait_reply(1000); usleep(200000);
+    { uint8_t p = 0x00; send_cmd(fd, 0, 0x02, &p, 1); }
+    wait_reply("group0_cmd02", 0x02, 1000);
+    usleep(200000);
     flush_rx(fd);
-    { uint8_t p[2] = {0x88, 0x13}; send_cmd(fd, 6, 0x12, p, 2); } wait_reply(1000); usleep(200000);
+    { uint8_t p[2] = {0x88, 0x13}; send_cmd(fd, 6, 0x12, p, 2); }
+    wait_reply("group6_cmd12", (uint8_t)((6 << 5) | 0x12), 1000);
+    usleep(200000);
     printf("[RADAR] Initialized OK\n");
     return 0;
 }
@@ -1896,6 +1976,7 @@ static void *rpmsg_thread(void *arg) {
         fprintf(stderr, "[IMU] Cannot open %s: %s\n", RPMSG_DEVICE, strerror(errno));
         return NULL;
     }
+    startup_mark("rpmsg_device_opened");
 
     struct termios tty;
     memset(&tty, 0, sizeof(tty));
@@ -1922,6 +2003,7 @@ static void *rpmsg_thread(void *arg) {
     } else {
         tcdrain(fd);
         printf("[系统] [IMU] RPMsg ready message sent to M33\n");
+        startup_mark("rpmsg_ready_sent");
     }
 
     char line[512];
@@ -2071,6 +2153,7 @@ int main(int argc, char *argv[]) {
     /* 当日志被重定向到文件时，默认全缓冲会导致显示严重滞后；改为行缓冲 */
     setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
     setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+    startup_mark("radar_fusion_main_enter");
     ble_risk_configure(g_ble_led_uart, g_ble_led_enabled);
 
     printf("========================================\n");
@@ -2121,6 +2204,7 @@ int main(int argc, char *argv[]) {
     } else {
         printf("[系统] [DVR] TF card: OK (%s)\n", DVR_BASE_DIR);
     }
+    startup_mark("dvr_dependencies_checked");
 
     /* 1. GPIO LED: PD11, 用于雷达+NPU/IMU 告警闪烁 */
     if (gpio_init() != 0)
@@ -2128,8 +2212,10 @@ int main(int argc, char *argv[]) {
 
     pthread_t led_tid;
     pthread_create(&led_tid, NULL, led_thread, NULL);
+    startup_mark("gpio_led_initialized");
 
     /* 2. 雷达: 打开串口、设置波特率、初始化 BSD 工作模式 */
+    startup_mark("radar_initialize_begin");
     kill_device_holders(uart_dev);
     int radar_fd = open(uart_dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (radar_fd < 0) {
@@ -2142,6 +2228,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     radar_init(radar_fd);
+    startup_mark("radar_initialize_done");
 
     /* 3. 摄像头 + NPU: 采集图像并做目标检测, 用于验证雷达目标是否为真实道路使用者 */
     kill_device_holders(camera_dev);
@@ -2151,10 +2238,14 @@ int main(int argc, char *argv[]) {
     uint8_t *rgb_full = NULL, *rgb_nn = NULL;
     int nn_w = 0, nn_h = 0;
 
+    startup_mark("camera_initialize_begin");
     if (camera_open(&cam, camera_dev, 1280, 720) == 0) {
         dvr_camera_pixelformat = cam.pixelformat;
         if (camera_start(&cam) == 0) {
+            startup_mark("camera_stream_started");
+            startup_mark("npu_model_load_begin");
             detector = new NpuDetector(model_path, labels_path, confidence, 0.45f);
+            startup_mark("npu_model_load_done");
             nn_w = detector->get_input_width();
             nn_h = detector->get_input_height();
             rgb_full = (uint8_t *)malloc(cam.width * cam.height * 3);
@@ -2176,6 +2267,8 @@ int main(int argc, char *argv[]) {
     }
     if (!camera_ok) printf("[FUSION] Running in RADAR-ONLY mode (no DVR)\n");
     g_camera_ok_global = camera_ok;
+    startup_mark(camera_ok ? "fusion_core_initialized" :
+                             "fusion_core_initialized_radar_only");
 
     printf("\n[系统] [FUSION] Initialization complete, entering main loop\n");
     if (camera_ok) {
@@ -2191,6 +2284,7 @@ int main(int argc, char *argv[]) {
     /* 4. 启动 RPMsg 接收线程 (M33 IMU/V2X alerts) */
     pthread_t rpmsg_tid;
     pthread_create(&rpmsg_tid, NULL, rpmsg_thread, NULL);
+    startup_mark("rpmsg_thread_started");
 
     /* 5. 注册异常路况骨传导播报处理函数
      *    无网络时会按关键词播放本地固定提示音 */
@@ -2199,6 +2293,8 @@ int main(int argc, char *argv[]) {
     /* 6. 启动 HUD 导航语音接收线程 (UDP 8888) */
     if (nav_tts_start() != 0) {
         fprintf(stderr, "[系统] [NAV] Failed to start navigation receiver\n");
+    } else {
+        startup_mark("navigation_receiver_started");
     }
 
     /* 7. 启动测试线程 (如果指定了 -t 或 -V) */
@@ -2240,6 +2336,7 @@ int main(int argc, char *argv[]) {
     t_last_capture = g_t_start;
     radar_telemetry_init();
     radar_telemetry_publish_empty();
+    startup_mark("radar_fusion_runtime_ready");
 
     while (g_running) {
         /* 回收异步编码子进程 */
@@ -2294,6 +2391,10 @@ int main(int argc, char *argv[]) {
             uint8_t *jpeg_buf;
             unsigned int jpeg_len;
             if (camera_capture(&cam, &jpeg_buf, &jpeg_len) == 0) {
+                if (!g_first_camera_frame_logged) {
+                    g_first_camera_frame_logged = true;
+                    startup_mark("camera_first_frame");
+                }
                 t_last_capture = tv_now;
                 uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
                                  (uint64_t)tv_now.tv_usec;
@@ -2493,6 +2594,10 @@ int main(int argc, char *argv[]) {
                 memcpy(frame, rx_buf, frame_total);
                 radar_result_t radar;
                 if (process_radar_frame(frame, frame_total, &radar) == 1) {
+                    if (!g_first_radar_frame_logged) {
+                        g_first_radar_frame_logged = true;
+                        startup_mark("radar_first_report");
+                    }
                     gettimeofday(&tv_now, NULL);
                     double t = (tv_now.tv_sec - g_t_start.tv_sec) +
                                (tv_now.tv_usec - g_t_start.tv_usec) / 1000000.0;

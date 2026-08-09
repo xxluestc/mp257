@@ -80,39 +80,24 @@ DIRECTION_SAMPLES="3"
 load_radar_config() {
     local config="${CAMERA_DIR}/radar_config"
     if [ -f "$config" ]; then
-        local ttc
-        local dist
-        local left_angle
-        local right_angle
-        local angle_sign
-        local angle_alpha
-        local direction_samples
-        local dashboard_port
-        local radar_log_dir
-        local ble_led_enabled
-        local ble_led_uart
-        ttc=$(grep -E '^TTC=' "$config" | cut -d'=' -f2)
-        dist=$(grep -E '^DIST=' "$config" | cut -d'=' -f2)
-        left_angle=$(grep -E '^LEFT_ANGLE=' "$config" | cut -d'=' -f2)
-        right_angle=$(grep -E '^RIGHT_ANGLE=' "$config" | cut -d'=' -f2)
-        angle_sign=$(grep -E '^ANGLE_SIGN=' "$config" | cut -d'=' -f2)
-        angle_alpha=$(grep -E '^ANGLE_ALPHA=' "$config" | cut -d'=' -f2)
-        direction_samples=$(grep -E '^DIRECTION_SAMPLES=' "$config" | cut -d'=' -f2)
-        dashboard_port=$(grep -E '^DASHBOARD_PORT=' "$config" | cut -d'=' -f2)
-        radar_log_dir=$(grep -E '^RADAR_LOG_DIR=' "$config" | cut -d'=' -f2)
-        ble_led_enabled=$(grep -E '^BLE_LED_ENABLED=' "$config" | cut -d'=' -f2)
-        ble_led_uart=$(grep -E '^BLE_LED_UART=' "$config" | cut -d'=' -f2)
-        [ -n "$ttc" ] && TTC_THRESHOLD="$ttc"
-        [ -n "$dist" ] && DIST_THRESHOLD="$dist"
-        [ -n "$left_angle" ] && LEFT_ANGLE="$left_angle"
-        [ -n "$right_angle" ] && RIGHT_ANGLE="$right_angle"
-        [ -n "$angle_sign" ] && ANGLE_SIGN="$angle_sign"
-        [ -n "$angle_alpha" ] && ANGLE_ALPHA="$angle_alpha"
-        [ -n "$direction_samples" ] && DIRECTION_SAMPLES="$direction_samples"
-        [ -n "$dashboard_port" ] && DASHBOARD_PORT="$dashboard_port"
-        [ -n "$radar_log_dir" ] && RADAR_LOG_DIR="$radar_log_dir"
-        [ -n "$ble_led_enabled" ] && BLE_LED_ENABLED="$ble_led_enabled"
-        [ -n "$ble_led_uart" ] && BLE_LED_UART="$ble_led_uart"
+        local key
+        local value
+        while IFS='=' read -r key value; do
+            [ -n "$value" ] || continue
+            case "$key" in
+                TTC) TTC_THRESHOLD="$value" ;;
+                DIST) DIST_THRESHOLD="$value" ;;
+                LEFT_ANGLE) LEFT_ANGLE="$value" ;;
+                RIGHT_ANGLE) RIGHT_ANGLE="$value" ;;
+                ANGLE_SIGN) ANGLE_SIGN="$value" ;;
+                ANGLE_ALPHA) ANGLE_ALPHA="$value" ;;
+                DIRECTION_SAMPLES) DIRECTION_SAMPLES="$value" ;;
+                DASHBOARD_PORT) DASHBOARD_PORT="$value" ;;
+                RADAR_LOG_DIR) RADAR_LOG_DIR="$value" ;;
+                BLE_LED_ENABLED) BLE_LED_ENABLED="$value" ;;
+                BLE_LED_UART) BLE_LED_UART="$value" ;;
+            esac
+        done < "$config"
     fi
 }
 load_radar_config
@@ -132,8 +117,12 @@ done
 
 # -------------------------- 日志函数 --------------------------
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-    echo "$msg" | tee -a "$LOG_FILE"
+    local timestamp
+    local msg
+    printf -v timestamp '%(%Y-%m-%d %H:%M:%S)T' -1
+    msg="[${timestamp}] $*"
+    printf '%s\n' "$msg"
+    printf '%s\n' "$msg" >> "$LOG_FILE"
 }
 
 # systemd-fsck@.service 完成后可能保持 active/exited；只有 activating 才表示
@@ -141,6 +130,29 @@ log() {
 tf_fsck_running() {
     [ "$(systemctl show "$TF_FSCK_UNIT" \
         --property=ActiveState --value 2>/dev/null)" = "activating" ]
+}
+
+# 等待单个业务设备。required=1 的设备缺失时返回失败；可选设备超时后由
+# radar_fusion 沿用既有降级逻辑。使用精确设备等待替代全局 udev settle。
+wait_for_device() {
+    local path="$1"
+    local description="$2"
+    local timeout_tenths="$3"
+    local required="$4"
+    local attempt=0
+
+    while [ "$attempt" -lt "$timeout_tenths" ]; do
+        [ ! -e "$path" ] || return 0
+        sleep 0.1
+        attempt=$((attempt + 1))
+    done
+
+    if [ "$required" = "1" ]; then
+        log "错误: ${description} 未在 $((timeout_tenths / 10))s 内就绪: ${path}"
+        return 1
+    fi
+    log "警告: ${description} 未在 $((timeout_tenths / 10))s 内就绪: ${path}，按现有降级路径继续"
+    return 0
 }
 
 # -------------------------- 退出清理 --------------------------
@@ -244,7 +256,6 @@ start_hud() {
     rm -f "$HUD_PID_FILE"
     nohup "$HUD_BIN" >> /tmp/hud.log 2>&1 &
     HUD_PID=$!
-    sleep 0.2
 
     if kill -0 "$HUD_PID" 2>/dev/null; then
         log "HUD 启动成功，pid=${HUD_PID}"
@@ -258,6 +269,14 @@ start_hud() {
 
 # 启动本地雷达 Dashboard（仅依赖 Python 3 标准库）
 start_dashboard() {
+    # 新版由独立 systemd unit 托管，确保暂停 dvr.service 时控制面板仍在线。
+    # 未安装该 unit 的旧系统继续使用下方兼容启动路径。
+    if systemctl is-active --quiet radar-dashboard.service 2>/dev/null; then
+        log "Dashboard 由独立 radar-dashboard.service 托管"
+        DASHBOARD_PID=0
+        return 0
+    fi
+
     if [ ! -f "$DASHBOARD_SCRIPT" ]; then
         log "警告: Dashboard 脚本不存在: ${DASHBOARD_SCRIPT}"
         return 1
@@ -286,7 +305,6 @@ start_dashboard() {
         >> "${CAMERA_DIR}/radar_dashboard.log" 2>&1 &
     DASHBOARD_PID=$!
     echo "$DASHBOARD_PID" > "$DASHBOARD_PID_FILE"
-    sleep 0.2
 
     if kill -0 "$DASHBOARD_PID" 2>/dev/null; then
         log "Dashboard 已启动，浏览器访问 http://<开发板IP>:${DASHBOARD_PORT}"
@@ -314,10 +332,12 @@ cleanup() {
     HUD_PID=0
     rm -f "$HUD_PID_FILE"
 
-    # 3. 停止 Radar Dashboard
-    wait_or_kill "$DASHBOARD_PID" "Radar Dashboard" 2
-    DASHBOARD_PID=0
-    rm -f "$DASHBOARD_PID_FILE"
+    # 3. 只清理旧系统的兼容 Dashboard；独立 systemd 服务不属于本业务。
+    if [ "$DASHBOARD_PID" -gt 0 ] 2>/dev/null; then
+        wait_or_kill "$DASHBOARD_PID" "Radar Dashboard" 2
+        DASHBOARD_PID=0
+        rm -f "$DASHBOARD_PID_FILE"
+    fi
 
     # 4. 停止过滤管道和日志容量维护
     stop_log_reader
@@ -351,6 +371,14 @@ if [ ! -x "$RADAR_FUSION" ]; then
     log "错误: radar_fusion 不存在或无执行权限: $RADAR_FUSION"
     exit 1
 fi
+
+# 雷达是主程序的硬前提；摄像头、方向灯和本机告警 GPIO 保持原有可降级语义。
+wait_for_device /dev/ttySTM1 "雷达串口" 100 1 || exit 1
+wait_for_device /dev/video7 "USB 摄像头" 100 0
+if [ "$BLE_LED_ENABLED" = "1" ]; then
+    wait_for_device "$BLE_LED_UART" "蓝牙方向灯串口" 100 0
+fi
+wait_for_device /dev/gpiochip3 "告警 GPIO" 100 0
 
 # 等待 udev 触发的 FAT fsck 和自动挂载完成。绝不能在 fsck 尚在读写文件系统时
 # 手工 mount，否则 DVR 与 fsck 会并发修改 FAT，导致 .buffer/CSV 目录损坏。
@@ -425,12 +453,6 @@ elif [ ! -d /sys/class/gpio/gpio539 ]; then
     fi
 fi
 
-# -------------------------- 清理旧状态 --------------------------
-log "清理可能占用摄像头的进程..."
-fuser -k /dev/video7 2>/dev/null || true
-fuser -k /dev/ttySTM1 2>/dev/null || true
-sleep 0.2
-
 # -------------------------- 启动 M33 固件 --------------------------
 # fw_cortex_m33.sh 会根据当前目录名确定固件文件名
 # 固件为 /lib/firmware/project_CM33_NonSecure.elf，所以必须在 /home/root/project 目录下执行
@@ -500,7 +522,7 @@ log "RPMsg 设备已就绪: ${RPMSG_DEV}"
 # HUD 负责把 radar_fusion 转发到 127.0.0.1:8890 的 IMU 异常广播给手机 App
 start_hud
 
-# -------------------------- 启动 Radar Dashboard --------------------------
+# -------------------------- 确认 Radar Dashboard --------------------------
 start_dashboard
 
 # -------------------------- 启动 radar_fusion --------------------------
@@ -543,7 +565,7 @@ log "终端只显示关键事件，完整日志请查看上方文件"
 
 # 关键日志过滤规则
 # 源日志已经按类型打上 [目标]/[告警]/[保存]/[系统] 前缀，这里直接按前缀过滤
-KEY_PATTERN='^\[(目标|告警|保存|系统|NAV)\]'
+KEY_PATTERN='^\[(启动|目标|告警|保存|系统|NAV)\]'
 
 # 后台实时过滤并打印关键日志（从当前日志末尾开始，不打印历史）
 # 使用子shell，这样 READER_PID 就是进程组 leader，cleanup 可以一次性 kill 整个管道
@@ -584,10 +606,12 @@ wait_or_kill "$HUD_PID" "HUD" 2
 HUD_PID=0
 rm -f "$HUD_PID_FILE"
 
-# 停止 Radar Dashboard
-wait_or_kill "$DASHBOARD_PID" "Radar Dashboard" 2
-DASHBOARD_PID=0
-rm -f "$DASHBOARD_PID_FILE"
+# 只停止旧系统由本脚本启动的兼容 Dashboard。
+if [ "$DASHBOARD_PID" -gt 0 ] 2>/dev/null; then
+    wait_or_kill "$DASHBOARD_PID" "Radar Dashboard" 2
+    DASHBOARD_PID=0
+    rm -f "$DASHBOARD_PID_FILE"
+fi
 
 stop_log_maintenance
 

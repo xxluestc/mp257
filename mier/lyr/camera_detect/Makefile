@@ -46,14 +46,21 @@ hud:
 
 dashboard-check:
 	python3 -m py_compile dashboard/radar_dashboard.py
+	python3 -m unittest discover -s dashboard -p 'test_*.py'
+	@if command -v gjs >/dev/null 2>&1; then \
+		gjs -c 'const GLib=imports.gi.GLib; const ByteArray=imports.byteArray; const [ok,data]=GLib.file_get_contents("dashboard/static/app.js"); new Function(ByteArray.toString(data));'; \
+	fi
 
 script-check:
 	bash -n start_dvr.sh
 	sh -n scripts/start_m33_early.sh
 	sh -n scripts/log_maintenance.sh
+	sh -n scripts/collect_boot_metrics.sh
+	sh -n scripts/collect_bootloader_audit.sh
 	sh -n scripts/clear_runtime_logs.sh
 	sh -n scripts/ble_led_test.sh
 	sh -n $(OTA_DIR)/install_ota_service.sh
+	sh -n $(OTA_DIR)/helmet_ota_recover_if_needed.sh
 
 ota-check:
 	python3 -m py_compile \
@@ -97,7 +104,9 @@ deploy-radar: $(TARGET) hud dashboard-check
 	scp $(TARGET) root@$(BOARD_IP):$(BOARD_DIR)/
 	scp $(HUD_DIR)/hud root@$(BOARD_IP):$(HUD_REMOTE)
 	scp $(MODEL_FILE) $(LABEL_FILE) root@$(BOARD_IP):$(BOARD_DIR)/models/
-	scp start_dvr.sh dvr.service.example dvr-m33.service.example radar_config.example root@$(BOARD_IP):$(BOARD_DIR)/
+	scp start_dvr.sh dvr.service.example dvr-m33.service.example \
+		radar-dashboard.service.example \
+		dnsmasq.service.override.example radar_config.example root@$(BOARD_IP):$(BOARD_DIR)/
 	scp scripts/*.sh root@$(BOARD_IP):$(BOARD_DIR)/scripts/
 	scp sounds/*.wav root@$(BOARD_IP):$(BOARD_DIR)/sounds/
 	scp nav_tts_cache/*.wav root@$(BOARD_IP):$(BOARD_DIR)/nav_tts_cache/
@@ -112,6 +121,7 @@ deploy-ota-service: ota-check
 		$(OTA_DIR)/helmet_ota_common.py \
 		$(OTA_DIR)/helmet_ota_installer.py \
 		$(OTA_DIR)/helmet_ota_server.py \
+		$(OTA_DIR)/helmet_ota_recover_if_needed.sh \
 		$(OTA_DIR)/helmet-ota.service.example \
 		$(OTA_DIR)/install_ota_service.sh \
 		root@$(BOARD_IP):$(OTA_REMOTE)/

@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1117">
-  <title>Rider Safety · 多传感器同步台</title>
+  <meta name="theme-color" content="#142833">
+  <title>Rider Safety · 运行态势台</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <p class="eyebrow">STM32MP257 · RIDER SAFETY LAB</p>
-      <h1>骑行安全多传感器同步台</h1>
+    <div class="brand-lockup">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <div>
+        <p class="eyebrow">STM32MP257 · RIDER SAFETY</p>
+        <h1>骑行安全运行态势台</h1>
+      </div>
     </div>
     <div class="topbar-status">
-      <span class="version-chip">APP <strong id="app-version">SOURCE</strong></span>
+      <span class="version-chip">系统版本 <strong id="system-version">SOURCE</strong></span>
       <span id="connection-chip" class="status-chip status-offline">
         <i aria-hidden="true"></i><span>等待雷达数据</span>
       </span>
@@ -22,179 +25,312 @@
     </div>
   </header>
 
-  <main>
-    <section class="instrument-grid" aria-label="当前雷达状态">
-      <article class="radar-panel">
-        <div class="section-label">危险目标方位</div>
-        <div class="radar-stage">
-          <svg class="radar-scope" viewBox="0 0 360 210" role="img"
-               aria-label="危险目标后向方位图">
-            <path id="scope-sector-left" class="scope-sector scope-left" d="M180 190 L30 104 A174 174 0 0 1 150 19 Z"/>
-            <path id="scope-sector-center" class="scope-sector scope-center" d="M180 190 L150 19 A174 174 0 0 1 210 19 Z"/>
-            <path id="scope-sector-right" class="scope-sector scope-right" d="M180 190 L210 19 A174 174 0 0 1 330 104 Z"/>
-            <path class="scope-grid" d="M70 126 A126 126 0 0 1 290 126"/>
-            <path class="scope-grid" d="M112 151 A78 78 0 0 1 248 151"/>
-            <path class="scope-grid scope-edge" d="M30 104 A174 174 0 0 1 330 104"/>
-            <line id="scope-left-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="150" y2="19"/>
-            <line id="scope-right-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="210" y2="19"/>
-            <line class="scope-grid scope-centerline" x1="180" y1="190" x2="180" y2="16"/>
-            <g id="target-contact" class="target-contact" aria-hidden="true">
-              <circle id="target-halo" class="target-halo" cx="180" cy="190" r="18"/>
-              <circle id="target-marker" class="target-marker" cx="180" cy="190" r="9"/>
-              <text id="target-caption" class="target-caption" x="194" y="176">OBJ —</text>
-            </g>
-          </svg>
-          <span class="bearing-label bearing-left">LEFT</span>
-          <span class="bearing-label bearing-center">CENTER</span>
-          <span class="bearing-label bearing-right">RIGHT</span>
-          <div class="direction-readout">
-            <span>FILTERED DIRECTION</span>
-            <strong id="direction">—</strong>
-          </div>
-        </div>
-      </article>
+  <nav class="mode-rail" aria-label="面板栏目" role="tablist">
+    <button class="mode-tab active" id="tab-radar" data-view="radar" role="tab"
+            aria-selected="true" aria-controls="view-radar">
+      <span>RADAR</span><strong>雷达态势</strong>
+    </button>
+    <button class="mode-tab" id="tab-sensors" data-view="sensors" role="tab"
+            aria-selected="false" aria-controls="view-sensors" tabindex="-1">
+      <span>FUSION</span><strong>联动记录</strong>
+    </button>
+    <button class="mode-tab" id="tab-system" data-view="system" role="tab"
+            aria-selected="false" aria-controls="view-system" tabindex="-1">
+      <span>HEALTH</span><strong>系统状态</strong>
+    </button>
+    <button class="mode-tab" id="tab-boot" data-view="boot" role="tab"
+            aria-selected="false" aria-controls="view-boot" tabindex="-1">
+      <span>TIMING</span><strong>关键时间</strong>
+    </button>
+    <button class="mode-tab" id="tab-control" data-view="control" role="tab"
+            aria-selected="false" aria-controls="view-control" tabindex="-1">
+      <span>CONTROL</span><strong>任务控制</strong>
+    </button>
+  </nav>
 
-      <article class="threat-panel">
-        <div class="section-label">当前危险目标</div>
-        <div class="object-id">OBJ <strong id="obj-id">—</strong></div>
-        <div id="alarm-state" class="alarm-state alarm-clear">
-          <span class="alarm-lamp" aria-hidden="true"></span>
-          <div><small>RADAR ALERT</small><strong>无告警</strong></div>
-        </div>
-        <dl class="metrics">
-          <div><dt>距离</dt><dd><span id="distance">—</span><small>m</small></dd></div>
-          <div><dt>相对速度</dt><dd><span id="velocity">—</span><small>m/s</small></dd></div>
-          <div><dt>雷达原始角度</dt><dd><span id="angle">—</span><small>°</small></dd></div>
-          <div><dt>TTC</dt><dd><span id="ttc">—</span><small>s</small></dd></div>
-        </dl>
-        <p class="fusion-note">融合告警：<strong id="fusion-alert">—</strong></p>
-      </article>
+  <main class="workspace">
+    <section id="view-radar" class="view active" role="tabpanel" aria-labelledby="tab-radar">
+      <div class="radar-layout">
+        <article class="panel radar-panel">
+          <header class="panel-head">
+            <div><span class="section-label">LIVE BEARING</span><h2>危险目标方位</h2></div>
+            <span class="panel-hint">后向 ±60°</span>
+          </header>
+          <div class="radar-stage">
+            <svg class="radar-scope" viewBox="0 0 360 210" role="img"
+                 aria-label="危险目标后向方位图">
+              <path id="scope-sector-left" class="scope-sector scope-left" d="M180 190 L30 104 A174 174 0 0 1 150 19 Z"/>
+              <path id="scope-sector-center" class="scope-sector scope-center" d="M180 190 L150 19 A174 174 0 0 1 210 19 Z"/>
+              <path id="scope-sector-right" class="scope-sector scope-right" d="M180 190 L210 19 A174 174 0 0 1 330 104 Z"/>
+              <path class="scope-grid" d="M70 126 A126 126 0 0 1 290 126"/>
+              <path class="scope-grid" d="M112 151 A78 78 0 0 1 248 151"/>
+              <path class="scope-grid scope-edge" d="M30 104 A174 174 0 0 1 330 104"/>
+              <line id="scope-left-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="150" y2="19"/>
+              <line id="scope-right-boundary" class="scope-grid scope-boundary" x1="180" y1="190" x2="210" y2="19"/>
+              <line class="scope-grid scope-centerline" x1="180" y1="190" x2="180" y2="16"/>
+              <g id="target-contact" class="target-contact" aria-hidden="true">
+                <circle id="target-halo" class="target-halo" cx="180" cy="190" r="18"/>
+                <circle id="target-marker" class="target-marker" cx="180" cy="190" r="9"/>
+                <text id="target-caption" class="target-caption" x="194" y="176">OBJ —</text>
+              </g>
+            </svg>
+            <span class="bearing-label bearing-left">LEFT</span>
+            <span class="bearing-label bearing-center">CENTER</span>
+            <span class="bearing-label bearing-right">RIGHT</span>
+            <div class="direction-readout">
+              <span>FILTERED DIRECTION</span>
+              <strong id="direction">—</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel threat-panel">
+          <header class="panel-head">
+            <div><span class="section-label">PRIMARY THREAT</span><h2>当前危险目标</h2></div>
+            <div class="object-id">OBJ <strong id="obj-id">—</strong></div>
+          </header>
+          <div id="alarm-state" class="alarm-state alarm-clear">
+            <span class="alarm-lamp" aria-hidden="true"></span>
+            <div><small>RADAR ALERT</small><strong>无告警</strong></div>
+          </div>
+          <dl class="metrics">
+            <div><dt>距离</dt><dd><span id="distance">—</span><small>m</small></dd></div>
+            <div><dt>相对速度</dt><dd><span id="velocity">—</span><small>m/s</small></dd></div>
+            <div><dt>原始角度</dt><dd><span id="angle">—</span><small>°</small></dd></div>
+            <div><dt>TTC</dt><dd><span id="ttc">—</span><small>s</small></dd></div>
+          </dl>
+          <p class="fusion-note">融合告警 <strong id="fusion-alert">—</strong></p>
+        </article>
+
+        <article class="panel targets-panel">
+          <header class="panel-head">
+            <div><span class="section-label">FRAME TARGETS</span><h2>本帧目标</h2></div>
+            <strong id="object-count">0 TARGETS</strong>
+          </header>
+          <div class="table-wrap compact-table">
+            <table>
+              <thead><tr><th>Obj</th><th>距离</th><th>速度</th><th>方位角</th><th>TTC</th><th>方向</th></tr></thead>
+              <tbody id="targets-body">
+                <tr class="empty-row"><td colspan="6">等待目标数据</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <section class="chart-grid" aria-label="最近 90 秒危险目标动态">
+          <article class="panel chart-card">
+            <header><span>距离 / 90 s</span><strong id="chart-distance-value">— m</strong></header>
+            <canvas id="chart-distance" aria-label="距离实时曲线"></canvas>
+          </article>
+          <article class="panel chart-card">
+            <header><span>速度 / 90 s</span><strong id="chart-velocity-value">— m/s</strong></header>
+            <canvas id="chart-velocity" aria-label="速度实时曲线"></canvas>
+          </article>
+          <article class="panel chart-card">
+            <header><span>方位角 / 90 s</span><strong id="chart-angle-value">— °</strong></header>
+            <canvas id="chart-angle" aria-label="骑行者方位角实时曲线"></canvas>
+          </article>
+          <article class="panel chart-card">
+            <header><span>TTC / 90 s</span><strong id="chart-ttc-value">— s</strong></header>
+            <canvas id="chart-ttc" aria-label="TTC 实时曲线"></canvas>
+          </article>
+        </section>
+      </div>
     </section>
 
-    <section class="chart-section">
-      <div class="section-heading">
-        <div>
-          <p class="section-label">最近 90 秒</p>
-          <h2>危险目标动态</h2>
+    <section id="view-sensors" class="view" role="tabpanel" aria-labelledby="tab-sensors" hidden>
+      <div class="sensor-layout">
+        <div class="sensor-summary">
+          <article class="panel sensor-card sensor-camera">
+            <span class="sensor-code">CAM / NPU</span><strong id="camera-state">等待推理</strong>
+            <p id="camera-detail">尚无摄像头检测日志</p><time id="camera-age">—</time>
+          </article>
+          <article class="panel sensor-card sensor-imu">
+            <span class="sensor-code">M33 / IMU</span><strong id="imu-state">等待事件</strong>
+            <p id="imu-detail">尚无 M 核异常上报</p><time id="imu-age">—</time>
+          </article>
+          <article class="panel sensor-card sensor-sms">
+            <span class="sensor-code">FALL / DELIVERY</span><strong id="sms-state">手机 / SMS 未确认</strong>
+            <p id="sms-detail">当前协议没有 App 或短信回执</p><time id="fall-age">—</time>
+          </article>
         </div>
-        <p>曲线仅跟随每帧选出的当前危险目标</p>
-      </div>
-      <div class="chart-grid">
-        <article class="chart-card">
-          <header><span>距离</span><strong id="chart-distance-value">— m</strong></header>
-          <canvas id="chart-distance" aria-label="距离实时曲线"></canvas>
-        </article>
-        <article class="chart-card">
-          <header><span>速度</span><strong id="chart-velocity-value">— m/s</strong></header>
-          <canvas id="chart-velocity" aria-label="速度实时曲线"></canvas>
-        </article>
-        <article class="chart-card">
-          <header><span>骑行者方位角</span><strong id="chart-angle-value">— °</strong></header>
-          <canvas id="chart-angle" aria-label="骑行者方位角实时曲线"></canvas>
-        </article>
-        <article class="chart-card">
-          <header><span>TTC</span><strong id="chart-ttc-value">— s</strong></header>
-          <canvas id="chart-ttc" aria-label="TTC 实时曲线"></canvas>
-        </article>
+
+        <div id="imu-diagnostic" class="diagnostic-strip" hidden></div>
+
+        <div class="sensor-columns">
+          <div class="sensor-left-column">
+            <article class="panel delivery-panel">
+              <header class="panel-head">
+                <div><span class="section-label">LATEST FALL PATH</span><h2>最近摔倒链路</h2></div>
+                <span id="fall-event-id" class="panel-hint">NO FALL EVENT</span>
+              </header>
+              <div class="delivery-chain" aria-label="摔倒事件投递阶段">
+                <div data-stage="m33"><i></i><span>M33 判断</span><small>等待</small></div>
+                <div data-stage="a35"><i></i><span>A35 接收</span><small>等待</small></div>
+                <div data-stage="hud"><i></i><span>HUD 接收</span><small>等待</small></div>
+                <div data-stage="udp"><i></i><span>App UDP</span><small>等待</small></div>
+                <div data-stage="sms" class="unknown"><i></i><span>手机 / SMS</span><small>无回执</small></div>
+              </div>
+            </article>
+
+            <article class="panel tag-panel">
+              <header class="panel-head">
+                <div><span class="section-label">MANUAL LABEL</span><h2>测试事件打点</h2></div>
+                <span class="panel-hint">写入 labels.csv</span>
+              </header>
+              <div id="event-list" class="event-list"></div>
+            </article>
+          </div>
+
+          <article class="panel timeline-panel">
+            <header class="panel-head">
+              <div><span class="section-label">EVENT RAIL</span><h2>跨传感器关键事件</h2></div>
+              <span class="panel-hint">最新在上 · 2 s</span>
+            </header>
+            <div id="timeline-list" class="timeline-list">
+              <p class="timeline-empty">等待 sensor_events.csv 与雷达数据</p>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
 
-    <section class="sensor-section" aria-label="多传感器同步状态">
-      <div class="section-heading">
-        <div>
-          <p class="section-label">RADAR · CAMERA/NPU · M33 IMU</p>
-          <h2>同步观测与摔倒投递链</h2>
+    <section id="view-system" class="view" role="tabpanel" aria-labelledby="tab-system" hidden>
+      <div class="system-layout">
+        <section class="resource-strip" aria-label="CPU和资源摘要">
+          <article class="resource-cell accent"><span>CPU</span><strong id="cpu-usage">—</strong><small>当前占用</small></article>
+          <article class="resource-cell"><span>FREQ</span><strong id="cpu-frequency">—</strong><small>MHz</small></article>
+          <article class="resource-cell"><span>LOAD 1M</span><strong id="cpu-load">—</strong><small id="cpu-count">— cores</small></article>
+          <article class="resource-cell"><span>MEMORY</span><strong id="memory-usage">—</strong><small id="memory-detail">—</small></article>
+          <article class="resource-cell"><span>THERMAL</span><strong id="cpu-temperature">—</strong><small id="temperature-source">—</small></article>
+          <article class="resource-cell"><span>UPTIME</span><strong id="system-uptime">—</strong><small>本次启动</small></article>
+        </section>
+
+        <div class="system-columns">
+          <article class="panel service-panel">
+            <header class="panel-head">
+              <div><span class="section-label">SYSTEMD UNITS</span><h2>关键服务</h2></div>
+              <span id="service-summary" class="panel-hint">等待采样</span>
+            </header>
+            <div id="service-list" class="service-list"></div>
+          </article>
+
+          <article class="panel process-panel">
+            <header class="panel-head">
+              <div><span class="section-label">RUNTIME TASKS</span><h2>关键进程任务</h2></div>
+              <span class="panel-hint">CPU / RSS</span>
+            </header>
+            <div class="table-wrap">
+              <table class="process-table">
+                <thead><tr><th>任务</th><th>PID</th><th>状态</th><th>CPU</th><th>内存</th></tr></thead>
+                <tbody id="process-body"><tr class="empty-row"><td colspan="5">等待系统采样</td></tr></tbody>
+              </table>
+            </div>
+          </article>
         </div>
-        <p>所有记录共用 Unix 毫秒时间戳，可与 labels.csv 对齐</p>
+
+        <section class="health-rail">
+          <div><span>REMOTE CORE</span><strong id="remoteproc-state">—</strong></div>
+          <div><span>RPMSG</span><strong id="device-rpmsg">—</strong></div>
+          <div><span>RADAR UART</span><strong id="device-radar">—</strong></div>
+          <div><span>BLE UART</span><strong id="device-ble">—</strong></div>
+          <div><span>CAMERA</span><strong id="device-camera">—</strong></div>
+          <div><span>TF STORAGE</span><strong id="storage-state">—</strong><small id="storage-detail">—</small></div>
+          <time id="system-updated">等待低频采样</time>
+        </section>
       </div>
-
-      <div class="sensor-summary">
-        <article class="sensor-card sensor-camera">
-          <span class="sensor-code">CAM / NPU</span>
-          <strong id="camera-state">等待推理</strong>
-          <p id="camera-detail">尚无摄像头检测日志</p>
-          <time id="camera-age">—</time>
-        </article>
-        <article class="sensor-card sensor-imu">
-          <span class="sensor-code">M33 / IMU</span>
-          <strong id="imu-state">等待事件</strong>
-          <p id="imu-detail">尚无 M 核异常上报</p>
-          <time id="imu-age">—</time>
-        </article>
-        <article class="sensor-card sensor-sms">
-          <span class="sensor-code">FALL / DELIVERY</span>
-          <strong id="sms-state">手机 / SMS 未确认</strong>
-          <p id="sms-detail">当前协议没有 App 或短信回执</p>
-          <time id="fall-age">—</time>
-        </article>
-      </div>
-
-      <div id="imu-diagnostic" class="diagnostic-strip" hidden></div>
-
-      <article class="delivery-panel">
-        <div class="delivery-head">
-          <div>
-            <span class="sensor-code">LATEST FALL PATH</span>
-            <strong>最近一次摔倒链路</strong>
-          </div>
-          <span id="fall-event-id">NO FALL EVENT</span>
-        </div>
-        <div class="delivery-chain" aria-label="摔倒事件投递阶段">
-          <div data-stage="m33"><i></i><span>M33 判断</span><small>等待</small></div>
-          <div data-stage="a35"><i></i><span>A35 接收</span><small>等待</small></div>
-          <div data-stage="hud"><i></i><span>HUD 接收</span><small>等待</small></div>
-          <div data-stage="udp"><i></i><span>App UDP 广播</span><small>等待</small></div>
-          <div data-stage="sms" class="unknown"><i></i><span>手机 / SMS</span><small>无回执</small></div>
-        </div>
-      </article>
-
-      <article class="timeline-panel">
-        <div class="timeline-head">
-          <div>
-            <span class="sensor-code">SYNCHRONIZED EVENT RAIL</span>
-            <strong>跨传感器事件时间线</strong>
-          </div>
-          <span>最新在上 · 自动刷新</span>
-        </div>
-        <div id="timeline-list" class="timeline-list">
-          <p class="timeline-empty">等待 sensor_events.csv 与雷达数据</p>
-        </div>
-      </article>
     </section>
 
-    <section class="experiment-grid">
-      <article class="tag-panel">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">人工标注 · labels.csv</p>
-            <h2>测试事件打点</h2>
-          </div>
-          <p>事件发生前点“开始”，完成后点“结束”</p>
-        </div>
-        <div id="event-list" class="event-list"></div>
-      </article>
+    <section id="view-boot" class="view" role="tabpanel" aria-labelledby="tab-boot" hidden>
+      <div class="boot-layout">
+        <header class="boot-summary panel">
+          <div><span class="section-label">CURRENT BOOT</span><h2>本次启动关键时间</h2></div>
+          <p id="boot-summary">等待 systemd 与应用单调时钟</p>
+          <div><span>BOOT ID</span><code id="boot-id">—</code></div>
+        </header>
 
-      <article class="targets-panel">
-        <div class="section-heading">
+        <section id="milestone-list" class="milestone-grid" aria-label="启动里程碑"></section>
+
+        <div class="timing-columns">
+          <article class="panel runtime-event-panel">
+            <header class="panel-head">
+              <div><span class="section-label">AFTER READY</span><h2>启动后的关键事件</h2></div>
+              <span class="panel-hint">事件时刻 · 开机后时间</span>
+            </header>
+            <div id="runtime-event-list" class="runtime-event-list">
+              <p class="timeline-empty">本次启动后暂无关键业务事件</p>
+            </div>
+          </article>
+
+          <article class="panel boot-log-panel">
+            <header class="panel-head">
+              <div><span class="section-label">BOOT LOG</span><h2>启动与异常日志</h2></div>
+              <span class="panel-hint">启动信息缓存 60 s</span>
+            </header>
+            <div id="boot-log-list" class="boot-log-list">
+              <p class="timeline-empty">等待日志快照</p>
+            </div>
+          </article>
+        </div>
+        <time id="boot-updated" class="boot-updated">尚未采集</time>
+      </div>
+    </section>
+
+    <section id="view-control" class="view" role="tabpanel" aria-labelledby="tab-control" hidden>
+      <div class="control-layout">
+        <header class="panel control-guard">
           <div>
-            <p class="section-label">本帧全部目标</p>
-            <h2>ObjId 列表</h2>
+            <span class="section-label">ALWAYS-ON CONTROL PLANE</span>
+            <h2>任务控制台</h2>
           </div>
-          <strong id="object-count">0 TARGETS</strong>
+          <p>暂停融合业务会停止雷达、摄像头、NPU 与 HUD；控制面板、M33 和网络保持运行。</p>
+          <strong id="control-plane-state" class="guard-state waiting">检查独立面板服务</strong>
+        </header>
+
+        <div class="control-columns">
+          <article class="panel control-panel">
+            <header class="panel-head">
+              <div><span class="section-label">OPERATOR TASKS</span><h2>可控制任务</h2></div>
+              <span class="panel-hint">运行 / 暂停 · 二次确认</span>
+            </header>
+            <div id="controllable-task-list" class="control-task-list">
+              <p class="timeline-empty">等待任务状态</p>
+            </div>
+          </article>
+
+          <article class="panel protected-panel">
+            <header class="panel-head">
+              <div><span class="section-label">SAFETY BOUNDARY</span><h2>受保护基础服务</h2></div>
+              <span class="panel-hint">只读 · 禁止远程暂停</span>
+            </header>
+            <div id="protected-task-list" class="protected-task-list"></div>
+          </article>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Obj</th><th>距离</th><th>速度</th><th>方位角</th><th>TTC</th><th>方向</th></tr>
-            </thead>
-            <tbody id="targets-body">
-              <tr class="empty-row"><td colspan="6">等待目标数据</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </article>
+
+        <article class="panel control-audit-panel">
+          <header class="panel-head">
+            <div><span class="section-label">CONTROL AUDIT</span><h2>最近控制记录</h2></div>
+            <time id="control-updated">尚未采样</time>
+          </header>
+          <div id="control-audit-list" class="control-audit-list">
+            <p class="timeline-empty">尚无控制操作</p>
+          </div>
+        </article>
+      </div>
     </section>
   </main>
+
+  <dialog id="control-dialog" class="control-dialog">
+    <form method="dialog">
+      <span class="section-label">CONFIRM TASK CONTROL</span>
+      <h2 id="control-dialog-title">确认任务操作</h2>
+      <p id="control-dialog-message"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="dialog-cancel">取消</button>
+        <button value="confirm" id="control-dialog-confirm" class="dialog-confirm">确认</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/app.js" defer></script>

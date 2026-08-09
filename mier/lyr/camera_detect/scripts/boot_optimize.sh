@@ -17,11 +17,15 @@ STATE_FILE="${STATE_DIR}/service-states.tsv"
 UNIT_BACKUP="${STATE_DIR}/dvr.service.before"
 M33_UNIT_BACKUP="${STATE_DIR}/dvr-m33.service.before"
 M33_UNIT_MARKER="${STATE_DIR}/dvr-m33-unit-was-absent"
+DNSMASQ_OVERRIDE_BACKUP="${STATE_DIR}/dnsmasq-override.before"
+DNSMASQ_OVERRIDE_MARKER="${STATE_DIR}/dnsmasq-override-was-absent"
 PROJECT_DIR="/xxl/camera_detect"
 UNIT_SOURCE="${PROJECT_DIR}/dvr.service.example"
 UNIT_TARGET="/etc/systemd/system/dvr.service"
 M33_UNIT_SOURCE="${PROJECT_DIR}/dvr-m33.service.example"
 M33_UNIT_TARGET="/etc/systemd/system/dvr-m33.service"
+DNSMASQ_OVERRIDE_SOURCE="${PROJECT_DIR}/dnsmasq.service.override.example"
+DNSMASQ_OVERRIDE_TARGET="/etc/systemd/system/dnsmasq.service.d/override.conf"
 
 # 保留 WiFi AP、DNS/DHCP、网络、音频、TF 卡、OP-TEE、M33、日志和本项目服务。
 # 下列均为当前骑行辅助产品不使用的桌面、监控、SNMP、蓝牙、TSN 或调试服务。
@@ -45,6 +49,7 @@ mstpd.service
 kdump.service
 rpcbind.service
 st-m33firmware-load.service
+iiod.service
 "
 
 require_root() {
@@ -76,6 +81,21 @@ save_state_once() {
     mkdir -p "$STATE_DIR"
     [ -f "$STATE_FILE" ] || : > "$STATE_FILE"
     for unit in $OPTIONAL_SERVICES; do
+        if [ "$unit" = "iiod.service" ]; then
+            # 厂商单元错误地声明 Alias=iiod.service（与自身同名），因此
+            # systemctl is-enabled/disable 会报告 bad/refuse。直接按唯一的
+            # multi-user wants 链接记录真实状态。
+            iiod_state="disabled"
+            [ ! -L /etc/systemd/system/multi-user.target.wants/iiod.service ] ||
+                iiod_state="enabled"
+            if grep -q '^iiod.service[[:space:]]not-found$' "$STATE_FILE"; then
+                sed -i "s/^iiod.service[[:space:]]not-found$/iiod.service\t${iiod_state}/" \
+                    "$STATE_FILE"
+            elif ! grep -q '^iiod.service[[:space:]]' "$STATE_FILE"; then
+                printf "%s\t%s\n" "$unit" "$iiod_state" >> "$STATE_FILE"
+            fi
+            continue
+        fi
         if ! grep -q "^${unit}[[:space:]]" "$STATE_FILE"; then
             state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
             [ -n "$state" ] || state="not-found"
@@ -92,6 +112,14 @@ save_state_once() {
             : > "$M33_UNIT_MARKER"
         fi
     fi
+    if [ ! -e "$DNSMASQ_OVERRIDE_BACKUP" ] &&
+       [ ! -e "$DNSMASQ_OVERRIDE_MARKER" ]; then
+        if [ -f "$DNSMASQ_OVERRIDE_TARGET" ]; then
+            cp -a "$DNSMASQ_OVERRIDE_TARGET" "$DNSMASQ_OVERRIDE_BACKUP"
+        else
+            : > "$DNSMASQ_OVERRIDE_MARKER"
+        fi
+    fi
 }
 
 apply_optimization() {
@@ -104,13 +132,24 @@ apply_optimization() {
         echo "M33 unit template not found: $M33_UNIT_SOURCE" >&2
         exit 1
     }
+    [ -f "$DNSMASQ_OVERRIDE_SOURCE" ] || {
+        echo "dnsmasq override template not found: $DNSMASQ_OVERRIDE_SOURCE" >&2
+        exit 1
+    }
 
     save_state_once
     install -m 0644 "$UNIT_SOURCE" "$UNIT_TARGET"
     install -m 0644 "$M33_UNIT_SOURCE" "$M33_UNIT_TARGET"
+    mkdir -p "$(dirname "$DNSMASQ_OVERRIDE_TARGET")"
+    install -m 0644 "$DNSMASQ_OVERRIDE_SOURCE" "$DNSMASQ_OVERRIDE_TARGET"
 
     for unit in $OPTIONAL_SERVICES; do
-        if [ "$unit" = "st-m33firmware-load.service" ]; then
+        if [ "$unit" = "iiod.service" ]; then
+            systemctl stop "$unit" >/dev/null 2>&1 || true
+            if [ -L /etc/systemd/system/multi-user.target.wants/iiod.service ]; then
+                rm -f /etc/systemd/system/multi-user.target.wants/iiod.service
+            fi
+        elif [ "$unit" = "st-m33firmware-load.service" ]; then
             # 不在运行中的系统上调用厂商单元 ExecStop，避免它误停项目 M33；
             # 只移除下次启动的 symlink。
             systemctl disable "$unit" >/dev/null 2>&1 || true
@@ -143,10 +182,27 @@ rollback_optimization() {
     elif [ -f "$M33_UNIT_MARKER" ]; then
         rm -f "$M33_UNIT_TARGET"
     fi
+    if [ -f "$DNSMASQ_OVERRIDE_BACKUP" ]; then
+        cp -a "$DNSMASQ_OVERRIDE_BACKUP" "$DNSMASQ_OVERRIDE_TARGET"
+    elif [ -f "$DNSMASQ_OVERRIDE_MARKER" ]; then
+        rm -f "$DNSMASQ_OVERRIDE_TARGET"
+    fi
     systemctl disable dvr-m33.service >/dev/null 2>&1 || true
 
     if [ -f "$STATE_FILE" ]; then
         while IFS="$(printf '\t')" read -r unit state; do
+            if [ "$unit" = "iiod.service" ]; then
+                case "$state" in
+                    enabled|enabled-runtime|linked|linked-runtime|alias)
+                        ln -sf /usr/lib/systemd/system/iiod.service \
+                            /etc/systemd/system/multi-user.target.wants/iiod.service
+                        ;;
+                    disabled|masked|masked-runtime)
+                        rm -f /etc/systemd/system/multi-user.target.wants/iiod.service
+                        ;;
+                esac
+                continue
+            fi
             case "$state" in
                 enabled|enabled-runtime|linked|linked-runtime|alias)
                     systemctl enable "$unit" >/dev/null 2>&1 || true

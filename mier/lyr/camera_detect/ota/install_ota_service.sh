@@ -13,7 +13,8 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-for name in helmet_ota_common.py helmet_ota_installer.py helmet_ota_server.py helmet-ota.service.example; do
+for name in helmet_ota_common.py helmet_ota_installer.py helmet_ota_server.py \
+    helmet_ota_recover_if_needed.sh helmet-ota.service.example; do
     if [ ! -f "${SOURCE_DIR}/${name}" ]; then
         echo "missing OTA service file: ${SOURCE_DIR}/${name}" >&2
         exit 1
@@ -25,6 +26,8 @@ install -d -m 0750 "$STATE_DIR" "${STATE_DIR}/uploads"
 install -m 0644 "${SOURCE_DIR}/helmet_ota_common.py" "${INSTALL_DIR}/helmet_ota_common.py"
 install -m 0755 "${SOURCE_DIR}/helmet_ota_installer.py" "${INSTALL_DIR}/helmet_ota_installer.py"
 install -m 0755 "${SOURCE_DIR}/helmet_ota_server.py" "${INSTALL_DIR}/helmet_ota_server.py"
+install -m 0755 "${SOURCE_DIR}/helmet_ota_recover_if_needed.sh" \
+    "${INSTALL_DIR}/helmet_ota_recover_if_needed.sh"
 install -m 0644 "${SOURCE_DIR}/helmet-ota.service.example" "${UNIT_DIR}/helmet-ota.service"
 
 cat > "${INSTALL_DIR}/README" <<'EOF'

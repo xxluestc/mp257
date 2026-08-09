@@ -1,0 +1,6 @@
+[Unit]
+# DHCP/DNS 只需要产品 WiFi AP 已创建，不等待所有 networkd 链路和 IPv6LL。
+After=
+Wants=
+After=network.target hostapd.service
+Wants=hostapd.service

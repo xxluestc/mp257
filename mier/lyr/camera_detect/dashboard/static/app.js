@@ -20,13 +20,65 @@ let activeLabels = {};
 let lastSampleTimestamp = null;
 let toastTimer = null;
 let latestEventPayload = null;
+let activeView = "radar";
+let statePolling = false;
+let eventsPolling = false;
+let systemPolling = false;
+let bootPolling = false;
+let controlPolling = false;
+let controlToken = "";
+let pendingControl = null;
 
 const charts = [
-  { key: "distance", canvas: $("chart-distance"), color: "#31c7bc", unit: "m" },
-  { key: "velocity", canvas: $("chart-velocity"), color: "#6f97ff", unit: "m/s" },
-  { key: "angle", canvas: $("chart-angle"), color: "#ffb84d", unit: "°" },
-  { key: "ttc", canvas: $("chart-ttc"), color: "#ff5f58", unit: "s" },
+  { key: "distance", canvas: $("chart-distance"), color: "#087f73", unit: "m" },
+  { key: "velocity", canvas: $("chart-velocity"), color: "#315fc0", unit: "m/s" },
+  { key: "angle", canvas: $("chart-angle"), color: "#9a5600", unit: "°" },
+  { key: "ttc", canvas: $("chart-ttc"), color: "#c63a34", unit: "s" },
 ];
+
+function activateView(name, moveFocus = false) {
+  const nextView = document.querySelector(`#view-${name}`);
+  const nextTab = document.querySelector(`[data-view="${name}"]`);
+  if (!nextView || !nextTab) return;
+  activeView = name;
+  for (const tab of document.querySelectorAll(".mode-tab")) {
+    const selected = tab === nextTab;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const view of document.querySelectorAll(".view")) {
+    const selected = view === nextView;
+    view.hidden = !selected;
+    view.classList.toggle("active", selected);
+  }
+  if (moveFocus) nextTab.focus();
+  if (name === "radar") window.requestAnimationFrame(() => charts.forEach(drawChart));
+  if (name === "sensors") pollEvents();
+  if (name === "system") pollSystem();
+  if (name === "boot") pollBoot();
+  if (name === "control") pollControl();
+  window.history.replaceState(null, "", `#${name}`);
+}
+
+function bindTabs() {
+  const tabs = [...document.querySelectorAll(".mode-tab")];
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activateView(tab.dataset.view));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      let target = index;
+      if (event.key === "ArrowLeft") target = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === "ArrowRight") target = (index + 1) % tabs.length;
+      if (event.key === "Home") target = 0;
+      if (event.key === "End") target = tabs.length - 1;
+      activateView(tabs[target].dataset.view, true);
+    });
+  });
+  const requested = window.location.hash.slice(1);
+  activateView(["radar", "sensors", "system", "boot", "control"].includes(requested) ? requested : "radar");
+}
 
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -256,7 +308,7 @@ function drawChart(chart) {
   const numeric = values.filter(finite);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.strokeStyle = "rgba(130,147,155,.18)";
+  ctx.strokeStyle = "rgba(61,88,101,.16)";
   ctx.lineWidth = 1;
   for (let line = 1; line < 4; line += 1) {
     const y = pad.top + ((height - pad.top - pad.bottom) * line) / 4;
@@ -303,7 +355,7 @@ function drawChart(chart) {
 }
 
 function renderState(state) {
-  $("app-version").textContent = state.app_version || "unknown";
+  $("system-version").textContent = state.system_version || state.app_version || "unknown";
   const online = !state.stale;
   const chip = $("connection-chip");
   chip.className = `status-chip ${online ? "status-online" : "status-offline"}`;
@@ -368,6 +420,7 @@ function sourceName(source) {
     a35_hud: "A35→HUD",
     hud_delivery: "HUD→APP",
     manual_label: "LABEL",
+    control: "CONTROL",
   })[source] || String(source || "EVENT").toUpperCase();
 }
 
@@ -383,6 +436,10 @@ function eventSummary(event) {
   if (event.source === "radar") return `${event.label} · ${event.reason || "UNKNOWN"}`;
   if (event.source === "manual_label") return `${event.label} · ${event.status}`;
   if (event.source === "hud_delivery") return `${event.label} · ${event.status}`;
+  if (event.source === "control") {
+    const action = event.reason === "pause" ? "暂停" : "运行";
+    return `${event.label} · ${action} · ${event.status}`;
+  }
   return `${event.event_type}${event.reason ? ` · ${event.reason}` : ""}`;
 }
 
@@ -395,7 +452,7 @@ function renderTimeline(events) {
     const cap = event.source === "camera_npu" ? 12 : event.source === "radar" ? 10 : 30;
     sourceCounts[event.source] = (sourceCounts[event.source] || 0) + 1;
     if (sourceCounts[event.source] <= cap) selected.push(event);
-    if (selected.length >= 48) break;
+    if (selected.length >= 6) break;
   }
   if (!selected.length) {
     list.innerHTML = '<p class="timeline-empty">暂无同步事件</p>';
@@ -471,17 +528,322 @@ function renderSensorEvents(payload) {
   renderTimeline(payload.events);
 }
 
+function percentText(value) {
+  return finite(value) ? `${value.toFixed(1)}%` : "采样中";
+}
+
+function uptimeText(seconds) {
+  const value = Math.max(0, Number(seconds || 0));
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function setHealthValue(id, ok, onlineText = "READY", offlineText = "MISSING") {
+  const element = $(id);
+  element.textContent = ok ? onlineText : offlineText;
+  element.classList.toggle("bad", !ok);
+}
+
+function renderSystem(payload) {
+  const cpu = payload.cpu || {};
+  const memory = payload.memory || {};
+  const temperature = payload.temperature || {};
+  const storage = payload.storage || {};
+  $("cpu-usage").textContent = percentText(cpu.usage_percent);
+  $("cpu-frequency").textContent = finite(cpu.frequency_mhz) ? Math.round(cpu.frequency_mhz) : "—";
+  $("cpu-load").textContent = finite(cpu.load_1m) ? cpu.load_1m.toFixed(2) : "—";
+  $("cpu-count").textContent = `${cpu.count || "—"} cores · 5m ${finite(cpu.load_5m) ? cpu.load_5m.toFixed(2) : "—"}`;
+  $("memory-usage").textContent = percentText(memory.used_percent);
+  $("memory-detail").textContent = `${memory.used_mib ?? "—"} / ${memory.total_mib ?? "—"} MiB`;
+  $("cpu-temperature").textContent = finite(temperature.celsius) ? `${temperature.celsius.toFixed(1)}°` : "—";
+  $("temperature-source").textContent = temperature.source || "unavailable";
+  $("system-uptime").textContent = uptimeText(payload.uptime_s);
+
+  const services = payload.services || [];
+  const serviceList = $("service-list");
+  serviceList.innerHTML = "";
+  let activeCount = 0;
+  for (const service of services) {
+    const ok = service.active === "active";
+    if (ok) activeCount += 1;
+    const row = document.createElement("div");
+    row.className = `service-row ${ok ? "ok" : "bad"}`;
+    const dot = document.createElement("i");
+    dot.className = "health-dot";
+    const name = document.createElement("strong");
+    name.textContent = service.name;
+    const role = document.createElement("span");
+    role.textContent = service.role;
+    const status = document.createElement("code");
+    const started = finite(service.started_at_boot_s) ? ` · +${service.started_at_boot_s.toFixed(1)}s` : "";
+    const restarts = service.restarts ? ` · restart ${service.restarts}` : "";
+    status.textContent = `${service.active}/${service.sub}${started}${restarts}`;
+    row.append(dot, name, role, status);
+    serviceList.append(row);
+  }
+  $("service-summary").textContent = `${activeCount}/${services.length || 0} ACTIVE`;
+
+  const stateNames = { R: "运行", S: "休眠", D: "I/O等待", T: "停止", Z: "僵尸" };
+  const processBody = $("process-body");
+  processBody.innerHTML = "";
+  for (const process of payload.processes || []) {
+    const row = document.createElement("tr");
+    const missing = !process.pid;
+    if (missing) row.className = "missing";
+    const values = [
+      process.name,
+      process.pid ?? "—",
+      missing ? "未运行" : (stateNames[process.state] || process.state),
+      missing ? "—" : `${Number(process.cpu_percent || 0).toFixed(1)}%`,
+      missing ? "—" : `${Number(process.rss_mib || 0).toFixed(1)} MiB`,
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    processBody.append(row);
+  }
+
+  const devices = payload.devices || {};
+  setHealthValue("remoteproc-state", payload.remoteproc === "running", String(payload.remoteproc || "unknown").toUpperCase());
+  setHealthValue("device-rpmsg", devices.rpmsg);
+  setHealthValue("device-radar", devices.radar_uart);
+  setHealthValue("device-ble", devices.ble_uart);
+  setHealthValue("device-camera", devices.camera);
+  setHealthValue("storage-state", storage.mounted, storage.mounted ? percentText(storage.used_percent) : "UNMOUNTED");
+  $("storage-detail").textContent = storage.mounted
+    ? `${storage.used_gib ?? "—"}/${storage.total_gib ?? "—"} GiB`
+    : "TF unavailable";
+  $("system-updated").textContent = `系统采样 ${new Date(payload.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })} · ${payload.refresh_interval_s || 5}s`;
+}
+
+function renderBoot(payload) {
+  $("boot-summary").textContent = payload.systemd_time || "systemd 启动时间不可用";
+  $("boot-id").textContent = payload.boot_id || "—";
+  const milestones = $("milestone-list");
+  milestones.innerHTML = "";
+  for (const item of payload.milestones || []) {
+    const card = document.createElement("article");
+    card.className = `milestone-card${item.ready ? " ready" : ""}`;
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    const value = document.createElement("strong");
+    value.textContent = item.ready ? Number(item.time_s).toFixed(3) : "—";
+    if (item.ready) {
+      const unit = document.createElement("small");
+      unit.textContent = " s";
+      value.append(unit);
+    }
+    card.append(label, value);
+    milestones.append(card);
+  }
+
+  const runtimeEvents = $("runtime-event-list");
+  runtimeEvents.innerHTML = "";
+  const critical = (payload.runtime_events || []).slice(0, 6);
+  if (!critical.length) {
+    runtimeEvents.innerHTML = '<p class="timeline-empty">本次启动后暂无关键业务事件</p>';
+  } else {
+    for (const event of critical) {
+      const row = document.createElement("article");
+      row.className = `runtime-event-row source-${event.source}`;
+      const timing = document.createElement("time");
+      const wall = document.createElement("strong");
+      wall.textContent = new Date(event.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false });
+      const sinceBoot = document.createElement("small");
+      sinceBoot.textContent = `开机后 +${Number(event.since_boot_s).toFixed(3)} s`;
+      timing.append(wall, sinceBoot);
+      const content = document.createElement("div");
+      const source = document.createElement("span");
+      source.textContent = sourceName(event.source);
+      const summary = document.createElement("strong");
+      summary.textContent = eventSummary(event);
+      const detail = document.createElement("small");
+      detail.textContent = event.details || `event=${event.event_type}`;
+      content.append(source, summary, detail);
+      row.append(timing, content);
+      runtimeEvents.append(row);
+    }
+  }
+
+  const logs = $("boot-log-list");
+  logs.innerHTML = "";
+  const selected = (payload.logs || []).slice(0, 6);
+  if (!selected.length) {
+    logs.innerHTML = '<p class="timeline-empty">本次启动暂无关键日志</p>';
+  } else {
+    for (const entry of selected) {
+      const row = document.createElement("div");
+      const warning = /error|failed|warning|错误|失败|警告/i.test(entry.message);
+      row.className = `boot-log-row${warning ? " warn" : ""}`;
+      const time = document.createElement("time");
+      time.textContent = `+${Number(entry.time_s).toFixed(3)}s`;
+      const message = document.createElement("code");
+      message.textContent = entry.message;
+      message.title = entry.message;
+      row.append(time, message);
+      logs.append(row);
+    }
+  }
+  $("boot-updated").textContent = `关键事件 ${payload.event_refresh_interval_s || 10}s · 启动信息缓存 ${payload.refresh_interval_s || 60}s`;
+}
+
+function stateLabel(task) {
+  if (task.active === "active") return "运行中";
+  if (task.active === "inactive") return "已暂停";
+  if (task.active === "failed") return "异常";
+  return `${task.active || "unknown"} / ${task.sub || "unknown"}`;
+}
+
+function requestControl(task, action) {
+  const dialog = $("control-dialog");
+  pendingControl = { task: task.key, action, name: task.name };
+  const running = action === "run";
+  $("control-dialog-title").textContent = `${running ? "运行" : "暂停"}${task.name}？`;
+  $("control-dialog-message").textContent = task.key === "dvr" && !running
+    ? "融合业务暂停后，雷达、摄像头、NPU 与 HUD 将停止；控制面板、M33 和网络保持在线。"
+    : `${task.name}将执行 systemd ${running ? "start" : "stop"}，操作会写入控制审计。`;
+  $("control-dialog-confirm").textContent = running ? "确认运行" : "确认暂停";
+  $("control-dialog-confirm").classList.toggle("danger", !running);
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else if (window.confirm($("control-dialog-message").textContent)) {
+    performControl();
+  }
+}
+
+function renderControl(payload) {
+  controlToken = payload.control_token || "";
+  const guard = $("control-plane-state");
+  guard.className = `guard-state ${payload.controls_enabled ? "online" : "blocked"}`;
+  guard.textContent = payload.controls_enabled
+    ? "独立面板服务在线 · 控制已解锁"
+    : "独立面板服务未就绪 · 控制已锁定";
+
+  const tasks = $("controllable-task-list");
+  tasks.innerHTML = "";
+  for (const task of payload.tasks || []) {
+    const row = document.createElement("article");
+    const running = task.active === "active";
+    row.className = `control-task ${running ? "running" : task.active === "failed" ? "failed" : "paused"}`;
+    const indicator = document.createElement("i");
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = task.name;
+    const role = document.createElement("span");
+    role.textContent = task.role;
+    const unit = document.createElement("code");
+    unit.textContent = `${task.unit} · ${stateLabel(task)}${task.pid ? ` · PID ${task.pid}` : ""}`;
+    copy.append(name, role, unit);
+    const button = document.createElement("button");
+    const action = running ? "pause" : "run";
+    button.className = `task-control-button ${running ? "pause" : "run"}`;
+    button.textContent = running ? "暂停任务" : "运行任务";
+    button.disabled = !payload.controls_enabled;
+    button.addEventListener("click", () => requestControl(task, action));
+    row.append(indicator, copy, button);
+    tasks.append(row);
+  }
+
+  const protectedTasks = $("protected-task-list");
+  protectedTasks.innerHTML = "";
+  for (const task of payload.protected || []) {
+    const row = document.createElement("article");
+    row.className = `protected-task ${task.active === "active" ? "online" : "offline"}`;
+    const dot = document.createElement("i");
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = task.name;
+    const role = document.createElement("span");
+    role.textContent = task.role;
+    copy.append(name, role);
+    const state = document.createElement("code");
+    state.textContent = stateLabel(task);
+    row.append(dot, copy, state);
+    protectedTasks.append(row);
+  }
+
+  const audit = $("control-audit-list");
+  audit.innerHTML = "";
+  if (!(payload.audit || []).length) {
+    audit.innerHTML = '<p class="timeline-empty">尚无控制操作</p>';
+  } else {
+    for (const entry of payload.audit.slice(0, 4)) {
+      const row = document.createElement("article");
+      row.className = `control-audit-row ${entry.result === "ok" ? "ok" : "failed"}`;
+      const time = document.createElement("time");
+      time.textContent = new Date(Number(entry.timestamp_ms)).toLocaleTimeString("zh-CN", { hour12: false });
+      const detail = document.createElement("span");
+      detail.textContent = `${entry.task_name} · ${entry.action === "pause" ? "暂停" : "运行"}`;
+      const result = document.createElement("strong");
+      result.textContent = entry.result === "ok" ? "成功" : "失败";
+      row.append(time, detail, result);
+      audit.append(row);
+    }
+  }
+  $("control-updated").textContent = `状态采样 ${new Date(payload.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false })}`;
+}
+
+async function performControl() {
+  const request = pendingControl;
+  pendingControl = null;
+  if (!request) return;
+  try {
+    const response = await fetch("/api/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: request.task,
+        action: request.action,
+        confirmation: `${request.task}:${request.action}`,
+        control_token: controlToken,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    showToast(`${request.name}${request.action === "pause" ? "已暂停" : "已运行"}`);
+    await pollControl();
+    pollSystem();
+    pollBoot();
+  } catch (error) {
+    showToast(`控制失败：${error.message}`, true);
+    pollControl();
+  }
+}
+
+function bindControlDialog() {
+  $("control-dialog-confirm").addEventListener("click", (event) => {
+    event.preventDefault();
+    $("control-dialog").close("confirm");
+    performControl();
+  });
+  $("control-dialog").addEventListener("close", () => {
+    if ($("control-dialog").returnValue === "cancel") pendingControl = null;
+  });
+}
+
 async function pollEvents() {
+  if (eventsPolling || document.hidden) return;
+  eventsPolling = true;
   try {
     const response = await fetch("/api/events?limit=160", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     renderSensorEvents(await response.json());
   } catch (_) {
     $("camera-state").textContent = "同步接口断开";
+  } finally {
+    eventsPolling = false;
   }
 }
 
 async function pollState() {
+  if (statePolling || document.hidden) return;
+  statePolling = true;
   try {
     const response = await fetch("/api/state", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -490,13 +852,82 @@ async function pollState() {
     const chip = $("connection-chip");
     chip.className = "status-chip status-offline";
     chip.querySelector("span").textContent = "Dashboard 连接中断";
+  } finally {
+    statePolling = false;
   }
 }
 
+async function pollSystem() {
+  if (systemPolling || document.hidden) return;
+  systemPolling = true;
+  try {
+    const response = await fetch("/api/system", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderSystem(await response.json());
+  } catch (_) {
+    $("service-summary").textContent = "SYSTEM API OFFLINE";
+  } finally {
+    systemPolling = false;
+  }
+}
+
+async function pollBoot() {
+  if (bootPolling || document.hidden) return;
+  bootPolling = true;
+  try {
+    const response = await fetch("/api/boot", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderBoot(await response.json());
+  } catch (_) {
+    $("boot-summary").textContent = "关键时间接口暂不可用";
+  } finally {
+    bootPolling = false;
+  }
+}
+
+async function pollControl() {
+  if (controlPolling || document.hidden) return;
+  controlPolling = true;
+  try {
+    const response = await fetch("/api/control", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderControl(await response.json());
+  } catch (_) {
+    const guard = $("control-plane-state");
+    guard.className = "guard-state blocked";
+    guard.textContent = "控制接口不可用";
+  } finally {
+    controlPolling = false;
+  }
+}
+
+bindTabs();
+bindControlDialog();
 renderEvents();
 pollState();
-pollEvents();
 window.setInterval(pollState, 500);
-window.setInterval(pollEvents, 1000);
-window.setInterval(updateEventTimers, 250);
-window.addEventListener("resize", () => charts.forEach(drawChart));
+window.setInterval(() => {
+  if (activeView === "sensors") pollEvents();
+}, 2000);
+window.setInterval(() => {
+  if (activeView === "system") pollSystem();
+}, 5000);
+window.setInterval(() => {
+  if (activeView === "boot") pollBoot();
+}, 10000);
+window.setInterval(() => {
+  if (activeView === "control") pollControl();
+}, 5000);
+window.setInterval(updateEventTimers, 500);
+window.addEventListener("resize", () => {
+  if (activeView === "radar") charts.forEach(drawChart);
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    pollState();
+    if (activeView === "sensors") pollEvents();
+    if (activeView === "system") pollSystem();
+    if (activeView === "boot") pollBoot();
+    if (activeView === "control") pollControl();
+  }
+});

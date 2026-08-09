@@ -18,7 +18,7 @@
 
 1. 按父 PID 结束日志过滤子进程；
 2. 有界等待并回收过滤子 shell；
-3. 清理 HUD、Dashboard、日志维护和 M33；
+3. 清理 HUD 和日志维护；独立 Dashboard 不随融合业务退出；
 4. 主脚本以非零状态退出；
 5. systemd 根据 `Restart=on-failure` 在 5 秒后重启完整业务。
 
@@ -55,6 +55,10 @@ copy-truncate，轮转后原文件 inode 不变，现有文件描述符可以继
 ```
 
 常驻检查由 `start_dvr.sh` 自动启动和停止。
+
+Dashboard 新版由 `radar-dashboard.service` 独立托管，输出进入有容量上限的
+systemd journal，不再依赖 `dvr.service` 内的日志维护进程。旧系统使用
+`start_dvr.sh` 兼容路径时仍写入并轮转 `radar_dashboard.log`。
 
 ### TF 卡 CSV
 
