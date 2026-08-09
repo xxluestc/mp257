@@ -109,7 +109,11 @@ MAINTENANCE_ACTIONS = {
     },
     "project_stop": {
         "name": "安全停止项目",
-        "unit": "dvr.service + radar-dashboard.service",
+        "unit": "dvr.service",
+    },
+    "project_start": {
+        "name": "安全启动项目",
+        "unit": "dvr.service",
     },
     "system_poweroff": {
         "name": "安全关机",
@@ -1127,10 +1131,66 @@ class TaskController:
                 self._record(action, verb, "ok", details)
                 return {"ok": True, "action": action, "details": details}
 
+            if action == "project_start":
+                try:
+                    result = subprocess.run(
+                        ["systemctl", "start", "dvr.service"],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=45,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    details = str(exc)
+                    self._record(action, "start", "failed", details)
+                    raise RuntimeError(f"安全启动失败：{details}") from exc
+                details = result.stdout.strip() or "systemctl start dvr.service completed"
+                state = self._unit_state("dvr.service")
+                if result.returncode != 0 or state["active"] != "active":
+                    self._record(action, "start", "failed", details)
+                    raise RuntimeError(details)
+                self._record(action, "start", "ok", details)
+                return {
+                    "ok": True,
+                    "action": action,
+                    "details": details,
+                    "state": state,
+                }
+
             mode = "stop" if action == "project_stop" else "poweroff"
+            if action == "project_stop":
+                try:
+                    result = subprocess.run(
+                        [str(stop_script), mode],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=45,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    details = str(exc)
+                    self._record(action, mode, "failed", details)
+                    raise RuntimeError(f"安全停止失败：{details}") from exc
+                details = result.stdout.strip() or "DVR stopped; storage synchronized"
+                if result.returncode != 0:
+                    self._record(action, mode, "failed", details)
+                    raise RuntimeError(details)
+                self._record(action, mode, "ok", details)
+                return {
+                    "ok": True,
+                    "action": action,
+                    "scheduled": False,
+                    "details": details,
+                }
             try:
                 environment = dict(os.environ)
-                environment["SAFE_STOP_DELAY_SEC"] = "2"
+                environment["SAFE_STOP_DELAY_SEC"] = "3"
                 subprocess.Popen(
                     [str(stop_script), mode],
                     stdin=subprocess.DEVNULL,
@@ -1143,13 +1203,13 @@ class TaskController:
             except OSError as exc:
                 self._record(action, mode, "failed", str(exc))
                 raise RuntimeError(f"安全操作调度失败：{exc}") from exc
-            details = "scheduled after 2 seconds; storage sync is mandatory"
+            details = "scheduled after 3 seconds; storage sync is mandatory"
             self._record(action, mode, "ok", details)
             return {
                 "ok": True,
                 "action": action,
                 "scheduled": True,
-                "delay_seconds": 2,
+                "delay_seconds": 3,
             }
 
 

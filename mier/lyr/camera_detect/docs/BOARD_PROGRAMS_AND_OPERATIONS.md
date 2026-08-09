@@ -503,6 +503,10 @@ systemctl start dvr.service
 Dashboard“设备运维”页提供等价的TF挂载/弹出、安全停止项目和安全关机按钮。
 无网页时执行`/xxl/camera_detect/scripts/project_safe_stop.sh stop`；需要关机时执行
 `/xxl/camera_detect/scripts/project_safe_stop.sh poweroff`。
+前者仅停止`dvr.service`并保留Dashboard、M33、网络和OTA；后者会在刷盘后请求
+systemd关闭整机，不需要先执行前者。
+项目停止后，设备运维区的同一按钮会变为“安全启动项目”，启动并确认服务正常后再
+恢复为“安全停止项目”。
 
 ### 10.5 清理运行日志
 

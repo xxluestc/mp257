@@ -185,5 +185,9 @@ ffmpeg整段解码。正常`dvr.service`随后恢复；原有三段正式录像�
 /xxl/camera_detect/scripts/project_safe_stop.sh poweroff
 ```
 
+`stop`只停止`dvr.service`并刷盘，Dashboard、M33、网络和OTA保持在线；`poweroff`
+包含停止DVR和刷盘，随后由systemd有序关闭所有剩余服务和文件系统。执行整机关机时
+不需要先执行`stop`。
+
 直接切断电源可能丢失正在写入的临时缓冲或CSV。已经原子提交并通过整段解码的正式
 MP4风险较低，但比赛仍应使用有序关机。

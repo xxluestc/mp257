@@ -207,7 +207,11 @@ Dashboard、M33 或 WiFi。
 
 同页“设备运维”区域提供TF挂载/安全弹出、安全停止项目和安全关机，所有动作均有
 二次确认。命令行等价入口是`scripts/tf_card_control.sh`和
-`scripts/project_safe_stop.sh`。录像主存储为板载ext4，所以TF弹出不影响录像服务。
+`scripts/project_safe_stop.sh`。安全停止项目只停止`dvr.service`并同步存储，Dashboard、
+M33、网络和OTA继续运行，因此仍可在网页或SSH中重新启动业务或继续执行安全关机。
+安全关机会进一步请求systemd有序停止整机。录像主存储为板载ext4，所以TF弹出不影响
+录像服务。设备运维区的项目按钮会按`dvr.service`状态在“安全停止项目”和
+“安全启动项目”之间自动切换。
 
 五类测试事件均可点击开始/结束，结果保存到：
 

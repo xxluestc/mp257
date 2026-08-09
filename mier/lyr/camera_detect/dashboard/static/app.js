@@ -736,8 +736,13 @@ const maintenanceCopy = {
   },
   project_stop: {
     title: "安全停止项目？",
-    message: "2 秒后停止 DVR 和 Dashboard，并同步存储；M33、网络和 OTA 保持运行。页面随后会断开。",
+    message: "停止雷达、摄像头、NPU、HUD 与录像业务并同步存储；控制面板、M33、网络和 OTA 保持运行，可在本页重新启动或继续安全关机。",
     confirm: "停止项目",
+  },
+  project_start: {
+    title: "安全启动项目？",
+    message: "启动雷达、摄像头、NPU、HUD 与录像业务；控制面板会在启动完成后确认服务状态。",
+    confirm: "启动项目",
   },
   system_poweroff: {
     title: "安全关闭开发板？",
@@ -771,6 +776,14 @@ function renderControl(payload) {
     : "独立面板服务未就绪 · 控制已锁定";
 
   const maintenance = payload.maintenance || {};
+  const dvrTask = (payload.tasks || []).find((task) => task.key === "dvr");
+  const projectPowerButton = $("project-power-button");
+  if (projectPowerButton) {
+    const dvrRunning = dvrTask && dvrTask.active === "active";
+    projectPowerButton.dataset.maintenance = dvrRunning ? "project_stop" : "project_start";
+    projectPowerButton.textContent = dvrRunning ? "安全停止项目" : "安全启动项目";
+    projectPowerButton.classList.toggle("warning", Boolean(dvrRunning));
+  }
   const tfState = $("tf-card-state");
   if (maintenance.tf_mounted) {
     tfState.textContent = `TF 已挂载 · ${maintenance.tf_mount}`;
@@ -880,7 +893,8 @@ async function performControl() {
     const maintenanceMessages = {
       tf_mount: "TF 卡已正确挂载",
       tf_eject: "TF 卡已安全卸载，现在可以拔出",
-      project_stop: "安全停止项目已调度",
+      project_stop: "项目业务已安全停止，控制面板和网络保持在线",
+      project_start: "项目业务已安全启动",
       system_poweroff: "安全关机已调度",
     };
     showToast(maintenance
