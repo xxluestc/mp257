@@ -57,6 +57,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <float.h>
+#include <atomic>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -102,6 +103,7 @@
 /* DVR */
 #define DVR_BASE_DIR           "/run/media/mmcblk0p1/dvr"
 #define DVR_BUFFER_DIR         "/run/media/mmcblk0p1/dvr/.buffer"
+#define DVR_MOUNT_DIR          "/run/media/mmcblk0p1"
 #define DVR_SAVE_BEFORE_SEC    15
 #define DVR_SAVE_AFTER_SEC     15
 #define DVR_CAPTURE_FPS        25
@@ -152,7 +154,7 @@ static volatile uint64_t g_imu_fall_time_us = 0;
 static volatile uint64_t g_last_v2x_audio_us = 0;
 #define V2X_AUDIO_COOLDOWN_US 2000000ULL     /* V2X 语音 2 秒防连播 */
 static int g_led_fd              = -1;
-static int g_camera_ok_global    = 0;        /* 供 RPMsg 线程使用 */
+static std::atomic<int> g_camera_ok_global{0}; /* 供 RPMsg 线程使用 */
 static char g_last_road_user_label[32] = "unknown";
 static float g_last_road_user_score    = 0.0f;
 static struct timeval g_t_start;             /* 程序启动时间 (全局) */
@@ -467,6 +469,14 @@ static char g_radar_state_path[PATH_MAX];
 static uint64_t g_radar_last_publish_ms = 0;
 static unsigned int g_radar_csv_write_count = 0;
 static unsigned int g_sensor_csv_write_count = 0;
+
+/* TF 尚未挂载时，关键事件先进入有界内存队列，挂载后按原顺序补写。 */
+#define SENSOR_PENDING_MAX 128U
+#define SENSOR_PENDING_LINE_MAX 1536U
+static char g_sensor_pending[SENSOR_PENDING_MAX][SENSOR_PENDING_LINE_MAX];
+static unsigned int g_sensor_pending_head = 0;
+static unsigned int g_sensor_pending_count = 0;
+static unsigned int g_sensor_pending_dropped = 0;
 
 #define TELEMETRY_LOG_MAX_BYTES (20U * 1024U * 1024U)
 #define TELEMETRY_LOG_BACKUPS   4
@@ -795,6 +805,7 @@ static void sensor_csv_maybe_rotate_locked(void) {
 }
 
 static int sensor_telemetry_init(void) {
+    if (g_sensor_csv != NULL) return 0;
     if (mkdir_recursive(g_radar_log_dir) != 0) return -1;
     if (snprintf(g_sensor_csv_path, sizeof(g_sensor_csv_path),
                  "%s/sensor_events.csv", g_radar_log_dir) >=
@@ -806,15 +817,35 @@ static int sensor_telemetry_init(void) {
         st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
         rotate_numbered_file(g_sensor_csv_path, TELEMETRY_LOG_BACKUPS);
 
+    pthread_mutex_lock(&g_sensor_csv_mutex);
+    if (g_sensor_csv != NULL) {
+        pthread_mutex_unlock(&g_sensor_csv_mutex);
+        return 0;
+    }
     g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
     if (g_sensor_csv == NULL) {
         fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n",
                 g_sensor_csv_path, strerror(errno));
+        pthread_mutex_unlock(&g_sensor_csv_mutex);
         return -1;
     }
     g_sensor_csv_write_count = 0;
+    unsigned int buffered = g_sensor_pending_count;
+    for (unsigned int i = 0; i < g_sensor_pending_count; i++) {
+        unsigned int index =
+            (g_sensor_pending_head + i) % SENSOR_PENDING_MAX;
+        fputs(g_sensor_pending[index], g_sensor_csv);
+    }
+    g_sensor_pending_head = 0;
+    g_sensor_pending_count = 0;
+    pthread_mutex_unlock(&g_sensor_csv_mutex);
     printf("[系统] [SENSOR_DATA] CSV: %s (20 MiB x current+4)\n",
            g_sensor_csv_path);
+    if (buffered > 0 || g_sensor_pending_dropped > 0) {
+        printf("[系统] [SENSOR_DATA] Flushed %u boot events from RAM"
+               " (dropped=%u)\n",
+               buffered, g_sensor_pending_dropped);
+    }
     return 0;
 }
 
@@ -838,20 +869,35 @@ static void sensor_event_log(const char *source, const char *event_type,
     csv_sanitize(reason, safe_reason, sizeof(safe_reason));
     csv_sanitize(details, safe_details, sizeof(safe_details));
 
+    char score_text[32] = "";
+    char count_text[32] = "";
+    char seq_text[32] = "";
+    if (score >= 0.0f) snprintf(score_text, sizeof(score_text), "%.4f", score);
+    if (count >= 0) snprintf(count_text, sizeof(count_text), "%d", count);
+    if (seq >= 0) snprintf(seq_text, sizeof(seq_text), "%d", seq);
+
+    char line[SENSOR_PENDING_LINE_MAX];
+    snprintf(line, sizeof(line), "%s,%llu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
+             timestamp, (unsigned long long)timestamp_ms, safe_source,
+             safe_type, safe_status, safe_id, safe_label, score_text,
+             count_text, seq_text, safe_reason, safe_details);
+
     pthread_mutex_lock(&g_sensor_csv_mutex);
     if (g_sensor_csv == NULL) {
+        if (g_sensor_pending_count == SENSOR_PENDING_MAX) {
+            g_sensor_pending_head =
+                (g_sensor_pending_head + 1) % SENSOR_PENDING_MAX;
+            g_sensor_pending_count--;
+            g_sensor_pending_dropped++;
+        }
+        unsigned int index = (g_sensor_pending_head +
+                              g_sensor_pending_count) % SENSOR_PENDING_MAX;
+        snprintf(g_sensor_pending[index], SENSOR_PENDING_LINE_MAX, "%s", line);
+        g_sensor_pending_count++;
         pthread_mutex_unlock(&g_sensor_csv_mutex);
         return;
     }
-    fprintf(g_sensor_csv, "%s,%llu,%s,%s,%s,%s,%s,",
-            timestamp, (unsigned long long)timestamp_ms, safe_source,
-            safe_type, safe_status, safe_id, safe_label);
-    if (score >= 0.0f) fprintf(g_sensor_csv, "%.4f", score);
-    fputc(',', g_sensor_csv);
-    if (count >= 0) fprintf(g_sensor_csv, "%d", count);
-    fputc(',', g_sensor_csv);
-    if (seq >= 0) fprintf(g_sensor_csv, "%d", seq);
-    fprintf(g_sensor_csv, ",%s,%s\n", safe_reason, safe_details);
+    fputs(line, g_sensor_csv);
     sensor_csv_maybe_rotate_locked();
     pthread_mutex_unlock(&g_sensor_csv_mutex);
 }
@@ -1177,7 +1223,52 @@ static int dvr_has_encoder = 0;
 static int dvr_camera_pixelformat = 0;
 static uint64_t dvr_last_start_attempt_us = 0;
 static uint64_t dvr_last_forced_start_attempt_us = 0;
+static int g_storage_ready = 0;
 #define DVR_START_RETRY_US 2000000ULL
+
+/*
+ * 目录存在不等于 TF 已挂载。Dashboard 或旧脚本可能提前创建挂载点下的
+ * 目录，因此用 st_dev 与父目录比较，防止把根文件系统误当成 TF 写入。
+ */
+static int tf_storage_mounted(void) {
+    struct stat mount_st;
+    struct stat parent_st;
+    return stat(DVR_MOUNT_DIR, &mount_st) == 0 &&
+           stat("/run/media", &parent_st) == 0 &&
+           S_ISDIR(mount_st.st_mode) && mount_st.st_dev != parent_st.st_dev;
+}
+
+static int path_is_on_tf(const char *path) {
+    size_t prefix_len = strlen(DVR_MOUNT_DIR);
+    return path != NULL && strncmp(path, DVR_MOUNT_DIR, prefix_len) == 0 &&
+           (path[prefix_len] == '\0' || path[prefix_len] == '/');
+}
+
+/* 在主循环中重复调用；TF 晚到时只初始化一次，不阻塞风险处理。 */
+static void storage_try_initialize(void) {
+    int tf_ready = tf_storage_mounted();
+    if (!dvr_tf_ok && tf_ready) {
+        if (mkdir_recursive(DVR_BASE_DIR) == 0) {
+            dvr_tf_ok = 1;
+            printf("[系统] [DVR] TF storage attached: %s\n", DVR_BASE_DIR);
+            startup_mark("dvr_storage_ready");
+        }
+    }
+
+    int telemetry_ready = !path_is_on_tf(g_radar_log_dir) || tf_ready;
+    if (telemetry_ready && g_sensor_csv == NULL)
+        sensor_telemetry_init();
+    if (telemetry_ready && g_radar_csv == NULL) {
+        if (radar_telemetry_init() == 0)
+            radar_telemetry_publish_empty();
+    }
+
+    if (!g_storage_ready && dvr_tf_ok && g_sensor_csv != NULL &&
+        g_radar_csv != NULL) {
+        g_storage_ready = 1;
+        startup_mark("business_storage_initialized");
+    }
+}
 
 /* 生成输出文件名 */
 static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
@@ -1192,12 +1283,11 @@ static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
 /* 启动 DVR 录制 */
 static int dvr_start(void) {
     if (dvr_recording) return 0;
-    struct stat storage_st;
-    if (!dvr_tf_ok &&
-        stat(DVR_BASE_DIR, &storage_st) == 0 &&
-        S_ISDIR(storage_st.st_mode)) {
+    /* 该函数也可能由 RPMsg 线程调用，只更新 DVR 自己的挂载状态，避免和
+     * 主循环并发初始化 CSV/JSON 文件。 */
+    if (!dvr_tf_ok && tf_storage_mounted() &&
+        mkdir_recursive(DVR_BASE_DIR) == 0)
         dvr_tf_ok = 1;
-    }
     if (!dvr_tf_ok) {
         printf("[系统] [DVR] TF card not available, recording disabled\n");
         return -1;
@@ -1996,8 +2086,24 @@ static void *rpmsg_thread(void *arg) {
     }
     tcflush(fd, TCIOFLUSH);
 
-    /* M33 需要收到 ready 消息后才开始发送告警 */
+    /*
+     * M33 收到 ready 后才开始发送告警。保留原有1秒端点稳定时间，并等待
+     * ALSA播放节点，避免业务前移后在音频尚未出现的窗口内收到摔倒/V2V事件、
+     * 导致告警语音丢失。等待有界；音频异常不能永久阻塞M33链路。
+     */
     sleep(1);
+    int audio_ready = 0;
+    for (int i = 0; i < 50 && g_running; i++) {
+        if (access("/dev/snd/pcmC0D0p", F_OK) == 0) {
+            audio_ready = 1;
+            startup_mark("audio_output_ready");
+            break;
+        }
+        usleep(100000);
+    }
+    if (!audio_ready)
+        fprintf(stderr, "[IMU] Audio output not ready after 5s; "
+                        "sending RPMsg ready with degraded audio\n");
     if (write(fd, RPMSG_READY_MSG, strlen(RPMSG_READY_MSG)) < 0) {
         fprintf(stderr, "[IMU] Failed to send ready message: %s\n", strerror(errno));
     } else {
@@ -2065,6 +2171,106 @@ static void *rpmsg_thread(void *arg) {
 
     close(fd);
     printf("[系统] [IMU] RPMsg thread stopped\n");
+    return NULL;
+}
+
+/* ======================== 摄像头/NPU 延迟接入 ======================== */
+struct camera_runtime_t {
+    camera_t cam{};
+    NpuDetector *detector = NULL;
+    uint8_t *rgb_full = NULL;
+    uint8_t *rgb_nn = NULL;
+    int nn_w = 0;
+    int nn_h = 0;
+    const char *device = NULL;
+    const char *model_path = NULL;
+    const char *labels_path = NULL;
+    float confidence = 0.60f;
+    std::atomic<bool> ready{false};
+};
+
+/*
+ * 摄像头 USB 枚举晚于雷达串口时，主循环先以 radar-only 进入工作状态。
+ * 本线程等待真实设备节点，完成 V4L2/NPU 初始化后原子切换到融合模式；
+ * 初始化失败会清理半成品并重试，避免一次时序抖动造成整次开机永久降级。
+ */
+static void *camera_runtime_thread(void *arg) {
+    camera_runtime_t *runtime = static_cast<camera_runtime_t *>(arg);
+    int attempt = 0;
+
+    while (g_running && !runtime->ready.load(std::memory_order_acquire)) {
+        if (access(runtime->device, F_OK) != 0) {
+            if (attempt == 0)
+                printf("[系统] [CAMERA] Waiting for %s without blocking risk core\n",
+                       runtime->device);
+            usleep(100000);
+            continue;
+        }
+
+        attempt++;
+        startup_mark("camera_initialize_begin");
+        kill_device_holders(runtime->device);
+        memset(&runtime->cam, 0, sizeof(runtime->cam));
+        runtime->cam.fd = -1;
+
+        if (camera_open(&runtime->cam, runtime->device, 1280, 720) != 0) {
+            fprintf(stderr, "[FUSION] Camera open attempt %d failed; retrying\n",
+                    attempt);
+            usleep(1000000);
+            continue;
+        }
+        if (camera_start(&runtime->cam) != 0) {
+            fprintf(stderr, "[FUSION] Camera stream attempt %d failed; retrying\n",
+                    attempt);
+            camera_close(&runtime->cam);
+            usleep(1000000);
+            continue;
+        }
+        startup_mark("camera_stream_started");
+
+        startup_mark("npu_model_load_begin");
+        try {
+            runtime->detector = new NpuDetector(
+                runtime->model_path, runtime->labels_path,
+                runtime->confidence, 0.45f);
+        } catch (...) {
+            runtime->detector = NULL;
+        }
+        if (runtime->detector == NULL) {
+            fprintf(stderr, "[FUSION] NPU model load failed; retrying\n");
+            camera_stop(&runtime->cam);
+            camera_close(&runtime->cam);
+            usleep(1000000);
+            continue;
+        }
+        startup_mark("npu_model_load_done");
+
+        runtime->nn_w = runtime->detector->get_input_width();
+        runtime->nn_h = runtime->detector->get_input_height();
+        runtime->rgb_full = static_cast<uint8_t *>(
+            malloc(runtime->cam.width * runtime->cam.height * 3));
+        runtime->rgb_nn = static_cast<uint8_t *>(
+            malloc(runtime->nn_w * runtime->nn_h * 3));
+        if (runtime->rgb_full == NULL || runtime->rgb_nn == NULL) {
+            fprintf(stderr, "[FUSION] NPU buffer allocation failed; retrying\n");
+            free(runtime->rgb_full);
+            free(runtime->rgb_nn);
+            runtime->rgb_full = NULL;
+            runtime->rgb_nn = NULL;
+            delete runtime->detector;
+            runtime->detector = NULL;
+            camera_stop(&runtime->cam);
+            camera_close(&runtime->cam);
+            usleep(1000000);
+            continue;
+        }
+
+        dvr_camera_pixelformat = runtime->cam.pixelformat;
+        runtime->ready.store(true, std::memory_order_release);
+        g_camera_ok_global.store(1, std::memory_order_release);
+        printf("[系统] [FUSION] Camera + NPU attached; switched to fusion + DVR mode\n");
+        startup_mark("fusion_vision_initialized");
+    }
     return NULL;
 }
 
@@ -2153,6 +2359,7 @@ int main(int argc, char *argv[]) {
     /* 当日志被重定向到文件时，默认全缓冲会导致显示严重滞后；改为行缓冲 */
     setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
     setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+    gettimeofday(&g_t_start, NULL);
     startup_mark("radar_fusion_main_enter");
     ble_risk_configure(g_ble_led_uart, g_ble_led_enabled);
 
@@ -2190,20 +2397,9 @@ int main(int argc, char *argv[]) {
         printf("[系统] [DVR] encoder: OK (gst-launch-1.0 / ffmpeg / avconv)\n");
     }
 
-    struct stat st;
-    dvr_tf_ok = (stat(DVR_BASE_DIR, &st) == 0 && S_ISDIR(st.st_mode));
-    if (!dvr_tf_ok) {
-        /* 尝试创建 */
-        if (mkdir(DVR_BASE_DIR, 0777) == 0) {
-            dvr_tf_ok = 1;
-            printf("[系统] [DVR] Created: %s\n", DVR_BASE_DIR);
-        } else {
-            printf("[系统] [DVR] WARNING: TF card not available at %s (%s)\n", DVR_BASE_DIR, strerror(errno));
-            printf("[系统] [DVR] DVR recording will be disabled until TF card is inserted.\n");
-        }
-    } else {
-        printf("[系统] [DVR] TF card: OK (%s)\n", DVR_BASE_DIR);
-    }
+    storage_try_initialize();
+    if (!dvr_tf_ok)
+        printf("[系统] [DVR] TF not mounted yet; storage will attach in background\n");
     startup_mark("dvr_dependencies_checked");
 
     /* 1. GPIO LED: PD11, 用于雷达+NPU/IMU 告警闪烁 */
@@ -2230,58 +2426,20 @@ int main(int argc, char *argv[]) {
     radar_init(radar_fd);
     startup_mark("radar_initialize_done");
 
-    /* 3. 摄像头 + NPU: 采集图像并做目标检测, 用于验证雷达目标是否为真实道路使用者 */
-    kill_device_holders(camera_dev);
-    camera_t cam;
-    NpuDetector *detector = NULL;
-    int camera_ok = 0;
-    uint8_t *rgb_full = NULL, *rgb_nn = NULL;
-    int nn_w = 0, nn_h = 0;
+    /* 3. 摄像头/NPU 延迟接入，不阻塞已经初始化完成的雷达风险核心。 */
+    camera_runtime_t camera_runtime;
+    camera_runtime.device = camera_dev;
+    camera_runtime.model_path = model_path;
+    camera_runtime.labels_path = labels_path;
+    camera_runtime.confidence = confidence;
+    pthread_t camera_tid;
+    int camera_tid_started =
+        pthread_create(&camera_tid, NULL, camera_runtime_thread,
+                       &camera_runtime) == 0;
+    if (!camera_tid_started)
+        fprintf(stderr, "[系统] [CAMERA] Cannot create deferred init thread\n");
 
-    startup_mark("camera_initialize_begin");
-    if (camera_open(&cam, camera_dev, 1280, 720) == 0) {
-        dvr_camera_pixelformat = cam.pixelformat;
-        if (camera_start(&cam) == 0) {
-            startup_mark("camera_stream_started");
-            startup_mark("npu_model_load_begin");
-            detector = new NpuDetector(model_path, labels_path, confidence, 0.45f);
-            startup_mark("npu_model_load_done");
-            nn_w = detector->get_input_width();
-            nn_h = detector->get_input_height();
-            rgb_full = (uint8_t *)malloc(cam.width * cam.height * 3);
-            rgb_nn = (uint8_t *)malloc(nn_w * nn_h * 3);
-            if (rgb_full && rgb_nn) {
-                camera_ok = 1;
-                printf("[FUSION] Camera + NPU enabled\n");
-            } else {
-                printf("[FUSION] NPU buffer alloc failed\n");
-                camera_stop(&cam); camera_close(&cam);
-                delete detector; detector = NULL;
-            }
-        } else {
-            printf("[FUSION] Camera start failed\n");
-            camera_close(&cam);
-        }
-    } else {
-        printf("[FUSION] Camera not available, radar-only mode\n");
-    }
-    if (!camera_ok) printf("[FUSION] Running in RADAR-ONLY mode (no DVR)\n");
-    g_camera_ok_global = camera_ok;
-    startup_mark(camera_ok ? "fusion_core_initialized" :
-                             "fusion_core_initialized_radar_only");
-
-    printf("\n[系统] [FUSION] Initialization complete, entering main loop\n");
-    if (camera_ok) {
-        printf("[系统] [FUSION] Mode: camera + NPU + radar + DVR\n");
-    } else {
-        printf("[系统] [FUSION] Mode: radar-only (no camera/DVR)\n");
-    }
-    printf("[系统] [FUSION] Running... Press Ctrl+C to stop.\n\n");
-
-    /* 必须在线程启动前打开共享传感器日志，保证首条 M33 事件不丢失。 */
-    sensor_telemetry_init();
-
-    /* 4. 启动 RPMsg 接收线程 (M33 IMU/V2X alerts) */
+    /* 4. RPMsg 先启动；TF 未就绪期间的首批事件进入有界内存队列。 */
     pthread_t rpmsg_tid;
     pthread_create(&rpmsg_tid, NULL, rpmsg_thread, NULL);
     startup_mark("rpmsg_thread_started");
@@ -2307,6 +2465,11 @@ int main(int argc, char *argv[]) {
         pthread_create(&test_v2x_tid, NULL, test_v2x_thread, NULL);
     }
 
+    printf("\n[系统] [FUSION] Risk core initialized, entering main loop\n");
+    printf("[系统] [FUSION] Initial mode: radar + RPMsg; camera/NPU and TF attach asynchronously\n");
+    printf("[系统] [FUSION] Running... Press Ctrl+C to stop.\n\n");
+    startup_mark("fusion_risk_core_ready");
+
     /* 5. 主循环: 单线程轮询雷达 + 定时采集摄像头 + NPU 推理 + DVR 缓冲 */
     /*
      * 主循环数据流:
@@ -2331,14 +2494,19 @@ int main(int argc, char *argv[]) {
     int npu_denied      = 0;   /* NPU 已判断为雷达虚警 */
 
     struct timeval t_last_bsd, t_last_capture;
-    gettimeofday(&g_t_start, NULL);
     t_last_bsd = g_t_start;
     t_last_capture = g_t_start;
-    radar_telemetry_init();
-    radar_telemetry_publish_empty();
     startup_mark("radar_fusion_runtime_ready");
 
+    unsigned int storage_poll_count = 0;
     while (g_running) {
+        if (!g_storage_ready && storage_poll_count++ % 20U == 0U)
+            storage_try_initialize();
+
+        bool camera_ok =
+            camera_runtime.ready.load(std::memory_order_acquire);
+        NpuDetector *detector = camera_ok ? camera_runtime.detector : NULL;
+
         /* 回收异步编码子进程 */
         if (dvr_encoder_pid > 0) {
             int enc_status;
@@ -2390,7 +2558,7 @@ int main(int argc, char *argv[]) {
         if (camera_ok && detector && since_capture_us >= DVR_CAPTURE_INTERVAL_US) {
             uint8_t *jpeg_buf;
             unsigned int jpeg_len;
-            if (camera_capture(&cam, &jpeg_buf, &jpeg_len) == 0) {
+            if (camera_capture(&camera_runtime.cam, &jpeg_buf, &jpeg_len) == 0) {
                 if (!g_first_camera_frame_logged) {
                     g_first_camera_frame_logged = true;
                     startup_mark("camera_first_frame");
@@ -2425,9 +2593,15 @@ int main(int argc, char *argv[]) {
                     struct timeval tv_npu_start, tv_npu_end;
                     gettimeofday(&tv_npu_start, NULL);
                     int dec_w, dec_h;
-                    if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len, rgb_full, &dec_w, &dec_h) == 0) {
-                        resize_rgb(rgb_full, dec_w, dec_h, rgb_nn, nn_w, nn_h);
-                        frame_results_t results = detector->detect(rgb_nn);
+                    if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len,
+                                               camera_runtime.rgb_full,
+                                               &dec_w, &dec_h) == 0) {
+                        resize_rgb(camera_runtime.rgb_full, dec_w, dec_h,
+                                   camera_runtime.rgb_nn,
+                                   camera_runtime.nn_w,
+                                   camera_runtime.nn_h);
+                        frame_results_t results =
+                            detector->detect(camera_runtime.rgb_nn);
 
                         int has_road = 0;
                         int road_count = 0;
@@ -2752,6 +2926,7 @@ int main(int argc, char *argv[]) {
     }
 
     g_led_alert = 0;
+    if (camera_tid_started) pthread_join(camera_tid, NULL);
     pthread_join(led_tid, NULL);
     pthread_join(rpmsg_tid, NULL);
     nav_tts_stop();
@@ -2759,12 +2934,12 @@ int main(int argc, char *argv[]) {
     if (g_test_v2x_delay_sec > 0) pthread_join(test_v2x_tid, NULL);
     gpio_deinit();
 
-    if (camera_ok) {
-        camera_stop(&cam);
-        camera_close(&cam);
-        free(rgb_full);
-        free(rgb_nn);
-        delete detector;
+    if (camera_runtime.ready.load(std::memory_order_acquire)) {
+        camera_stop(&camera_runtime.cam);
+        camera_close(&camera_runtime.cam);
+        free(camera_runtime.rgb_full);
+        free(camera_runtime.rgb_nn);
+        delete camera_runtime.detector;
     }
     close(radar_fd);
     radar_telemetry_close();

@@ -2,8 +2,13 @@
 Description=DVR System
 # Dashboard/UDP 可以在网络地址配置前监听，因此无需等待 network.target。
 # 业务脚本只等待本项目实际使用的设备，不再阻塞于全局 udev settle。
+# 关闭默认 basic.target 依赖，让关键风险链在 local-fs 与 M33 就绪后先启动；
+# Dashboard 仍按普通服务顺序启动，且不反向阻塞 DVR。
+DefaultDependencies=no
 Wants=dvr-m33.service radar-dashboard.service
-After=local-fs.target dvr-m33.service radar-dashboard.service
+After=local-fs.target dvr-m33.service systemd-journald.socket
+Before=shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=simple

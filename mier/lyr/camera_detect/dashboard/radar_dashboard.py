@@ -109,12 +109,14 @@ BOOT_MILESTONES = [
     ("m33", "M33 running", "[M33_EARLY] M33 running"),
     ("fusion_enter", "融合进程入口", "radar_fusion_main_enter"),
     ("radar_ready", "雷达初始化完成", "radar_initialize_done"),
+    ("fusion_ready", "风险核心就绪", "fusion_risk_core_ready"),
+    ("audio_ready", "音频输出就绪", "audio_output_ready"),
+    ("rpmsg_ready", "RPMsg ready", "rpmsg_ready_sent"),
+    ("storage_ready", "TF/日志就绪", "business_storage_initialized"),
     ("camera_stream", "摄像头开始采集", "camera_stream_started"),
     ("npu_ready", "NPU 模型就绪", "npu_model_load_done"),
-    ("fusion_ready", "融合核心就绪", "fusion_core_initialized"),
+    ("vision_ready", "视觉融合就绪", "fusion_vision_initialized"),
     ("camera_frame", "摄像头首帧", "camera_first_frame"),
-    ("runtime_ready", "业务运行态", "radar_fusion_runtime_ready"),
-    ("rpmsg_ready", "RPMsg ready", "rpmsg_ready_sent"),
 ]
 
 
@@ -131,7 +133,6 @@ def read_system_version() -> str:
 class RadarStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
-        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.data_dir / "radar_state.json"
         self.labels_path = self.data_dir / "labels.csv"
         self.radar_csv_path = self.data_dir / "radar_data.csv"
@@ -139,9 +140,36 @@ class RadarStore:
         self.imu_delivery_path = self.data_dir / "imu_delivery.csv"
         self.control_events_path = self.data_dir / "control_events.csv"
         self.lock = threading.Lock()
+        self.storage_lock = threading.Lock()
         self.active: dict[str, dict[str, Any]] = {}
-        self._ensure_labels_utf8_bom()
-        self._restore_active_labels()
+        self._storage_initialized = False
+        self._activate_storage()
+
+    def _storage_available(self) -> bool:
+        """Do not create hidden directories below an unmounted TF mountpoint."""
+        tf_mount = Path("/run/media/mmcblk0p1")
+        try:
+            self.data_dir.resolve(strict=False).relative_to(tf_mount)
+        except ValueError:
+            return True
+        return os.path.ismount(tf_mount)
+
+    def _activate_storage(self) -> bool:
+        if self._storage_initialized:
+            return True
+        with self.storage_lock:
+            if self._storage_initialized:
+                return True
+            if not self._storage_available():
+                return False
+            try:
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                return False
+            self._ensure_labels_utf8_bom()
+            self._restore_active_labels()
+            self._storage_initialized = True
+            return True
 
     def _ensure_labels_utf8_bom(self) -> None:
         """Add a BOM to an existing labels CSV without changing its UTF-8 data."""
@@ -174,6 +202,7 @@ class RadarStore:
             )
 
     def read_state(self) -> dict[str, Any]:
+        self._activate_storage()
         try:
             with self.state_path.open("r", encoding="utf-8") as state_file:
                 loaded = json.load(state_file)
@@ -418,6 +447,8 @@ class RadarStore:
             self.active.clear()
 
     def record_label(self, event_type: str, action: str) -> dict[str, Any]:
+        if not self._activate_storage():
+            raise RuntimeError("TF 存储尚未就绪，请稍后重试")
         if event_type not in EVENT_TYPES:
             raise ValueError("unknown event_type")
         if action not in {"start", "end"}:
@@ -700,6 +731,14 @@ class SystemMonitor:
         return {"celsius": round(temperature, 1), "source": source}
 
     def _storage(self) -> dict[str, Any]:
+        tf_mount = Path("/run/media/mmcblk0p1")
+        try:
+            self.data_dir.resolve(strict=False).relative_to(tf_mount)
+            if not os.path.ismount(tf_mount):
+                return {"mounted": False, "total_gib": None,
+                        "used_gib": None, "used_percent": None}
+        except ValueError:
+            pass
         try:
             stat = os.statvfs(self.data_dir)
             total = stat.f_blocks * stat.f_frsize
@@ -909,6 +948,13 @@ class TaskController:
             "details": details[:240],
         }
         try:
+            tf_mount = Path("/run/media/mmcblk0p1")
+            try:
+                self.audit_path.resolve(strict=False).relative_to(tf_mount)
+                if not os.path.ismount(tf_mount):
+                    raise OSError("TF storage is not mounted")
+            except ValueError:
+                pass
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
             needs_header = not self.audit_path.exists() or self.audit_path.stat().st_size == 0
             with self.audit_path.open("a", encoding="utf-8", newline="") as audit_file:

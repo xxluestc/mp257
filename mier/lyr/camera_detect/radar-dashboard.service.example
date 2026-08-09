@@ -2,7 +2,6 @@
 Description=Rider Safety Dashboard and Control Plane
 Documentation=file:/xxl/camera_detect/README.md
 After=local-fs.target
-Before=dvr.service
 StartLimitIntervalSec=0
 
 [Service]

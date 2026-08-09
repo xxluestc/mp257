@@ -195,16 +195,55 @@ stop_log_reader() {
     READER_PID=0
 }
 
-start_log_maintenance() {
+start_storage_worker() {
     if [ ! -x "$LOG_MAINT_SCRIPT" ]; then
         log "警告: 日志维护脚本不可用: ${LOG_MAINT_SCRIPT}"
         return 1
     fi
 
-    "$LOG_MAINT_SCRIPT" --once || true
-    "$LOG_MAINT_SCRIPT" --watch &
+    # TF 卡的 fsck/挂载不再阻塞雷达、RPMsg 和风险处理启动。后台工作器仍严格
+    # 等待 fsck 结束后才允许手工挂载，避免并发修改 FAT。挂载完成后再创建
+    # DVR/CSV 目录并启动日志轮转；radar_fusion 会在运行中动态接入存储。
+    (
+        if ! mountpoint -q "$TF_MOUNT"; then
+            log "TF 卡尚未挂载，后台等待文件系统检查完成..."
+            for i in $(seq 1 200); do
+                mountpoint -q "$TF_MOUNT" && break
+                if tf_fsck_running || [ "$i" -lt 25 ]; then
+                    sleep 0.2
+                    continue
+                fi
+                break
+            done
+        fi
+
+        if ! mountpoint -q "$TF_MOUNT"; then
+            if tf_fsck_running; then
+                log "警告: TF 卡 fsck 仍在运行，跳过手工挂载"
+                while tf_fsck_running; do sleep 0.5; done
+            fi
+            if ! mountpoint -q "$TF_MOUNT"; then
+                log "TF 卡未自动挂载，尝试安全挂载 ${TF_DEVICE}..."
+                mkdir -p "$TF_MOUNT"
+                if ! mount -t vfat "$TF_DEVICE" "$TF_MOUNT" >> "$LOG_FILE" 2>&1; then
+                    log "警告: TF 卡挂载失败；风险检测继续运行，本次不启用录像和 CSV"
+                    exit 0
+                fi
+                log "TF 卡挂载成功"
+            fi
+        fi
+
+        if ! mkdir -p "$TF_MOUNT/dvr" "$RADAR_LOG_DIR"; then
+            log "警告: 无法创建 TF 业务目录；风险检测继续运行，本次不启用录像和 CSV"
+            exit 0
+        fi
+
+        "$LOG_MAINT_SCRIPT" --once || true
+        log "TF 存储与日志容量限制已就绪"
+        exec "$LOG_MAINT_SCRIPT" --watch
+    ) &
     LOG_MAINT_PID=$!
-    log "日志容量限制已启用，pid=${LOG_MAINT_PID}"
+    log "TF 存储后台工作器已启动，pid=${LOG_MAINT_PID}"
 }
 
 stop_log_maintenance() {
@@ -271,8 +310,8 @@ start_hud() {
 start_dashboard() {
     # 新版由独立 systemd unit 托管，确保暂停 dvr.service 时控制面板仍在线。
     # 未安装该 unit 的旧系统继续使用下方兼容启动路径。
-    if systemctl is-active --quiet radar-dashboard.service 2>/dev/null; then
-        log "Dashboard 由独立 radar-dashboard.service 托管"
+    if [ "$(systemctl show radar-dashboard.service --property=LoadState --value 2>/dev/null)" = "loaded" ]; then
+        log "Dashboard 由独立 radar-dashboard.service 托管（允许稍后按正常 systemd 顺序启动）"
         DASHBOARD_PID=0
         return 0
     fi
@@ -372,64 +411,15 @@ if [ ! -x "$RADAR_FUSION" ]; then
     exit 1
 fi
 
-# 雷达是主程序的硬前提；摄像头、方向灯和本机告警 GPIO 保持原有可降级语义。
+# 雷达是主程序的硬前提；摄像头由 radar_fusion 在运行中动态接入，不再阻塞
+# 风险处理链启动。方向灯和本机告警 GPIO 保持原有可降级语义。
 wait_for_device /dev/ttySTM1 "雷达串口" 100 1 || exit 1
-wait_for_device /dev/video7 "USB 摄像头" 100 0
 if [ "$BLE_LED_ENABLED" = "1" ]; then
     wait_for_device "$BLE_LED_UART" "蓝牙方向灯串口" 100 0
 fi
 wait_for_device /dev/gpiochip3 "告警 GPIO" 100 0
 
-# 等待 udev 触发的 FAT fsck 和自动挂载完成。绝不能在 fsck 尚在读写文件系统时
-# 手工 mount，否则 DVR 与 fsck 会并发修改 FAT，导致 .buffer/CSV 目录损坏。
-if ! mountpoint -q "$TF_MOUNT"; then
-    log "等待 TF 卡检查与自动挂载完成..."
-    for i in $(seq 1 200); do
-        if mountpoint -q "$TF_MOUNT"; then
-            break
-        fi
-        if tf_fsck_running; then
-            sleep 0.2
-            continue
-        fi
-        # fsck 尚未被 udev 拉起时给它短暂的启动窗口。
-        if [ "$i" -lt 25 ]; then
-            sleep 0.2
-            continue
-        fi
-        break
-    done
-fi
-
-# 自动挂载没有发生时才走手工回退；此时已确认 fsck 不在运行。
-if ! mountpoint -q "$TF_MOUNT"; then
-    if tf_fsck_running; then
-        log "错误: TF 卡 fsck 仍在运行，拒绝并发挂载"
-        exit 1
-    fi
-    log "TF 卡未自动挂载，尝试安全挂载 ${TF_DEVICE}..."
-    mkdir -p "$TF_MOUNT"
-    if ! mount -t vfat "$TF_DEVICE" "$TF_MOUNT" >> "$LOG_FILE" 2>&1; then
-        log "错误: TF 卡挂载失败，请检查是否插入 TF 卡"
-        exit 1
-    fi
-    log "TF 卡挂载成功"
-fi
-
-if [ ! -d "/run/media/mmcblk0p1/dvr" ]; then
-    log "警告: DVR 目录 /run/media/mmcblk0p1/dvr 不存在，尝试创建..."
-    mkdir -p /run/media/mmcblk0p1/dvr || {
-        log "错误: 无法创建 DVR 目录，请检查 TF 卡是否挂载"
-        exit 1
-    }
-fi
-
-mkdir -p "$RADAR_LOG_DIR" || {
-    log "错误: 无法创建雷达实验数据目录: ${RADAR_LOG_DIR}"
-    exit 1
-}
-
-start_log_maintenance
+start_storage_worker
 
 # 创建导航 TTS 缓存目录
 if [ ! -d "$NAV_TTS_CACHE" ]; then
