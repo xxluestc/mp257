@@ -84,8 +84,8 @@ make ota-package VERSION=1.0.8
 ```
 
 输出位于 `dist/`。完整的目录迁移、板端服务部署和回滚方法见
-[A35 OTA 操作指南](docs/OTA.md)。当前`1.0.8`包的唯一SHA-256、云端元数据和
-主题切换验收见[1.0.8发布说明](docs/RELEASE_1.0.8.md)。
+[A35 OTA 操作指南](docs/OTA.md)。OTA版本选择、最终SHA-256、云端元数据和主题切换
+验收见[1.0.8发布说明](docs/RELEASE_1.0.8.md)；在该文档标记“可交付”前不要上传云端。
 
 MP257、CH9140 与 WBA 左右碰撞方向灯的接线、协议、烧录、测试和实机联调
 记录见 [蓝牙方向灯联调文档](docs/BLUETOOTH_DIRECTION_LED.md)。
