@@ -71,16 +71,13 @@ Android 展示最终 success / rolled_back / failed
 
 建议云端给 Android 返回以下最小元数据，具体 URL 可由手机和云端队友自行约定：
 
-以下字段必须在最终包重新构建后填写，不能继续使用2026-08-09旧`1.0.8`包的
-SHA-256和大小：
-
 ```json
 {
   "product": "helmet-a35",
-  "version": "<最终版本>",
-  "download_url": "https://example.invalid/ota/helmet-a35-<最终版本>.tar.gz",
-  "sha256": "<最终包SHA-256>",
-  "size_bytes": 0,
+  "version": "1.0.8",
+  "download_url": "https://example.invalid/ota/helmet-a35-1.0.8.tar.gz",
+  "sha256": "c30d81e8153e7fec056a4238aeb756900eef8f23ba7a0c19469ac73e0643b20b",
+  "size_bytes": 8275006,
   "release_notes": "A35稳定版更新；升级后Dashboard切换OTA演示主题。",
   "mandatory": false
 }
