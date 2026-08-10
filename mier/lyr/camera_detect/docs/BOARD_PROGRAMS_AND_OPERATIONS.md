@@ -900,3 +900,127 @@ Git和OTA可以恢复A35应用文件，但不能证明硬件、M33、WBA、外�
 
 这个顺序的核心不是“能把软链接改过去”，而是让每次版本变化都有明确目标、可验证状态、
 失败恢复路径和现场记录。
+
+---
+
+## 19. 独立 WBA 双终端 V2V 语音工程运维
+
+### 19.1 工程和固件不要混用
+
+双终端语音工程位于：
+
+```text
+/home/alientek/dvr_project/V2V_keil/E04-2G4M10S1AX
+```
+
+它不是根目录`E04-2G4M10S1AX`的 CH9140 方向灯工程。烧录前应核对：
+
+| 检查项 | 双终端语音工程 |
+|---|---|
+| Keil工程 | `MDK-ARM/02_test.uvprojx` |
+| MCU | STM32WBA54KGUx |
+| 当前源码版本 | `v1.8.1` |
+| 启动日志 | `V2X Node v1.8.1` |
+| 本端/对端ID | `0x1001` / `0x1002` |
+| 输出 | UART2外接MP3语音 |
+
+若板上日志仍为`v1.8.0`，说明烧录的仍是旧 HEX，不能根据本机新源码判断实物行为。
+
+当前Keil工程只构建端点A（`local=0x1001`、`expected=0x1002`）。第二块板必须在
+`app_ble.c`中互换两个ID宏并单独构建端点B HEX。不能把同一个A端HEX烧到两块板，否则
+双方都会过滤掉对方的`0x1001`广播。
+
+### 19.2 编译和烧录
+
+在 Windows/Keil 中执行：
+
+```text
+打开 MDK-ARM/02_test.uvprojx
+→ 选择 Target 02_test
+→ Clean Targets
+→ Rebuild all target files
+→ 确认 0 Error
+→ 确认 HEX 时间戳更新
+→ 烧录
+→ 串口确认 v1.8.1
+```
+
+现有`MDK-ARM/build.log`记录过`.o.tmp`无法重命名的权限错误和`Target not created`。
+出现该错误时应解除 Windows 文件占用或只读属性并清理输出目录，不能把旧 HEX 当作本次
+成功构建的产物。
+
+### 19.3 接线与串口参数
+
+- SWD：PA13=SWDIO，PA14=SWCLK，并连接 GND、目标参考电压，必要时接 NRST；
+- 日志/外部状态 USART1：PB12=TX、PA8=RX，115200 8N1；
+- 传感器/语音 USART2：PA12=TX、PB8=RX；
+- 外部通道选择：PA2:PA1=`00 GPS`、`01 IMU`、`10 VOICE`；
+- GPS/IMU：115200；MP3：9600。
+
+`02_test.ioc`没有完整登记 USART2 和 PA1/PA2 的人工扩展配置。使用 CubeMX 重新生成后，
+必须复查`main.c`、`stm32wbaxx_hal_msp.c`、Keil 文件组和 USER CODE 区。
+
+### 19.4 最小验收
+
+1. 串口启动版本必须是`v1.8.1`；
+2. 确认A端为`0x1001→0x1002`、B端为`0x1002→0x1001`；
+3. 对端序号持续变化，不能只是重复同一广告帧；
+4. 同一风险连续保持10秒，只允许一条`ALERT_QUEUE`和一次`[VOICE] play`；
+5. 风险解除不足3秒又恢复，不应重播；
+6. 连续解除至少3秒应出现`ALERT_REARM`，之后的新风险才允许第二次提示；
+7. `file=00001..00005`应分别对应约定曲目；
+8. 对端消失超过2秒后，旧过滤、趋势和语音事件应被清除。
+
+### 19.5 日志定位
+
+```text
+WARN         收到对端，但数据可能只达到观察条件
+ALERT_SRC    风险条件逐项结果和最终方向
+ALERT_QUEUE  方向稳定且真正进入语音队列
+[VOICE] play 主循环取出待播事件
+[VOICE] tx   已向MP3发送命令
+ALERT_REARM  风险稳定解除并重新武装
+```
+
+有`ALERT_QUEUE`但实物不响，应查 UART2 通道、波特率、MP3供电和命令；日志曲目正确但
+播放内容错误，应查存储卡曲目编号/排序；持续风险出现多次`ALERT_QUEUE`，应先确认是否
+烧录了`v1.8.1`，再检查事件锁存。
+
+### 19.6 版本和仓库边界
+
+该工程现已纳入仓库，包含源码、Keil工程、头文件和工程明确引用的ST预编译库。
+`V2V_keil/.gitignore`排除旧HEX、AXF、对象文件、构建日志和Keil用户配置，避免旧固件
+被误当成本次源码的构建结果。正式交付至少还应保存：
+
+```text
+源码commit或归档SHA256
+固件版本
+Keil版本与Target
+HEX SHA256
+烧录板编号
+本端/对端设备ID
+语音曲目映射
+现场日志和测试结论
+```
+
+A35 OTA不会更新这个 WBA 固件；WBA 回退也不能通过切换`/xxl/releases`完成。
+
+### 19.7 MP257可选外部状态发送端
+
+WBA USART1接受的`A5 5A + TYPE/LEN/PAYLOAD/CHECKSUM`状态帧如果由MP257提供，发送端
+工程应维护在：
+
+```text
+/home/alientek/STM32Cube_ATK_FW_MP2_V1.0.0/Projects/STM32MP257D-ATK/...
+```
+
+当前BSP中没有检索到与协议v2、16字节状态和两端设备ID匹配的实现；
+`CM33_OpenAMP_DEMO/OpenAMP_TTY_echo`只是通用回显示例。后续实现前不要修改WBA工程
+来假装补齐MP257端，也不要把A35的CH9140文本命令链路与该二进制状态帧混用。
+
+### 19.8 上电问候语音
+
+`main.c`会调用问候函数，但`TTL_UART2_STARTUP_SONG_NUMBER`默认是0，表示关闭。因此
+当前上电没有语音属于正常配置。曲目1～5均为风险提示，尤其曲目1是“左侧来车”，不能
+作为问候语。准备独立曲目并确认编号`N`后，在Keil预处理宏增加
+`TTL_UART2_STARTUP_SONG_NUMBER=N`，Clean/Rebuild并重新烧录；否则保持0。

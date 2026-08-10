@@ -1,0 +1,46 @@
+# Keep the reproducible Keil/CubeMX source project, but never commit local IDE
+# state or stale build output. In particular, the existing HEX predates v1.8.1.
+**/.vscode/
+**/*.uvguix.*
+**/*.uvoptx
+**/build.log
+**/MDK-ARM/02_test/
+**/MDK-ARM/*.lst
+
+# The WBA54 project uses the legacy CMSIS Include tree and the STM32WBA
+# device package.  The remaining CMSIS reference packages are unrelated to
+# this firmware and add tens of megabytes without participating in the build.
+**/Drivers/CMSIS/Core/
+**/Drivers/CMSIS/Core_A/
+**/Drivers/CMSIS/DAP/
+**/Drivers/CMSIS/DSP/
+**/Drivers/CMSIS/Documentation/
+**/Drivers/CMSIS/NN/
+**/Drivers/CMSIS/RTOS/
+**/Drivers/CMSIS/RTOS2/
+
+# Keep only the two prebuilt ST libraries referenced by 02_test.uvprojx.
+**/Middlewares/ST/STM32_WPAN/link_layer/ll_cmd_lib/lib/*
+!**/Middlewares/ST/STM32_WPAN/link_layer/ll_cmd_lib/lib/LinkLayer_BLE_Full_lib.a
+**/Middlewares/ST/STM32_WPAN/ble/stack/lib/*
+!**/Middlewares/ST/STM32_WPAN/ble/stack/lib/stm32wba_ble_stack_full.a
+
+# Keil outputs and per-user state are rebuilt locally and must not be used as
+# evidence that the source in this repository has been compiled.
+**/*.o
+**/*.obj
+**/*.d
+**/*.dep
+**/*.crf
+**/*.lnp
+**/*.axf
+**/*.elf
+**/*.hex
+**/*.bin
+**/*.map
+**/*.htm
+**/*.html
+**/*.tmp
+**/*.bak
+**/*.user
+**/*.sct.bak

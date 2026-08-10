@@ -1,9 +1,10 @@
 # Repository scope
 #
-# This repository intentionally tracks only /mier and the STM32WBA Bluetooth
-# firmware project. Files elsewhere are local reference material.
+# This repository intentionally tracks /mier and the two maintained STM32WBA
+# firmware projects. Files elsewhere are local reference material.
 /*
 !/.gitignore
 !/README.md
 !/mier/
 !/E04-2G4M10S1AX/
+!/V2V_keil/

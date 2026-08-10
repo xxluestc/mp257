@@ -1,11 +1,12 @@
 # STM32MP257 主动安全骑行辅助系统
 
-当前仓库维护两个可直接构建和部署的工程：
+当前仓库维护三个相互独立的工程：
 
 ```text
 mp257/
 ├── mier/lyr/camera_detect/   # STM32MP257 A35 Linux核心业务
-└── E04-2G4M10S1AX/           # STM32WBA54 + CH9140 BLE方向灯固件
+├── E04-2G4M10S1AX/           # STM32WBA54 + CH9140 BLE方向灯固件
+└── V2V_keil/E04-2G4M10S1AX/ # 双WBA广播/扫描、GPS/IMU和语音实验固件
 ```
 
 旧的`A_Core`、`recorder`、`camera`等目录是早期实验遗留，不是当前业务入口。
@@ -31,6 +32,11 @@ WBA固件在Windows中用Keil打开
 ST-LINK烧录。完整接线、LED低有效极性和联调方法见
 [WBA工程说明](E04-2G4M10S1AX/README.md)。
 
+独立双终端V2V语音固件在Windows中用Keil打开
+[`V2V_keil/E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx`](V2V_keil/E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx)。
+它与CH9140方向灯固件使用不同协议，不能互相覆盖或混烧。其完整数据流、端点ID、
+GPS/IMU、MP3语音和验证方法见[双终端V2V工程说明](V2V_keil/E04-2G4M10S1AX/README.md)。
+
 ## 当前运行结论
 
 - A35录像与实验CSV使用板载`/usr/local/helmet` userfs/ext4，不依赖外置TF。
@@ -49,6 +55,7 @@ ST-LINK烧录。完整接线、LED低有效极性和联调方法见
 - [雷达实验与人工标注](mier/lyr/camera_detect/docs/RADAR_EXPERIMENT.md)
 - [A35 OTA](mier/lyr/camera_detect/docs/OTA.md)
 - [WBA蓝牙方向灯](E04-2G4M10S1AX/README.md)
+- [双WBA V2V语音终端](V2V_keil/E04-2G4M10S1AX/README.md)
 
 运行日志、录像、实验CSV、现场配置、构建产物与IDE临时文件不提交；需要回看旧实现时
 使用Git历史，不在当前工程中新增`old`、`bak`或版本副本。
