@@ -9,6 +9,8 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.request import ProxyHandler, Request, build_opener
 
 from radar_dashboard import (
@@ -85,6 +87,43 @@ class DashboardTest(unittest.TestCase):
                     "radar-dashboard", "pause", "radar-dashboard:pause",
                     controller.control_token,
                 )
+
+    def test_control_status_reports_actual_tf_dvr_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = TaskController(Path(temporary))
+            controller._tf_status = lambda: {  # type: ignore[method-assign]
+                "tf_inserted": True,
+                "tf_mounted": True,
+                "tf_status": "mounted",
+                "tf_device": "/dev/mmcblk0",
+                "tf_mount": "/run/media/mmcblk0",
+            }
+            controller._unit_state = lambda unit: {  # type: ignore[method-assign]
+                "active": "active", "sub": "running", "pid": 123,
+            }
+            status = controller.status()
+            maintenance = status["maintenance"]
+            self.assertEqual(
+                maintenance["recording_storage"], "/run/media/mmcblk0/dvr"
+            )
+            self.assertTrue(maintenance["recording_storage_ready"])
+
+    def test_safe_tf_eject_stops_project_before_unmount(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = TaskController(Path(temporary))
+            calls: list[list[str]] = []
+
+            def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                calls.append(command)
+                return SimpleNamespace(returncode=0, stdout="ok")
+
+            with patch("radar_dashboard.subprocess.run", side_effect=fake_run):
+                result = controller.perform_maintenance(
+                    "tf_eject", "maintenance:tf_eject", controller.control_token
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(calls[0][-1], "stop")
+            self.assertEqual(calls[1][-1], "eject")
 
     def test_static_ids_are_unique_and_views_exist(self) -> None:
         html = (Path(__file__).parent / "static" / "index.html").read_text(

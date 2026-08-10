@@ -120,7 +120,7 @@ Linux systemd
 5. 通过`/dev/ttyRPMSG0`接收M33的IMU和V2X事件；
 6. 通过`/dev/ttySTM0`向WBA发送方向灯和风险命令；
 7. 调用ALSA/aplay播放骨传导提示音；
-8. 管理板载ext4中的事件触发录像、雷达和传感器日志；
+8. 管理外置TF中的事件录像，以及板载ext4中的雷达和传感器日志；
 9. 向HUD和Dashboard输出当前状态。
 
 当前摄像头是Sonix/Microdia USB UVC摄像头，现场设备节点为`/dev/video7`。设备编号可能
@@ -257,8 +257,8 @@ HTTP接口，手机端不属于本手册中的板端可执行程序。
 | WBA/BLE方向灯 | `/dev/ttySTM0`，115200波特率 | `radar_fusion` |
 | 骨传导音频 | `/dev/snd/pcmC0D0p` | ALSA/aplay，由主业务调用 |
 | 告警GPIO | `/dev/gpiochip3` | `radar_fusion` |
-| 板载userfs | `/dev/mmcblk1p9`，ext4，挂载到`/usr/local` | 比赛录像和业务数据 |
-| 外置TF卡 | `/dev/mmcblk0`或`/dev/mmcblk0p1` | 自动识别，仅用于导入/导出，不参与业务写入 |
+| 板载userfs | `/dev/mmcblk1p9`，ext4，挂载到`/usr/local` | 实验CSV和业务日志 |
+| 外置TF卡 | `/dev/mmcblk0`或`/dev/mmcblk0p1` | 自动识别，事件录像主存储 |
 
 ### 6.2 网络端口
 
@@ -274,16 +274,17 @@ HTTP接口，手机端不属于本手册中的板端可执行程序。
 
 ### 6.3 录像和业务数据
 
-可靠主存储位于板载 ext4：
+录像主存储位于外置TF，实际目录由卡布局决定：
 
 ```text
-/usr/local/helmet
+/run/media/mmcblk0/dvr
+# 或 /run/media/mmcblk0p1/dvr
 ```
 
 主要数据目录：
 
 ```text
-/usr/local/helmet/dvr/*.mp4
+<TF实际挂载点>/dvr/*.mp4
 /usr/local/helmet/radar_experiments/radar_data.csv
 /usr/local/helmet/radar_experiments/sensor_events.csv
 /usr/local/helmet/radar_experiments/imu_delivery.csv
@@ -488,16 +489,18 @@ systemctl start dvr.service
 
 ### 10.4 安全移除TF卡
 
-当前主业务不再向 TF 写入，但换新卡或人工导出数据后仍应安全卸载：
+当前主业务持续向TF写入录像，弹出前必须先安全停止项目并等待编码完成：
 
 ```bash
+/xxl/camera_detect/scripts/project_safe_stop.sh stop
 /xxl/camera_detect/scripts/tf_card_control.sh eject
 ```
 
-重新插入后先确认挂载。主业务使用板载 ext4，不必因 TF 插拔而重启：
+重新插入后挂载TF并重启业务：
 
 ```bash
-/xxl/camera_detect/scripts/tf_card_control.sh status
+/xxl/camera_detect/scripts/tf_card_control.sh mount
+systemctl start dvr.service
 ```
 
 Dashboard“设备运维”页提供等价的TF挂载/弹出、安全停止项目和安全关机按钮。

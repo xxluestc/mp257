@@ -28,7 +28,7 @@
  *   1. 雷达 BSD 目标检测 + 摄像头 NPU 道路用户验证
  *   2. PD11 LED 告警闪烁
  *   3. DVR 行车记录:
- *      - TARGET_ON → 开始缓冲 MJPEG 帧到板载 ext4
+ *      - TARGET_ON → 开始缓冲 MJPEG 帧到外置 TF 卡
  *      - COLLISION + NPU 确认 → 保存前后各 15 秒为 MP4
  *      - TARGET_OFF → 清理缓冲(无触发时)
  *
@@ -102,10 +102,9 @@
 #define LED_BLINK_OFF_MS       200
 
 /* DVR */
-#define DVR_BASE_DIR           "/usr/local/helmet/dvr"
-#define DVR_BUFFER_DIR         "/usr/local/helmet/dvr/.buffer"
-#define DVR_MOUNT_DIR          "/usr/local"
-#define DVR_MOUNT_PARENT       "/usr"
+#define DVR_BASE_DIR_DEFAULT   "/run/media/mmcblk0p1/dvr"
+#define DVR_MOUNT_DIR_DEFAULT  "/run/media/mmcblk0p1"
+#define DVR_PATH_CAPACITY      768
 #define DVR_SAVE_BEFORE_SEC    15
 #define DVR_SAVE_AFTER_SEC     15
 #define DVR_CAPTURE_FPS        25
@@ -163,7 +162,7 @@ static volatile uint64_t g_imu_fall_time_us = 0;
 static volatile uint64_t g_last_v2x_audio_us = 0;
 #define V2X_AUDIO_COOLDOWN_US 2000000ULL     /* V2X 语音 2 秒防连播 */
 static int g_led_fd              = -1;
-static std::atomic<int> g_camera_ok_global{0}; /* 供 RPMsg 线程使用 */
+static std::atomic<uint64_t> g_pending_fall_dvr_us{0};
 static char g_last_road_user_label[32] = "unknown";
 static float g_last_road_user_score    = 0.0f;
 static struct timeval g_t_start;             /* 程序启动时间 (全局) */
@@ -181,6 +180,9 @@ static char  g_ble_led_uart[PATH_MAX] = BLE_LED_UART_DEFAULT;
 static bool  g_ble_led_enabled = true;
 static bool  g_first_camera_frame_logged = false;
 static bool  g_first_radar_frame_logged = false;
+static char  g_dvr_base_dir[DVR_PATH_CAPACITY] = DVR_BASE_DIR_DEFAULT;
+static char  g_dvr_mount_dir[DVR_PATH_CAPACITY] = DVR_MOUNT_DIR_DEFAULT;
+static char  g_dvr_mount_parent[DVR_PATH_CAPACITY] = "/run/media";
 
 /*
  * 启动优化统一使用 CLOCK_BOOTTIME。它不受 NTP/RTC 校时影响，并与
@@ -1239,30 +1241,59 @@ static int g_storage_ready = 0;
 #define DVR_START_RETRY_US 2000000ULL
 
 /*
- * 目录存在不等于 userfs 已挂载。用 st_dev 与父目录比较，防止把根文件系统
- * 误当成业务存储写入。
+ * 目录存在不等于 TF 已挂载。用 st_dev 与父目录比较，防止把根文件系统中
+ * 提前创建的空挂载目录误当成 TF 写入。
  */
 static int dvr_storage_available(void) {
     struct stat mount_st;
     struct stat parent_st;
-    return stat(DVR_MOUNT_DIR, &mount_st) == 0 &&
-           stat(DVR_MOUNT_PARENT, &parent_st) == 0 &&
+    return stat(g_dvr_mount_dir, &mount_st) == 0 &&
+           stat(g_dvr_mount_parent, &parent_st) == 0 &&
            S_ISDIR(mount_st.st_mode) && mount_st.st_dev != parent_st.st_dev;
 }
 
 static int path_requires_dvr_mount(const char *path) {
-    size_t prefix_len = strlen(DVR_MOUNT_DIR);
-    return path != NULL && strncmp(path, DVR_MOUNT_DIR, prefix_len) == 0 &&
+    size_t prefix_len = strlen(g_dvr_mount_dir);
+    return path != NULL && strncmp(path, g_dvr_mount_dir, prefix_len) == 0 &&
            (path[prefix_len] == '\0' || path[prefix_len] == '/');
 }
 
-/* 在主循环中重复调用；userfs 晚到时只初始化一次，不阻塞风险处理。 */
+static int finalize_dvr_storage_paths(void) {
+    size_t mount_len = strlen(g_dvr_mount_dir);
+    size_t base_len = strlen(g_dvr_base_dir);
+    while (mount_len > 1 && g_dvr_mount_dir[mount_len - 1] == '/')
+        g_dvr_mount_dir[--mount_len] = '\0';
+    while (base_len > 1 && g_dvr_base_dir[base_len - 1] == '/')
+        g_dvr_base_dir[--base_len] = '\0';
+
+    if (g_dvr_mount_dir[0] != '/' || g_dvr_base_dir[0] != '/' ||
+        strstr(g_dvr_mount_dir, "/../") != NULL ||
+        strstr(g_dvr_base_dir, "/../") != NULL ||
+        strncmp(g_dvr_base_dir, g_dvr_mount_dir, mount_len) != 0 ||
+        g_dvr_base_dir[mount_len] != '/') {
+        fprintf(stderr,
+                "[DVR] dvr-dir must be an absolute child of dvr-mount-dir\n");
+        return -1;
+    }
+
+    snprintf(g_dvr_mount_parent, sizeof(g_dvr_mount_parent), "%s",
+             g_dvr_mount_dir);
+    char *slash = strrchr(g_dvr_mount_parent, '/');
+    if (slash == NULL) return -1;
+    if (slash == g_dvr_mount_parent)
+        slash[1] = '\0';
+    else
+        *slash = '\0';
+    return 0;
+}
+
+/* 在主循环中重复调用；TF 晚到时只初始化一次，不阻塞风险处理。 */
 static void storage_try_initialize(void) {
     int storage_ready = dvr_storage_available();
     if (!dvr_storage_ok && storage_ready) {
-        if (mkdir_recursive(DVR_BASE_DIR) == 0) {
+        if (mkdir_recursive(g_dvr_base_dir) == 0) {
             dvr_storage_ok = 1;
-            printf("[系统] [DVR] Reliable ext4 storage attached: %s\n", DVR_BASE_DIR);
+            printf("[系统] [DVR] TF storage attached: %s\n", g_dvr_base_dir);
             startup_mark("dvr_storage_ready");
         }
     }
@@ -1290,7 +1321,7 @@ static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
     struct tm tm_buf;
     localtime_r(&t, &tm_buf);
     snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d_%03ld.mp4",
-             DVR_BASE_DIR, prefix,
+             g_dvr_base_dir, prefix,
              tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
              tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
              (long)(tv.tv_usec / 1000));
@@ -1299,21 +1330,25 @@ static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
 /* 启动 DVR 录制 */
 static int dvr_start(void) {
     if (dvr_recording) return 0;
-    /* 该函数也可能由 RPMsg 线程调用，只更新 DVR 自己的挂载状态，避免和
-     * 主循环并发初始化 CSV/JSON 文件。 */
-    if (!dvr_storage_ok && dvr_storage_available() &&
-        mkdir_recursive(DVR_BASE_DIR) == 0)
-        dvr_storage_ok = 1;
+    /* DVR状态只由主循环操作；每次启动都重新验证真实挂载，防止空闲期热拔后
+     * 把同名目录误建到根文件系统。 */
+    if (!dvr_storage_available()) {
+        dvr_storage_ok = 0;
+        printf("[系统] [DVR] TF card is not mounted, recording disabled\n");
+        return -1;
+    }
+    dvr_storage_ok = mkdir_recursive(g_dvr_base_dir) == 0;
     if (!dvr_storage_ok) {
-        printf("[系统] [DVR] Reliable ext4 storage not available, recording disabled\n");
+        fprintf(stderr, "[DVR] Cannot prepare TF recording directory: %s\n",
+                strerror(errno));
         return -1;
     }
 
     /* 创建目录 */
-    snprintf(dvr_buffer_dir, sizeof(dvr_buffer_dir), "%s", DVR_BUFFER_DIR);
-    if (mkdir(DVR_BASE_DIR, 0777) != 0 && errno != EEXIST) {
+    snprintf(dvr_buffer_dir, sizeof(dvr_buffer_dir), "%s/.buffer", g_dvr_base_dir);
+    if (mkdir(g_dvr_base_dir, 0777) != 0 && errno != EEXIST) {
         fprintf(stderr, "[DVR] Cannot create base directory %s: %s\n",
-                DVR_BASE_DIR, strerror(errno));
+                g_dvr_base_dir, strerror(errno));
         return -1;
     }
     if (mkdir(dvr_buffer_dir, 0777) != 0 && errno != EEXIST) {
@@ -1723,18 +1758,9 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
 
     printf("[告警] [IMU] FALL DETECTED! Triggering emergency save\n");
     play_alert_sound("fall");
-
-    /* 若摄像头可用但未在缓冲, 立即启动缓冲 (从摔倒瞬间开始) */
-    if (g_camera_ok_global && !dvr_recording && !dvr_encoding) {
-        if (dvr_ensure_started(trigger_time_us, "fall", 1) == 0) {
-            printf("[保存] [DVR] Fall-triggered recording started (no pre-buffer)\n");
-        }
-    }
-
-    /* 触发保存 (若已在缓冲则保留 pre 15s, 否则从当前开始) */
-    if (dvr_recording && !dvr_encoding) {
-        dvr_trigger_save(trigger_time_us, "fall");
-    }
+    /* RPMsg/测试线程只投递事件；DVR文件和状态统一由主线程操作，避免与摄像头
+     * 写帧、雷达碰撞触发并发打开或关闭同一个缓冲文件。 */
+    g_pending_fall_dvr_us.store(trigger_time_us, std::memory_order_release);
 }
 
 /* ======================== IMU 异常事件 UDP 转发到 HUD/App ======================== */
@@ -2170,7 +2196,6 @@ static void *camera_runtime_thread(void *arg) {
 
         dvr_camera_pixelformat = runtime->cam.pixelformat;
         runtime->ready.store(true, std::memory_order_release);
-        g_camera_ok_global.store(1, std::memory_order_release);
         printf("[系统] [FUSION] Camera + NPU attached; switched to fusion + DVR mode\n");
         startup_mark("fusion_vision_initialized");
     }
@@ -2214,6 +2239,22 @@ int main(int argc, char *argv[]) {
             g_direction_stable_samples = atoi(argv[++i]);
         else if (strcmp(argv[i], "--radar-log-dir") == 0 && i + 1 < argc)
             snprintf(g_radar_log_dir, sizeof(g_radar_log_dir), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--dvr-dir") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (strlen(value) >= sizeof(g_dvr_base_dir)) {
+                fprintf(stderr, "[DVR] dvr-dir is too long\n");
+                return 2;
+            }
+            strcpy(g_dvr_base_dir, value);
+        }
+        else if (strcmp(argv[i], "--dvr-mount-dir") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (strlen(value) >= sizeof(g_dvr_mount_dir)) {
+                fprintf(stderr, "[DVR] dvr-mount-dir is too long\n");
+                return 2;
+            }
+            strcpy(g_dvr_mount_dir, value);
+        }
         else if (strcmp(argv[i], "--ble-led-uart") == 0 && i + 1 < argc)
             snprintf(g_ble_led_uart, sizeof(g_ble_led_uart), "%s", argv[++i]);
         else if (strcmp(argv[i], "--no-ble-led") == 0)
@@ -2224,6 +2265,7 @@ int main(int argc, char *argv[]) {
                    "          [--angle-sign -1|1]\n"
                    "          [--angle-alpha 0..1] [--direction-samples n]\n"
                    "          [--radar-log-dir path]\n"
+                   "          [--dvr-dir path] [--dvr-mount-dir path]\n"
                    "          [--ble-led-uart path] [--no-ble-led]\n"
                    "          [-t fall_delay] [--test-fall-count n]\n"
                    "          [--test-fall-interval sec]\n"
@@ -2266,6 +2308,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[RADAR] direction-samples must be between 1 and 20\n");
         return 2;
     }
+    if (finalize_dvr_storage_paths() != 0)
+        return 2;
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
@@ -2296,7 +2340,9 @@ int main(int argc, char *argv[]) {
            g_ble_led_enabled ? g_ble_led_uart : "disabled",
            g_ble_led_enabled ? " @ 115200" : "");
     printf("LED:      PD11 via %s\n", GPIO_CHIP_DEV);
-    printf("DVR:      %s (pre=%ds post=%ds)\n", DVR_BASE_DIR, DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
+    printf("DVR:      %s on TF mount %s (pre=%ds post=%ds)\n",
+           g_dvr_base_dir, g_dvr_mount_dir,
+           DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");
 
     /* 0. ffmpeg/ffprobe 是强制依赖：不仅编码，还要完整解码验证后才能提交。 */
@@ -2313,7 +2359,7 @@ int main(int argc, char *argv[]) {
 
     storage_try_initialize();
     if (!dvr_storage_ok)
-        printf("[系统] [DVR] userfs not mounted yet; storage will attach in background\n");
+        printf("[系统] [DVR] TF is not mounted; recording stays disabled until attached\n");
     startup_mark("dvr_dependencies_checked");
 
     /* 1. GPIO LED: PD11, 用于雷达+NPU/IMU 告警闪烁 */
@@ -2388,7 +2434,7 @@ int main(int argc, char *argv[]) {
     /*
      * 主循环数据流:
      *   1) 按 25fps 定时从摄像头取 MJPEG 帧
-     *   2) DVR 把帧写入板载 ext4 循环缓冲 (见 dvr_start/dvr_save_frame)
+     *   2) DVR 把帧写入外置 TF 循环缓冲 (见 dvr_start/dvr_save_frame)
      *   3) 每 10 帧选 1 帧做 NPU 推理, 判断是否有道路使用者
      *   4) NPU 看到目标 → 开始/继续 DVR 缓冲
      *   5) NPU 连续 N 帧没看到目标 → 停止缓冲 (未触发保存时)
@@ -2420,6 +2466,21 @@ int main(int argc, char *argv[]) {
         bool camera_ok =
             camera_runtime.ready.load(std::memory_order_acquire);
         NpuDetector *detector = camera_ok ? camera_runtime.detector : NULL;
+
+        uint64_t fall_dvr_us =
+            g_pending_fall_dvr_us.exchange(0, std::memory_order_acq_rel);
+        if (fall_dvr_us != 0) {
+            if (camera_ok && !dvr_recording && !dvr_encoding) {
+                if (dvr_ensure_started(fall_dvr_us, "fall", 1) == 0) {
+                    printf("[保存] [DVR] Fall-triggered recording started "
+                           "(no pre-buffer)\n");
+                }
+            }
+            if (camera_ok && dvr_recording && !dvr_encoding)
+                dvr_trigger_save(fall_dvr_us, "fall");
+            else if (!camera_ok)
+                printf("[系统] [DVR] Fall event has no video because camera is unavailable\n");
+        }
 
         /* 回收异步编码子进程 */
         if (dvr_encoder_pid > 0) {

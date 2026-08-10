@@ -3,6 +3,7 @@
 # Targets:
 #   make / make radar-fusion  - Build radar_fusion, HUD, and check Dashboard
 #   make deploy-radar         - Deploy the complete runtime set to the board
+#   make deploy-runtime       - Deploy, install current units, and restart A35
 #   make ota-package VERSION=1.0.1 - Build a versioned runtime-only OTA package
 #   make deploy-ota-service   - Install/update the independent board OTA service
 #   make clean                - Remove local build artifacts
@@ -35,7 +36,8 @@ MODEL_FILE = $(MODEL_DIR)/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb
 LABEL_FILE = $(MODEL_DIR)/labels_coco_dataset_80.txt
 
 .PHONY: all radar-fusion hud dashboard-check script-check ota-check ota-package \
-	ota-test ota-clean deploy deploy-radar deploy-ota-service run run-radar clean
+	ota-test ota-clean deploy deploy-radar deploy-runtime deploy-ota-service \
+	run run-radar clean
 
 all: radar-fusion hud dashboard-check script-check
 
@@ -102,7 +104,7 @@ $(TARGET): $(COMMON_OBJS) radar_fusion.o
 
 deploy: deploy-radar
 
-deploy-radar: $(TARGET) hud dashboard-check
+deploy-radar: $(TARGET) hud dashboard-check script-check
 	@echo "Deploying $(TARGET), HUD, Dashboard, models and local audio..."
 	ssh root@$(BOARD_IP) 'mkdir -p $(BOARD_DIR)/models $(BOARD_DIR)/scripts $(BOARD_DIR)/sounds $(BOARD_DIR)/nav_tts_cache $(BOARD_DIR)/dashboard/static'
 	scp $(TARGET) root@$(BOARD_IP):$(BOARD_DIR)/
@@ -118,6 +120,12 @@ deploy-radar: $(TARGET) hud dashboard-check
 	scp dashboard/static/index.html dashboard/static/styles.css dashboard/static/app.js root@$(BOARD_IP):$(BOARD_DIR)/dashboard/static/
 	ssh root@$(BOARD_IP) 'test -f $(BOARD_DIR)/radar_config || cp $(BOARD_DIR)/radar_config.example $(BOARD_DIR)/radar_config; chmod +x $(BOARD_DIR)/$(TARGET) $(BOARD_DIR)/start_dvr.sh $(BOARD_DIR)/scripts/*.sh $(BOARD_DIR)/scripts/*.py $(BOARD_DIR)/dashboard/radar_dashboard.py $(HUD_REMOTE)'
 	@echo "Deploy complete."
+
+# 完整更新运行态：部署文件、安装最新unit参数并重启A35业务。
+# 不重启M33，不覆盖现场radar_config。
+deploy-runtime: deploy-radar
+	ssh root@$(BOARD_IP) 'cp $(BOARD_DIR)/dvr.service.example /etc/systemd/system/dvr.service && cp $(BOARD_DIR)/radar-dashboard.service.example /etc/systemd/system/radar-dashboard.service && systemctl daemon-reload && systemctl enable radar-dashboard.service dvr.service && systemctl restart radar-dashboard.service dvr.service'
+	@echo "Runtime services updated and restarted."
 
 deploy-ota-service: ota-check
 	ssh root@$(BOARD_IP) 'mkdir -p $(OTA_REMOTE)'

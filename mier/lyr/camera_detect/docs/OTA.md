@@ -138,7 +138,8 @@ curl http://127.0.0.1:8080/api/state
 curl http://127.0.0.1:8090/api/ota/status
 ```
 
-健康检查最多等待 45 秒，至少要求：
+健康检查默认最多等待90秒，为TF文件系统检查、自动挂载、写入探测和摄像头/NPU初始化
+留出余量，至少要求：
 
 - `/xxl/camera_detect/VERSION` 是目标版本；
 - `dvr.service` 为 active；
@@ -203,7 +204,7 @@ Linux 6.6.48、Python 3.12.4、约 1.7 GiB RAM，测试前
 3. 相同业务内容仅修改 VERSION，完成 `1.0.0 -> 1.0.1` 升级；
 4. 手工从 1.0.1 回滚到 1.0.0，再切回 1.0.1；
 5. 通过 OTA 安装包含运行清理修复的 1.0.2；
-6. 构造 HUD 必然退出的临时 1.0.3 负向包，健康检查在 45 秒后报告
+6. 构造HUD必然退出的临时负向包，健康检查超时后报告
    `HUD process is not running`，随后自动恢复 1.0.2，状态为
    `rolled_back`；
 7. 每次停止、切换、回滚后 `dvr.service`、`radar_fusion`、release 内 HUD

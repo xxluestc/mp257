@@ -4,9 +4,9 @@
 理解 Linux 启动链路、systemd 依赖、remoteproc/RPMsg 和嵌入式系统稳定性取舍。
 文中的数据均来自开发板冷启动实测，不是理论估算。
 
-> 2026-08-09状态更新：本文中的TF/fsck数据保留为启动优化和故障排查历史。
-> 当前`start_dvr.sh`不再自动挂载TF，录像和CSV使用板载`/usr/local/helmet`
-> userfs/ext4；TF不再位于业务关键链。当前存储结论见
+> 当前状态更新：本文中的TF/fsck数据保留为启动优化和故障排查历史。
+> 当前`start_dvr.sh`会自动识别、挂载并探测TF写入能力，事件录像使用TF；CSV使用
+> 板载`/usr/local/helmet` userfs/ext4。TF未就绪时业务明确失败重试。当前结论见
 > [DVR录像可靠性](DVR_RELIABILITY.md)。
 
 相关实现：
@@ -14,7 +14,7 @@
 - [`dvr-m33.service.example`](../dvr-m33.service.example)：M33 早期启动单元
 - [`start_m33_early.sh`](../scripts/start_m33_early.sh)：M33 remoteproc 启动与状态确认
 - [`dvr.service.example`](../dvr.service.example)：主业务 systemd 单元
-- [`start_dvr.sh`](../start_dvr.sh)：设备、板载存储、M33 和业务进程的启动编排
+- [`start_dvr.sh`](../start_dvr.sh)：设备、TF录像存储、M33和业务进程的启动编排
 - [`boot_optimize.sh`](../scripts/boot_optimize.sh)：可重复执行、可回退的优化脚本
 - [`collect_boot_metrics.sh`](../scripts/collect_boot_metrics.sh)：单调时钟和健康状态采集
 - [`dnsmasq.service.override.example`](../dnsmasq.service.override.example)：AP/DHCP 精确依赖
@@ -345,8 +345,9 @@ fsck 仅丢弃该临时缓存目录。最终冷启动 fsck 降至 1.615 秒，�
 1. 全局 `systemd-udev-settle`：服务已经被 systemd 标记为 deprecated。不过完整
    业务仍需等待 8.675 s 才出现的 V4L2 摄像头节点，所以仅删除 settle 预计只能让完整
    DVR 提前约 0.7 s；需要同时将等待收窄到具体设备，并审计产品不使用的 `iiod`。
-2. TF 卡（当时状态）：主脚本曾要求TF完成fsck/挂载；后续已经将M33/RPMsg/雷达
-   与可移除介质解耦，并把DVR/CSV迁移到板载ext4。该项现已完成，不再是候选。
+2. TF卡：M33/RPMsg基础链仍与可移除介质解耦，但当前产品要求录像必须保存到TF。
+   `dvr.service`会自动挂载并做写入探测，失败时明确重试；不能再以牺牲录像为代价
+   绕过TF。CSV仍位于板载ext4。
 3. 应用初始化：从进程启动到 Fusion ready 约 5.5 s，当前为编码器探测、GPIO、
    雷达、摄像头和 NPU 模型串行初始化。已增加 `[启动] [boot=...]` 里程碑，下一次
    冷启动后再依据精确数据调整顺序。
@@ -582,7 +583,7 @@ Dashboard采用普通systemd默认依赖，必须等`basic.target`；DVR又显�
 3. 10.90～13.13秒是雷达、摄像头、NPU和融合线程的真实应用初始化。
 
 当时没有直接禁用`rng-tools`，也没有跳过TF fsck。前者关系到系统熵源，后者保护当时
-仍在TF上的录像和CSV。当前TF已退出业务链，但仍不应在挂载使用时绕过介质检查。
+仍在TF上的录像和CSV。当前录像重新依赖TF，更不能绕过介质检查；CSV已经迁到板载。
 `optee_rng`当前是模块，未出现在默认`modules-load.d`中；结合模块
 TEE modalias和板端配置，可判断它由udev冷插拔过程按设备事件加载。
 
@@ -619,8 +620,8 @@ TEE modalias和板端配置，可判断它由udev冷插拔过程按设备事件�
 
 也不继续尝试取消`rng-tools`的`Before=sysinit.target`：刚才的实验已经证明，即使DVR
 service提前约3.5秒，当时单体脚本仍要等待摄像头和TF，完整业务不会因此提前。
-后续已经完成“雷达/RPMsg告警初始化”和“可移除存储”的解耦，并将业务主存储迁至
-板载ext4；TF侧仍需正常卸载，不能在fsck期间并发手工挂载。
+后续已经完成“雷达/RPMsg告警初始化”和可移除存储的代码分层；当前事件录像重新以
+TF为主存储，TF仍需正常卸载，不能在fsck期间并发手工挂载。
 
 ##### 业务初始化顺序重构：风险链先运行，摄像头与存储动态接入
 
@@ -726,8 +727,8 @@ AP 并获取 DHCP 地址的验收。本阶段没有触发告警来制造录像�
    雷达固件/温度条件验证前不继续缩短。
 2. RPMsg 线程打开设备后仍固定等待 1 s。缺少 M33 对端源码和明确握手协议时，
    缩短可能让 ready 早于对端端点可用。
-3. TF fsck 约1.3~1.8s是历史数据；当前TF已退出业务链，主脚本也不自动挂载。
-   后续重点是验证启动窗口事件补写，以及板载ext4不可用时的录像降级提示。
+3. TF fsck约1.3~1.8s是历史数据；当前主脚本自动识别、挂载并探测TF写入能力。
+   后续重点是实测冷启动挂载时延，以及TF异常时systemd重试和面板提示是否清楚。
 4. USB摄像头硬件较早被发现，但本阶段两次`/dev/video7`仍在约9.94~10.00秒才完成
    udev。它已不阻塞雷达/RPMsg；若继续优化完整视觉ready，可单独对`uvcvideo`预加载
    做A/B，但必须防止模块加载与TF、WiFi争用导致整体反而变慢。

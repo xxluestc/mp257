@@ -989,6 +989,7 @@ class TaskController:
                 **self._unit_state(item["unit"]),
             })
         tf_status = self._tf_status()
+        tf_mount = tf_status.get("tf_mount", "/run/media/mmcblk0p1")
         return {
             "ok": True,
             "timestamp_ms": int(time.time() * 1000),
@@ -999,7 +1000,8 @@ class TaskController:
             "tasks": tasks,
             "maintenance": {
                 **tf_status,
-                "recording_storage": "/usr/local/helmet/dvr",
+                "recording_storage": f"{str(tf_mount).rstrip('/')}/dvr",
+                "recording_storage_ready": tf_status["tf_mounted"],
             },
             "audit": self._recent_audit(),
         }
@@ -1109,6 +1111,29 @@ class TaskController:
         with self.lock:
             if action in {"tf_mount", "tf_eject"}:
                 verb = "mount" if action == "tf_mount" else "eject"
+                stop_details = ""
+                if action == "tf_eject":
+                    try:
+                        stop_result = subprocess.run(
+                            [str(stop_script), "stop"],
+                            check=False,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=180,
+                        )
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        details = str(exc)
+                        self._record(action, verb, "failed", details)
+                        raise RuntimeError(
+                            f"弹出TF前安全停止录像业务失败：{details}"
+                        ) from exc
+                    stop_details = stop_result.stdout.strip()
+                    if stop_result.returncode != 0:
+                        self._record(action, verb, "failed", stop_details)
+                        raise RuntimeError(stop_details)
                 try:
                     result = subprocess.run(
                         [str(storage_script), verb],
@@ -1125,6 +1150,8 @@ class TaskController:
                     self._record(action, verb, "failed", details)
                     raise RuntimeError(f"TF 操作失败：{details}") from exc
                 details = result.stdout.strip() or f"TF {verb} completed"
+                if stop_details:
+                    details = f"{stop_details}; {details}"
                 if result.returncode != 0:
                     self._record(action, verb, "failed", details)
                     raise RuntimeError(details)
@@ -1141,7 +1168,7 @@ class TaskController:
                         text=True,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=45,
+                        timeout=60,
                     )
                 except (OSError, subprocess.SubprocessError) as exc:
                     details = str(exc)
@@ -1171,7 +1198,7 @@ class TaskController:
                         text=True,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=45,
+                        timeout=180,
                     )
                 except (OSError, subprocess.SubprocessError) as exc:
                     details = str(exc)

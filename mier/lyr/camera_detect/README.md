@@ -70,12 +70,14 @@ git clone https://github.com/xxluestc/mp257.git
 cd mp257/mier/lyr/camera_detect
 make clean
 make
-make deploy-radar BOARD_IP=192.168.88.10
+make deploy-runtime BOARD_IP=192.168.88.10
 ```
 
 仓库已跟踪A35编译所需源码、NPU头文件/运行库、模型、声音、Dashboard和部署脚本；
 主机仍需安装AArch64交叉编译器、Python 3和`make`。部署要求能够SSH/SCP登录
 开发板root账号，且已有现场`radar_config`不会被覆盖。
+完整环境安装、提交校验、A35部署、systemd更新和WBA Keil烧录边界见
+[跨电脑编译部署交接](docs/跨电脑编译部署交接.md)。
 
 生成 A35 运行时 OTA 包：
 
@@ -100,11 +102,12 @@ MP257、CH9140 与 WBA 左右碰撞方向灯的接线、协议、烧录、测试
 开发板恢复在线后，按需覆盖地址：
 
 ```bash
-make deploy-radar BOARD_IP=192.168.88.10 BOARD_DIR=/xxl/camera_detect
+make deploy-runtime BOARD_IP=192.168.88.10 BOARD_DIR=/xxl/camera_detect
 ```
 
-该目标会部署主程序、HUD、模型、脚本、所有本地 WAV、Dashboard、
-启动脚本和配置模板。已有 `/xxl/camera_detect/radar_config` 不会被覆盖。
+该目标会部署主程序、HUD、模型、脚本、所有本地WAV、Dashboard和配置模板，安装最新
+`dvr.service`停止超时并重启A35业务。已有`/xxl/camera_detect/radar_config`不会被
+覆盖，M33不会被重启。只想复制文件而不重启时使用`make deploy-radar`。
 
 板端运行：
 
@@ -209,8 +212,9 @@ Dashboard、M33 或 WiFi。
 二次确认。命令行等价入口是`scripts/tf_card_control.sh`和
 `scripts/project_safe_stop.sh`。安全停止项目只停止`dvr.service`并同步存储，Dashboard、
 M33、网络和OTA继续运行，因此仍可在网页或SSH中重新启动业务或继续执行安全关机。
-安全关机会进一步请求systemd有序停止整机。录像主存储为板载ext4，所以TF弹出不影响
-录像服务。设备运维区的项目按钮会按`dvr.service`状态在“安全停止项目”和
+安全关机会进一步请求systemd有序停止整机。录像主存储为外置TF，因此“安全弹出TF”
+会先停止录像业务、等待编码完成并同步文件系统，再卸载卡；重新挂载后点击“安全启动
+项目”。设备运维区的项目按钮会按`dvr.service`状态在“安全停止项目”和
 “安全启动项目”之间自动切换。
 
 五类测试事件均可点击开始/结束，结果保存到：
@@ -272,13 +276,14 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 
 - 系统日志：`/xxl/camera_detect/dvr_system.log`
 - 雷达 Dashboard 日志：`/xxl/camera_detect/radar_dashboard.log`
-- 紧急视频：`/usr/local/helmet/dvr/emergency_*.mp4`
+- 紧急视频：`<TF实际挂载点>/dvr/emergency_*.mp4`
 - 雷达实验数据：`/usr/local/helmet/radar_experiments/`
 
-比赛录像以板载 `userfs` ext4 为主存储，不再直接写 TF 卡。编码 worker 会在
-`/tmp` 生成并完整解码，复制到 ext4 后再次解码，通过后才原子提交正式 MP4。
-最多保留最近 12 段或约 2 GiB。故障 TF 卡不能作为比赛录像介质，详见
-[DVR可靠性与TF故障复盘](docs/DVR_RELIABILITY.md)。
+比赛录像以外置TF为主存储。启动脚本兼容整盘文件系统`/dev/mmcblk0`和首分区
+`/dev/mmcblk0p1`，只有确认真实挂载且完成写入探测后才启动融合业务。编码worker会在
+`/tmp`生成并完整解码，复制到TF后再次解码，通过后才原子提交正式MP4；最多保留最近
+12段或约2GiB。TF缺失、挂载失败或不可写时`dvr.service`明确失败，不允许静默无录像。
+详见[DVR可靠性与TF存储](docs/DVR_RELIABILITY.md)。
 
 同一进程两次间隔触发以及三段正式MP4整段解码已通过板端回归。比赛前仍应执行：
 
@@ -302,7 +307,8 @@ HUD 或手机短信，不能作为端到端短信测试。完整边界见
 - [STM32WBA54 BLE Central、CH9140和V2V方向灯固件](../../../E04-2G4M10S1AX/README.md)
 - [启动优化、M33 U-Boot 启动与回退](docs/BOOT_OPTIMIZATION.md)
 - [运行可靠性、日志容量与 TF/RAM 缓存](docs/RUNTIME_STORAGE.md)
-- [DVR可靠性、板载ext4与故障TF复盘](docs/DVR_RELIABILITY.md)
+- [DVR可靠性、TF主存储与故障恢复](docs/DVR_RELIABILITY.md)
+- [跨电脑编译、部署与烧录交接](docs/跨电脑编译部署交接.md)
 - [A35 应用层 OTA 打包、部署、测试与回滚](docs/OTA.md)
 - [Android 使用的 OTA HTTP API](docs/OTA_API.md)
 - [Android/云端 OTA 分工与联调交接](docs/OTA_HANDOFF.md)

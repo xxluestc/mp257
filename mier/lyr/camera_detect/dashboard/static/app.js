@@ -726,12 +726,12 @@ function requestControl(task, action) {
 const maintenanceCopy = {
   tf_mount: {
     title: "识别并挂载 TF 卡？",
-    message: "自动识别整盘格式或带分区的 TF 卡并挂载。录像主存储位于板载 ext4，不依赖 TF 卡。",
+    message: "自动识别整盘格式或带分区的 TF 卡并挂载。TF 是录像主存储；挂载成功后才能启动录像业务。",
     confirm: "确认挂载",
   },
   tf_eject: {
     title: "安全弹出 TF 卡？",
-    message: "系统会先同步缓存再卸载 TF。看到成功提示后才能物理拔卡。",
+    message: "系统会先安全停止录像业务、等待编码完成、同步缓存，再卸载 TF。看到成功提示后才能物理拔卡。",
     confirm: "同步并弹出",
   },
   project_stop: {
@@ -795,7 +795,9 @@ function renderControl(payload) {
     tfState.textContent = "未检测到 TF 卡";
     tfState.className = "missing";
   }
-  $("recording-storage").textContent = `录像：${maintenance.recording_storage || "/usr/local/helmet/dvr"}`;
+  $("recording-storage").textContent = maintenance.recording_storage_ready
+    ? `录像：${maintenance.recording_storage}（TF）`
+    : `录像：等待 TF 挂载 · ${maintenance.recording_storage || "/run/media/mmcblk0p1/dvr"}`;
   document.querySelectorAll("[data-maintenance]").forEach((button) => {
     const action = button.dataset.maintenance;
     button.disabled = !payload.controls_enabled

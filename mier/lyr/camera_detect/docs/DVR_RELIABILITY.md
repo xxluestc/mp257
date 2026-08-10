@@ -1,193 +1,141 @@
-# DVR录像可靠性、存储与比赛检查
+# DVR录像可靠性与TF主存储
 
-## 1. 当前结论
+## 1. 当前存储策略
 
-比赛录像和雷达/传感器日志使用板载`userfs` ext4，不再写入外置TF卡：
+事件录像必须保存到外置TF卡，不写板载`/usr/local/helmet/dvr`：
 
 ```text
-/usr/local/helmet/dvr/                 # emergency_*.mp4
-/usr/local/helmet/radar_experiments/   # CSV、labels、radar_state.json
+整盘文件系统：/dev/mmcblk0   -> /run/media/mmcblk0/dvr/
+带首分区：    /dev/mmcblk0p1 -> /run/media/mmcblk0p1/dvr/
 ```
 
-先前的`/dev/mmcblk0p1`旧卡不能用于比赛数据：同一文件在线读取正常，但卸载重挂后
-内容和哈希发生变化，MP4丢失`moov`，已停用。2026-08-09更换的新卡采用无分区的
-整盘FAT布局，设备为`/dev/mmcblk0`。新卡执行`fsck.fat -n`返回0；写入256 MiB
-随机数据和43 MiB有效视频后，三轮卸载重挂的两个SHA-256均保持一致，视频再次
-整段解码成功，测试文件随后已清理。
+`start_dvr.sh`调用`scripts/tf_card_control.sh`自动识别两种布局，并把实际挂载点通过
+`--dvr-mount-dir`和`--dvr-dir`传给`radar_fusion`。路径不是由C++猜测，也不依赖
+某一种固定分区形式。
 
-Dashboard和命令行脚本现会自动区分`/dev/mmcblk0`与`/dev/mmcblk0p1`。未挂载或
-未插卡时请求“安全弹出”会返回失败，不再显示虚假的成功状态。
-`start_dvr.sh`还会识别旧版本现场配置中的TF日志路径，并仅把运行时CSV目录迁移到
-板载ext4，防止OTA继承旧配置后重新写回故障卡或未挂载目录。
-
-## 2. 故障根因与已修复的软件缺陷
-
-本次排查确认了三个相互叠加的问题：
-
-1. 旧代码只检查编码器退出码为0且文件非空，随机数据也会被误报为“保存成功”；
-2. 多线程`radar_fusion`在`fork()`后没有立即`exec()`，而是在子进程继续执行
-   malloc、stdio、JPEG提取和GStreamer，属于未定义行为；
-3. 当前TF卡写入结果只在页缓存中暂时正确，卸载重挂后介质内容改变。
-
-现在由`radar_fusion`关闭原始缓冲、写入帧索引任务，然后用`posix_spawn`直接
-启动全新的`dvr_encode_worker.py`。worker执行：
+雷达、传感器和人工标注CSV仍保存到板载：
 
 ```text
-原始MJPEG缓冲
-  → /tmp提取JPEG
-  → /tmp编码MP4
-  → 检查ftyp/mdat/moov
-  → ffprobe
-  → ffmpeg整段解码
-  → 顺序复制到/usr/local/helmet/dvr/*.mp4.part
-  → 再次检查结构、ffprobe和整段解码
-  → 原子改名为正式emergency_*.mp4
+/usr/local/helmet/radar_experiments/
 ```
 
-只有全部通过才打印：
+这样人工安全弹出TF只影响录像业务，不会带走尚在分析的实验标注。
+
+## 2. 为什么不会误写根文件系统
+
+仅判断目录存在是不安全的：TF未挂载时，`/run/media/mmcblk0p1`也可能只是根文件系统
+里的普通空目录。当前链路有三道检查：
+
+1. 启动脚本确认块设备存在并完成真实挂载；
+2. 在`<TF挂载点>/dvr`创建并同步写入探测文件，失败则`dvr.service`退出；
+3. `radar_fusion`比较挂载点和父目录的`st_dev`，每次新建录像缓冲前重新检查。
+
+因此TF缺失、未挂载、只读或已被物理拔出时，不会悄悄写入同名根目录。服务会失败并
+由systemd重试，日志中可看到明确原因。
+
+## 3. 触发和提交条件
+
+碰撞录像要求现有融合逻辑最终成立：
 
 ```text
-[DVR-WORKER] VALIDATED /usr/local/helmet/dvr/emergency_....mp4
+摄像头可用 + 雷达危险 + NPU确认道路目标 -> 触发事件录像
+```
+
+摔倒事件也触发事件录像。RPMsg线程只投递原子事件，所有DVR文件状态统一由主线程
+处理，避免摔倒与摄像头写帧或雷达触发同时操作同一缓冲文件。
+
+第一次风险前最多保留15秒，最后一次风险后继续15秒；连续LEFT/CENTER/RIGHT可合并
+到同一段录像，连续事件窗口最长60秒。LED闪烁只说明告警成立，正式文件必须以以下
+日志为准：
+
+```text
+[DVR-WORKER] VALIDATED <TF挂载点>/dvr/emergency_....mp4
 [保存] [DVR] Encoder finished (exit=0)
 ```
 
-失败时不会播放保存完成提示，也不会留下正式`.mp4`；原始帧、JPEG和日志保存在：
+## 4. 编码和原子提交
 
 ```text
-/usr/local/helmet/dvr/.buffer.failed_<pid>/
+TF/.buffer/dvr_raw.bin
+  -> /tmp提取JPEG
+  -> /tmp编码MP4
+  -> 检查ftyp/mdat/moov
+  -> ffprobe
+  -> ffmpeg整段解码
+  -> 顺序复制到TF/dvr/*.mp4.part
+  -> 再次结构检查、ffprobe和整段解码
+  -> fsync并原子改名为emergency_*.mp4
 ```
 
-## 3. 连续左/中/右比赛演示
-
-第一次风险触发后继续保存15秒。该窗口内的新风险会延长录像结束时间，最长允许
-连续演示60秒，因此LEFT、CENTER、RIGHT可以放在同一段录像中，相互重叠不会被
-第一个事件吞掉。最终录像范围为：
+任何步骤失败都不会把`.part`冒充正式录像。原始帧和诊断日志保留在：
 
 ```text
-第一次风险前15秒 → 最后一次风险后15秒
+<TF挂载点>/dvr/.buffer.failed_<pid>/
 ```
 
-编码完成之前不要停止服务或断电。以`DVR-WORKER VALIDATED`作为真正完成标志，
-不能只看“Save triggered”或文件大小。
+容量策略：最多保留最近12段正式录像，合计最多约2GiB，超限时先删除最旧录像。
 
-对于隔开较长时间的事件，worker结束后主进程会清除触发状态并重新武装。下一次
-风险会重新建立缓冲并生成独立MP4。测试参数可在维护时模拟该过程：
+## 5. 安全停止和TF弹出
 
-```bash
-./radar_fusion -t 5 --test-fall-count 2 --test-fall-interval 50 --no-ble-led
-```
+`radar_fusion`收到SIGTERM后会关闭原始缓存、编码并等待worker完成。启动脚本允许最长
+120秒，`dvr.service`的`TimeoutStopSec`为150秒，避免过去3秒强杀导致的录像丢失。
 
-这些参数仅用于无实测环境时的录像回归，正常`dvr.service`不传入它们。
-
-## 4. 容量策略
-
-`/usr/local`来自板载`/dev/mmcblk1p9`，容量约4GB，当前可用约3.5GB。worker自动
-管理`emergency_*.mp4`：
-
-- 最多保留最近12段；
-- 正式录像合计最多约2GiB；
-- 任一条件超限时先删除最旧的正式事件录像；
-- `.part`永远不算正式录像；失败恢复目录需人工确认后清理。
-
-## 5. 比赛前检查
-
-```bash
-systemctl is-active dvr.service radar-dashboard.service
-pgrep -a radar_fusion
-df -h /usr/local /tmp
-ls -lht /usr/local/helmet/dvr
-find /usr/local/helmet/dvr -maxdepth 1 \
-  \( -name '*.part' -o -name '.buffer.failed_*' \) -print
-```
-
-快速检查全部正式录像：
-
-```bash
-/xxl/camera_detect/scripts/verify_dvr_videos.sh
-```
-
-比赛前至少执行一次整段解码：
-
-```bash
-/xxl/camera_detect/scripts/verify_dvr_videos.sh --full
-```
-
-一次真实触发后应看到`VALIDATED`，再运行`--full`。任何失败、`.part`或
-`.buffer.failed_*`都视为录像链路未通过，不能开始比赛演示。
-
-## 6. 复制到虚拟机
-
-```bash
-mkdir -p /home/alientek/dvr_project/mier/dvr_videos
-scp 'root@192.168.88.10:/usr/local/helmet/dvr/*.mp4' \
-  /home/alientek/dvr_project/mier/dvr_videos/
-```
-
-复制后对比开发板和虚拟机的`sha256sum`。
-
-## 7. 更换TF卡后的验收
-
-新TF卡不能只做一次在线读写。必须先备份、格式化并完成以下验收：
-
-1. 写入至少1GB可校验测试数据；
-2. `sync`并安全卸载；
-3. 重新插入/挂载；
-4. 全量SHA-256必须一致；
-5. 重复至少三轮并检查`dmesg`无MMC/I/O错误。
-
-即使新卡通过，默认仍建议板载ext4作为比赛主存储，TF只作为赛后导出或冗余副本。
-
-## 8. 2026-08-09板端回归证据
-
-最终端到端测试文件：
+Dashboard“安全弹出TF”按以下顺序执行：
 
 ```text
-/usr/local/helmet/dvr/emergency_20260727_111719_389.mp4
-H.264, 1280x720, 20fps, 15.05s, 45,047,560 bytes
-SHA-256: f92949eecb6465d4b030f921647c3050ece94949090b61ac0436c21ab99c6c78
+停止dvr.service -> 等待编码完成 -> sync -> umount -> 返回成功
 ```
 
-验证结果：worker双重整段解码通过；卸载并重新挂载`userfs`后SHA-256不变；
-`fsck.ext4 -fn /dev/mmcblk1p9`返回0；重挂后再次整段解码返回0。
-
-同一`radar_fusion`进程的双轮间隔触发回归：
-
-```text
-emergency_20260727_113950_320.mp4  H.264 1280x720 14.95s
-SHA-256 71c05a8bcaec1f2e91fce2af95b175bf21d5ecd5a86997d73f5709c9000f5b56
-
-emergency_20260727_114040_363.mp4  H.264 1280x720 14.95s
-SHA-256 41d4725be927a9a4da80cfd985cdff97ab85381b23d313afc32a6e00d9fcbf21
-```
-
-两次触发相隔50秒，日志均出现`VALIDATED`、`Encoder finished (exit=0)`和
-`State reset, ready for next trigger`。三段现存正式录像执行`verify_dvr_videos.sh
---full`结果为`检查=3 失败=0 未提交part=0 恢复目录=0`。
-
-更换新卡后又执行了一次独立的新鲜录像回归（测试文件验证后删除）：
-
-```text
-H.264 1280x720, 20 fps, 15.15 s, 46,776,152 bytes
-SHA-256 65b385ff1f081946a0ed9f16d37bbca1af23f7421143a79a7d8d33a61192ba11
-```
-
-该轮出现`Save triggered`、`Post-trigger recording complete`、
-`Encoder finished (exit=0)`和`State reset, ready for next trigger`，并通过ffprobe与
-ffmpeg整段解码。正常`dvr.service`随后恢复；原有三段正式录像保持不变。
-
-## 9. 安全停止与异常断电
-
-不要在仍有`.buffer`或`.part`时直接断电。Dashboard“设备运维”可安全停止项目或
-安全关机；命令行等价操作为：
+命令行等价操作：
 
 ```bash
 /xxl/camera_detect/scripts/project_safe_stop.sh stop
-/xxl/camera_detect/scripts/project_safe_stop.sh poweroff
+/xxl/camera_detect/scripts/tf_card_control.sh eject
 ```
 
-`stop`只停止`dvr.service`并刷盘，Dashboard、M33、网络和OTA保持在线；`poweroff`
-包含停止DVR和刷盘，随后由systemd有序关闭所有剩余服务和文件系统。执行整机关机时
-不需要先执行`stop`。
+直接执行`tf_card_control.sh eject`时，如果`dvr.service`仍在运行，脚本会拒绝卸载。
+不要直接拔卡，也不要在`.buffer`或`.part`存在时切断电源。
 
-直接切断电源可能丢失正在写入的临时缓冲或CSV。已经原子提交并通过整段解码的正式
-MP4风险较低，但比赛仍应使用有序关机。
+## 6. 板端检查
+
+```bash
+/xxl/camera_detect/scripts/tf_card_control.sh status
+systemctl is-active dvr.service radar-dashboard.service
+grep -E 'TF 录像主存储|Save triggered|DVR-WORKER|Encoder finished' \
+  /xxl/camera_detect/dvr_system.log | tail -100
+/xxl/camera_detect/scripts/verify_dvr_videos.sh --full
+```
+
+查询实际录像目录：
+
+```bash
+TF_MOUNT=$(/xxl/camera_detect/scripts/tf_card_control.sh status |
+  sed -n 's/.* mount=\([^ ]*\).*/\1/p')
+ls -lht "$TF_MOUNT/dvr"
+```
+
+复制到虚拟机：
+
+```bash
+mkdir -p /home/alientek/dvr_project/mier/dvr_videos
+scp 'root@192.168.88.10:/run/media/mmcblk0/dvr/*.mp4' \
+  /home/alientek/dvr_project/mier/dvr_videos/
+```
+
+如果`status`显示`mmcblk0p1`，将命令中的挂载目录相应改成
+`/run/media/mmcblk0p1/dvr`。
+
+## 7. TF卡验收
+
+比赛卡不能只看剩余容量。至少执行：
+
+1. `fsck.fat -n`或与文件系统对应的只读检查；
+2. 写入大文件并记录SHA-256；
+3. `sync`、安全卸载、重新挂载；
+4. 重新计算SHA-256，至少重复三轮；
+5. 检查`dmesg`无MMC、超时或I/O错误；
+6. 完成一次真实触发，等待`VALIDATED`，再执行`verify_dvr_videos.sh --full`。
+
+2026-08-09曾发现一张旧卡在线读取正常但重挂后内容变化，因此当时临时迁移到板载
+ext4。后续新卡已通过多轮重挂和哈希检查。当前需求已经明确恢复TF主存储；旧卡故障
+经验保留为验收标准，而不是改变录像保存位置的理由。

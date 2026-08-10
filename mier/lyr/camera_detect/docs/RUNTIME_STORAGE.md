@@ -3,9 +3,9 @@
 本文记录开发板实机排查和修复结果，覆盖主进程异常恢复、日志轮转、可靠存储和
 后续RAM预缓存设计。
 
-> 2026-08-09更新：当前故障TF卡已退出业务链路。录像和CSV迁移到板载
-> `/usr/local/helmet` ext4，编码改为独立worker和双重整段解码。本文前半部分
-> 保留历史设计背景，当前实现以[DVR_RELIABILITY.md](DVR_RELIABILITY.md)为准。
+> 当前状态：事件录像已经按项目要求恢复为外置TF主存储，CSV保留在板载
+> `/usr/local/helmet` ext4；编码使用独立worker和双重整段解码。当前实现以
+> [DVR_RELIABILITY.md](DVR_RELIABILITY.md)为准。
 
 ## radar_fusion 异常恢复
 
@@ -81,13 +81,13 @@ CSV 不能直接由外部脚本截断，否则可能丢失表头或与写入线�
 MP4属于业务数据。当前worker最多保留最近12段或约2GiB，达到任一限制时删除
 最旧的`emergency_*.mp4`。
 
-## 当前 ext4 DVR 缓存
+## 当前TF DVR缓存
 
 摄像头输出已经是 MJPEG，因此 `.buffer/dvr_raw.bin` 保存的是压缩 JPEG 帧，
 不是未压缩 RGB。当前仅在 NPU 检测到道路目标后开始缓存，配置为 25 FPS。
 
 代码的帧索引最多保留约90秒，允许连续左/中/右演示延长同一录像窗口。原始文件
-位于板载ext4，编码输出先在`/tmp`生成，通过验证后再提交到ext4。
+位于外置TF，编码输出先在`/tmp`生成，通过验证后再提交到TF。
 
 ```text
 逻辑索引：有界，保留最近约90秒

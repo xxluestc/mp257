@@ -552,7 +552,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--xxl-root", type=Path, default=DEFAULT_XXL_ROOT)
     parser.add_argument("--service", default="dvr.service")
     parser.add_argument("--dashboard-service", default="radar-dashboard.service")
-    parser.add_argument("--health-timeout", type=int, default=45)
+    parser.add_argument("--health-timeout", type=int, default=90)
     parser.add_argument("--test-mode", action="store_true")
     args = parser.parse_args()
     if args.job_id is None:

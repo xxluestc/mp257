@@ -383,7 +383,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-upload-bytes", type=int, default=DEFAULT_MAX_UPLOAD_BYTES
     )
-    parser.add_argument("--health-timeout", type=int, default=45)
+    parser.add_argument("--health-timeout", type=int, default=90)
     parser.add_argument("--test-mode", action="store_true")
     return parser.parse_args()
 

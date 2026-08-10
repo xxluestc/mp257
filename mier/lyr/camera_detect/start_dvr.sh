@@ -19,11 +19,13 @@ DASHBOARD_DIR="${CAMERA_DIR}/dashboard"
 DASHBOARD_SCRIPT="${DASHBOARD_DIR}/radar_dashboard.py"
 DASHBOARD_PID_FILE="/tmp/radar_dashboard.pid"
 LOG_MAINT_SCRIPT="${CAMERA_DIR}/scripts/log_maintenance.sh"
+TF_CONTROL_SCRIPT="${CAMERA_DIR}/scripts/tf_card_control.sh"
 RPMSG_DEV="/dev/ttyRPMSG0"
 RPROC_STATE="/sys/class/remoteproc/remoteproc0/state"
 LOG_FILE="${CAMERA_DIR}/dvr_system.log"
 RADAR_LOG_DIR="/usr/local/helmet/radar_experiments"
-DVR_STORAGE_DIR="/usr/local/helmet/dvr"
+DVR_STORAGE_DIR=""
+TF_MOUNT_DIR=""
 BLE_LED_ENABLED="1"
 BLE_LED_UART="/dev/ttySTM0"
 DASHBOARD_PORT="8080"
@@ -40,6 +42,7 @@ HUD_PID=0
 DASHBOARD_PID=0
 READER_PID=0                  # 关键日志过滤子 shell
 LOG_MAINT_PID=0
+DVR_SHUTDOWN_TIMEOUT_SEC="${DVR_SHUTDOWN_TIMEOUT_SEC:-120}"
 NAV_TTS_CACHE="${CAMERA_DIR}/nav_tts_cache"  # 导航 TTS 缓存目录
 
 # -------------------------- 用法 --------------------------
@@ -100,12 +103,20 @@ load_radar_config() {
 }
 load_radar_config
 
-# 1.0.6以前的现场配置可能仍把CSV写到可移除TF。保留所有标定阈值和BLE参数，
-# 但拒绝继续使用已退出业务链的旧TF路径，避免卡未挂载时写入根文件系统隐藏目录。
+case "$DVR_SHUTDOWN_TIMEOUT_SEC" in
+    ''|*[!0-9]*) DVR_SHUTDOWN_TIMEOUT_SEC=120 ;;
+esac
+if [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -lt 30 ] ||
+   [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -gt 300 ]; then
+    DVR_SHUTDOWN_TIMEOUT_SEC=120
+fi
+
+# CSV固定保存在板载ext4，避免人工弹出TF时丢失实验标注；录像单独使用TF。
+# 兼容旧配置并防止卡未挂载时把CSV写进根文件系统中的同名空目录。
 case "$RADAR_LOG_DIR" in
     /run/media/mmcblk0|/run/media/mmcblk0/*|\
     /run/media/mmcblk0p1|/run/media/mmcblk0p1/*)
-        printf '%s\n' "警告: 旧RADAR_LOG_DIR=${RADAR_LOG_DIR}已迁移到板载ext4" >&2
+        printf '%s\n' "警告: 旧RADAR_LOG_DIR=${RADAR_LOG_DIR}已迁移到板载ext4；DVR录像仍写TF" >&2
         RADAR_LOG_DIR="/usr/local/helmet/radar_experiments"
         ;;
 esac
@@ -197,25 +208,63 @@ stop_log_reader() {
 }
 
 start_storage_worker() {
+    if [ ! -x "$TF_CONTROL_SCRIPT" ]; then
+        log "错误: TF 控制脚本不可用: ${TF_CONTROL_SCRIPT}"
+        return 1
+    fi
     if [ ! -x "$LOG_MAINT_SCRIPT" ]; then
-        log "警告: 日志维护脚本不可用: ${LOG_MAINT_SCRIPT}"
+        log "错误: 日志维护脚本不可用: ${LOG_MAINT_SCRIPT}"
         return 1
     fi
 
-    # 比赛录像与实验 CSV 固定使用板载 userfs/ext4。外置 TF 仅供人工导入导出，
-    # 不在业务启动链自动挂载，避免故障卡影响风险检测和录像。
-    (
-        if ! mkdir -p "$DVR_STORAGE_DIR" "$RADAR_LOG_DIR"; then
-            log "错误: 无法创建板载业务目录；录像和 CSV 暂不可用"
-            exit 0
-        fi
+    # 录像必须写到真实挂载的外置TF。兼容整盘文件系统mmcblk0和首分区
+    # mmcblk0p1；挂载失败时拒绝启动业务，避免告警正常但录像静默丢失。
+    local mount_output
+    if ! mount_output=$("$TF_CONTROL_SCRIPT" mount 2>&1); then
+        log "错误: TF 卡挂载失败，拒绝启动录像业务: ${mount_output}"
+        return 1
+    fi
+    log "$mount_output"
 
+    local status_output
+    local token
+    local state=""
+    status_output=$("$TF_CONTROL_SCRIPT" status 2>&1) || {
+        log "错误: 无法读取 TF 状态: ${status_output}"
+        return 1
+    }
+    for token in $status_output; do
+        case "$token" in
+            state=*) state=${token#state=} ;;
+            mount=*) TF_MOUNT_DIR=${token#mount=} ;;
+        esac
+    done
+    if [ "$state" != "mounted" ] || [ -z "$TF_MOUNT_DIR" ]; then
+        log "错误: TF 状态异常，拒绝启动录像业务: ${status_output}"
+        return 1
+    fi
+
+    DVR_STORAGE_DIR="${TF_MOUNT_DIR%/}/dvr"
+    if ! mkdir -p "$DVR_STORAGE_DIR" "$RADAR_LOG_DIR"; then
+        log "错误: 无法创建 TF 录像目录或板载日志目录"
+        return 1
+    fi
+    local probe_file="${DVR_STORAGE_DIR}/.dvr_write_test.$$"
+    if ! printf 'helmet-dvr-write-test\n' > "$probe_file"; then
+        log "错误: TF 录像目录不可写: ${DVR_STORAGE_DIR}"
+        return 1
+    fi
+    sync "$probe_file" 2>/dev/null || sync
+    rm -f "$probe_file"
+    log "TF 录像主存储已就绪: ${DVR_STORAGE_DIR}"
+
+    (
         "$LOG_MAINT_SCRIPT" --once || true
-        log "板载 ext4 存储与日志容量限制已就绪"
+        log "日志容量限制已就绪"
         exec "$LOG_MAINT_SCRIPT" --watch
     ) &
     LOG_MAINT_PID=$!
-    log "板载存储维护工作器已启动，pid=${LOG_MAINT_PID}"
+    log "日志容量维护工作器已启动，pid=${LOG_MAINT_PID}"
 }
 
 stop_log_maintenance() {
@@ -335,7 +384,7 @@ cleanup() {
     log "收到退出信号，开始清理..."
 
     # 1. 停止 radar_fusion
-    wait_or_kill "$RADAR_PID" "radar_fusion" 3
+    wait_or_kill "$RADAR_PID" "radar_fusion" "$DVR_SHUTDOWN_TIMEOUT_SEC"
     RADAR_PID=0
 
     # 2. 停止 HUD
@@ -391,7 +440,10 @@ if [ "$BLE_LED_ENABLED" = "1" ]; then
 fi
 wait_for_device /dev/gpiochip3 "告警 GPIO" 100 0
 
-start_storage_worker
+if ! start_storage_worker; then
+    log "错误: TF 录像存储未就绪，dvr.service 将退出并由 systemd 重试"
+    exit 1
+fi
 
 # 创建导航 TTS 缓存目录
 if [ ! -d "$NAV_TTS_CACHE" ]; then
@@ -509,6 +561,7 @@ ARGS="${ARGS} --left-angle ${LEFT_ANGLE} --right-angle ${RIGHT_ANGLE}"
 ARGS="${ARGS} --angle-sign ${ANGLE_SIGN}"
 ARGS="${ARGS} --angle-alpha ${ANGLE_ALPHA} --direction-samples ${DIRECTION_SAMPLES}"
 ARGS="${ARGS} --radar-log-dir ${RADAR_LOG_DIR}"
+ARGS="${ARGS} --dvr-dir ${DVR_STORAGE_DIR} --dvr-mount-dir ${TF_MOUNT_DIR}"
 if [ "$BLE_LED_ENABLED" = "1" ]; then
     ARGS="${ARGS} --ble-led-uart ${BLE_LED_UART}"
     log "蓝牙碰撞方向灯: ${BLE_LED_UART} @ 115200"
@@ -519,6 +572,7 @@ fi
 log "雷达方向: 骑行者角度=传感器角度×${ANGLE_SIGN}; LEFT<=${LEFT_ANGLE}°, RIGHT>=${RIGHT_ANGLE}°"
 log "方向滤波: alpha=${ANGLE_ALPHA}, stable_samples=${DIRECTION_SAMPLES}"
 log "雷达实验数据: ${RADAR_LOG_DIR}"
+log "DVR录像存储: ${DVR_STORAGE_DIR}（外置TF）"
 
 log "启动 radar_fusion..."
 log "命令: LD_LIBRARY_PATH=/usr/lib:/vendor/lib:${CAMERA_DIR}/stai_mpu ${RADAR_FUSION} ${ARGS}"

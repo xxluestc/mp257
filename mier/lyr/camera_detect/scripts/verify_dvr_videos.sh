@@ -1,9 +1,11 @@
 #!/bin/sh
-# 校验板载存储中的正式 DVR MP4。默认使用 ffprobe；--full 额外整段解码。
+# 校验外置TF中的正式 DVR MP4。默认使用 ffprobe；--full 额外整段解码。
 
 set -u
 
-DVR_DIR="/usr/local/helmet/dvr"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+TF_CONTROL_SCRIPT="${SCRIPT_DIR}/tf_card_control.sh"
+DVR_DIR=""
 FULL_DECODE=0
 
 case "${1:-}" in
@@ -12,7 +14,24 @@ case "${1:-}" in
         shift
         ;;
 esac
-[ "$#" -eq 0 ] || DVR_DIR="$1"
+if [ "$#" -gt 0 ]; then
+    DVR_DIR="$1"
+else
+    status_output=$("$TF_CONTROL_SCRIPT" status 2>/dev/null) || status_output=""
+    state=""
+    tf_mount=""
+    for token in $status_output; do
+        case "$token" in
+            state=*) state=${token#state=} ;;
+            mount=*) tf_mount=${token#mount=} ;;
+        esac
+    done
+    if [ "$state" != "mounted" ] || [ -z "$tf_mount" ]; then
+        echo "错误：TF卡未挂载，无法确定DVR目录" >&2
+        exit 2
+    fi
+    DVR_DIR="${tf_mount%/}/dvr"
+fi
 
 if ! command -v ffprobe >/dev/null 2>&1; then
     echo "错误：缺少 ffprobe" >&2

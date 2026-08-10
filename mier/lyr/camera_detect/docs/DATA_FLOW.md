@@ -7,7 +7,7 @@
 │                           radar_fusion (A35 Linux)                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  主循环                                                                      │
-│   ├── 摄像头 /dev/video7 ──MJPEG帧──┬──> DVR缓冲 ──worker──> MP4 (ext4)     │
+│   ├── 摄像头 /dev/video7 ──MJPEG帧──┬──> DVR缓冲 ──worker──> MP4 (外置TF)   │
 │   │                                 │                                        │
 │   │                                 └──> NPU 推理 (每10帧1次)                │
 │   │                                              │                           │
@@ -41,7 +41,7 @@
    - 帧时间戳基于程序启动时间 `g_t_start`
 
 2. **DVR 缓冲**
-   - 若正在录制 (`dvr_recording`)，把帧写入板载 ext4 缓冲目录 `/usr/local/helmet/dvr/.buffer`
+   - 若正在录制 (`dvr_recording`)，把帧写入`<TF实际挂载点>/dvr/.buffer`
    - 缓冲长度约 `DVR_SAVE_BEFORE_SEC * FPS * 2` 帧，保证触发前 15 秒数据不丢
 
 3. **NPU 推理**（每 10 帧 1 次）
@@ -94,11 +94,12 @@ NPU 看到目标 ─────────────────────
                                    dvr_encode_mp4() 异步编码
                                            │
                                            v
-                                   /usr/local/helmet/dvr/<name>.mp4
+                                   <TF实际挂载点>/dvr/<name>.mp4
 ```
 
-- 编码在 `fork` 子进程中执行，不阻塞主循环；当前优先使用 GStreamer 的
-  `v4l2slh264enc` 生成 H.264/MP4，编码器不可用或失败时再走兼容路径
+- `radar_fusion`用`posix_spawn`启动独立Python worker，不在多线程进程fork出的子进程
+  中执行复杂编码；优先使用GStreamer硬件H.264，失败时使用ffmpeg MPEG-4兼容路径
+- worker在`/tmp`编码并完整解码，复制到TF后再次完整解码并原子提交
 - 编码完成后主循环回收子进程并复位告警状态
 
 ## 4. RPMsg 与短信投递数据流

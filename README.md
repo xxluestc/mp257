@@ -39,8 +39,9 @@ GPS/IMU、MP3语音和验证方法见[双终端V2V工程说明](V2V_keil/E04-2G4
 
 ## 当前运行结论
 
-- A35录像与实验CSV使用板载`/usr/local/helmet` userfs/ext4，不依赖外置TF。
-- 当前TF卡已确认持久写入不可靠并安全卸载，应更换；新卡默认只用于人工导入导出。
+- A35事件录像使用外置TF；脚本兼容`/dev/mmcblk0`和`/dev/mmcblk0p1`并验证真实挂载
+  与可写性。实验CSV使用板载`/usr/local/helmet` userfs/ext4。
+- 旧故障TF已经停用；新卡必须通过重挂、SHA-256和整段视频解码验收。
 - Dashboard监听`0.0.0.0:8080`，网线和WiFi均使用8080端口，IP随接口变化。
 - Dashboard提供TF挂载/弹出、安全停止项目和安全关机；命令行也有等价脚本。
 - 风险录像在正式提交前经过MP4结构、ffprobe和整段解码校验。
@@ -50,7 +51,8 @@ GPS/IMU、MP3语音和验证方法见[双终端V2V工程说明](V2V_keil/E04-2G4
 
 - [A35核心工程](mier/lyr/camera_detect/README.md)
 - [日常操作指南](mier/lyr/camera_detect/docs/操作指南.md)
-- [录像可靠性与TF故障复盘](mier/lyr/camera_detect/docs/DVR_RELIABILITY.md)
+- [录像可靠性与TF主存储](mier/lyr/camera_detect/docs/DVR_RELIABILITY.md)
+- [跨电脑编译部署交接](mier/lyr/camera_detect/docs/跨电脑编译部署交接.md)
 - [比赛演示与事件链](mier/lyr/camera_detect/docs/COMPETITION_PREPARATION.md)
 - [雷达实验与人工标注](mier/lyr/camera_detect/docs/RADAR_EXPERIMENT.md)
 - [A35 OTA](mier/lyr/camera_detect/docs/OTA.md)

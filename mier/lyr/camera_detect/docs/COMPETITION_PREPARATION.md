@@ -36,7 +36,7 @@
                          │      │       ├── OLED/HUD          │
 毫米波雷达 /dev/ttySTM1 ─┘      │       ├── 骨传导/ALSA       │
   BSD目标、距离/速度/角度       │       ├── PD11告警灯        │
-                                │       └── 板载ext4事件录像  │
+                                │       └── 外置TF事件录像    │
                                 │
 M33 IMU/V2X ─OpenAMP/RPMsg──────┘
   /dev/ttyRPMSG0
@@ -67,7 +67,8 @@ A35最终碰撞风险 ─USART2 /dev/ttySTM0─> CH9140 Peripheral
 | `/dev/ttyRPMSG0` | M33事件 | OpenAMP/RPMsg TTY | M33 `running`、ready消息 |
 | `/dev/ttySTM0` | CH9140方向灯链路 | 115200 8N1、文本命令 | `PONG`、`ACK RISK ...` |
 | `/dev/gpiochip3` | A35本机告警灯 | GPIO字符设备 | PD11闪烁 |
-| `/usr/local/helmet` | DVR和实验数据 | 板载userfs/ext4 | 已挂载且可写，录像不依赖TF |
+| `/usr/local/helmet` | CSV实验数据 | 板载userfs/ext4 | 已挂载且可写 |
+| `/dev/mmcblk0[p1]` | DVR事件录像 | 外置TF，自动识别布局 | 已真实挂载、可写且存在`dvr`目录 |
 
 `radar_fusion` 使用 Sonix/Microdia `0c45:636b` USB UVC 摄像头，对应当前
 `/dev/video7`。比赛讲摄像头采集时，以这条实机链路为准。
@@ -681,7 +682,7 @@ NPU连续确认、统一状态机，再联动本机灯、外接灯、语音、DV
 3. IMU完成头盔安装姿态标定，静止时不持续产生`road_bump`或`fall`；
 4. WBA显示`GAP=connected GATT=ready`，四条`RISK`命令均有ACK；
 5. 手机连接正确Wi-Fi AP，UDP 8888/8889链路和后台权限正常；
-6. `/usr/local/helmet/dvr`空间足够，提前完成一次真实触发并确认日志出现
+6. 外置TF已真实挂载、可写且`<挂载点>/dvr`空间足够，提前完成一次真实触发并确认日志出现
    `DVR-WORKER VALIDATED`，再用`verify_dvr_videos.sh --full`整段解码；
 7. 所有本地WAV在无公网环境可播放，避免依赖在线TTS；
 8. Dashboard时间线、人工标签和系统状态在普通笔记本分辨率下一屏可读；
