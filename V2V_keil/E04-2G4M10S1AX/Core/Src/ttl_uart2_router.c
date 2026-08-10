@@ -24,6 +24,13 @@
 #define TTL_UART2_SENSOR_BAUDRATE 115200U
 /* 语音模块波特率 */
 #define TTL_UART2_VOICE_BAUDRATE 9600U
+/* CX-SP5F 每帧指令之间的处理间隔 */
+#define TTL_UART2_VOICE_COMMAND_GAP_MS 20U
+/* CX-SP5F 指令码和单曲播放完停止模式 */
+#define TTL_UART2_VOICE_CMD_STOP 0x04U
+#define TTL_UART2_VOICE_CMD_SELECT_TRACK 0x07U
+#define TTL_UART2_VOICE_CMD_SET_PLAY_MODE 0x18U
+#define TTL_UART2_VOICE_MODE_SINGLE_STOP 0x06U
 /*
  * 开机自检语音曲目编号。0 表示关闭。
  * 风险语音不能兼作问候语，否则每次复位都会产生一次假的左侧来车告警。
@@ -186,27 +193,65 @@ static uint16_t TTL_UART2_VoiceSongNumber(APP_BLE_VoicePrompt_t prompt)
   return 0U;
 }
 
-/*
- * 构造 MP3 播放命令帧。
- * 格式：FE 09 FF FF 07 song_h song_l checksum BE
- * checksum 为前 7 字节之和的低 8 位。
- */
-static void TTL_UART2_BuildVoiceCommand(uint16_t song_number, uint8_t *cmd)
+/* 计算 CX-SP5F 和校验：从 FE 到数据末尾相加，取低 8 位。 */
+static void TTL_UART2_FillVoiceChecksum(uint8_t *cmd, uint16_t checksum_index)
 {
   uint16_t checksum = 0U;
 
+  for (uint16_t i = 0U; i < checksum_index; i++)
+  {
+    checksum = (uint16_t)(checksum + cmd[i]);
+  }
+  cmd[checksum_index] = (uint8_t)(checksum & 0xFFU);
+}
+
+/* 构造 CX-SP5F 停止命令：FE 07 FF FF 04 07 BE。 */
+static void TTL_UART2_BuildVoiceStopCommand(uint8_t *cmd)
+{
+  cmd[0] = 0xFEU;
+  cmd[1] = 0x07U;
+  cmd[2] = 0xFFU;
+  cmd[3] = 0xFFU;
+  cmd[4] = TTL_UART2_VOICE_CMD_STOP;
+  TTL_UART2_FillVoiceChecksum(cmd, 5U);
+  cmd[6] = 0xBEU;
+}
+
+/*
+ * 构造 CX-SP5F 单曲播放完停止模式命令：
+ * FE 0A FF FF 18 06 00 00 24 BE。
+ *
+ * 不能依赖模块原有模式；若模块处于“全部循环”，仅发送选曲命令会从指定曲目开始
+ * 顺序播放全部文件并循环。
+ */
+static void TTL_UART2_BuildVoiceSingleStopModeCommand(uint8_t *cmd)
+{
+  cmd[0] = 0xFEU;
+  cmd[1] = 0x0AU;
+  cmd[2] = 0xFFU;
+  cmd[3] = 0xFFU;
+  cmd[4] = TTL_UART2_VOICE_CMD_SET_PLAY_MODE;
+  cmd[5] = TTL_UART2_VOICE_MODE_SINGLE_STOP;
+  cmd[6] = 0x00U;
+  cmd[7] = 0x00U;
+  TTL_UART2_FillVoiceChecksum(cmd, 8U);
+  cmd[9] = 0xBEU;
+}
+
+/*
+ * 构造 CX-SP5F 指定根目录曲目命令。
+ * 格式：FE 09 FF FF 07 song_h song_l checksum BE。
+ */
+static void TTL_UART2_BuildVoiceSelectTrackCommand(uint16_t song_number, uint8_t *cmd)
+{
   cmd[0] = 0xFEU;
   cmd[1] = 0x09U;
   cmd[2] = 0xFFU;
   cmd[3] = 0xFFU;
-  cmd[4] = 0x07U;
+  cmd[4] = TTL_UART2_VOICE_CMD_SELECT_TRACK;
   cmd[5] = (uint8_t)(song_number >> 8);
   cmd[6] = (uint8_t)(song_number & 0xFFU);
-  for (uint8_t i = 0U; i < 7U; i++)
-  {
-    checksum = (uint16_t)(checksum + cmd[i]);
-  }
-  cmd[7] = (uint8_t)(checksum & 0xFFU);
+  TTL_UART2_FillVoiceChecksum(cmd, 7U);
   cmd[8] = 0xBEU;
 }
 
@@ -268,17 +313,22 @@ static char TTL_UART2_NibbleToHex(uint8_t nibble)
 }
 
 /* 输出实际发送给 MP3 模块的十六进制命令帧，用于硬件联调 */
-static void TTL_UART2_LogVoiceCommandHex(const uint8_t *cmd, uint16_t cmd_len)
+static void TTL_UART2_LogVoiceCommandHex(const char *action,
+                                         const uint8_t *cmd,
+                                         uint16_t cmd_len)
 {
-  char msg[64] = {0};
+  char msg[80] = {0};
   uint16_t len = 0U;
 
-  if ((output_uart == NULL) || (cmd == NULL) || (cmd_len == 0U))
+  if ((output_uart == NULL) || (action == NULL) ||
+      (cmd == NULL) || (cmd_len == 0U))
   {
     return;
   }
 
-  len = TTL_UART2_AppendString(msg, len, sizeof(msg), "[VOICE] tx cmd:");
+  len = TTL_UART2_AppendString(msg, len, sizeof(msg), "[VOICE] tx ");
+  len = TTL_UART2_AppendString(msg, len, sizeof(msg), action);
+  len = TTL_UART2_AppendString(msg, len, sizeof(msg), ":");
   for (uint16_t i = 0U; i < cmd_len; i++)
   {
     len = TTL_UART2_AppendString(msg, len, sizeof(msg), " ");
@@ -290,6 +340,53 @@ static void TTL_UART2_LogVoiceCommandHex(const uint8_t *cmd, uint16_t cmd_len)
   (void)HAL_UART_Transmit(output_uart, (uint8_t *)msg, len, 100U);
 }
 
+/* 发送一帧 CX-SP5F 命令；成功后留出模块处理时间。 */
+static HAL_StatusTypeDef TTL_UART2_TransmitVoiceCommand(const char *action,
+                                                        const uint8_t *cmd,
+                                                        uint16_t cmd_len)
+{
+  HAL_StatusTypeDef status;
+
+  TTL_UART2_LogVoiceCommandHex(action, cmd, cmd_len);
+  status = HAL_UART_Transmit(sensor_uart, (uint8_t *)cmd, cmd_len, 100U);
+  if (status == HAL_OK)
+  {
+    HAL_Delay(TTL_UART2_VOICE_COMMAND_GAP_MS);
+  }
+
+  return status;
+}
+
+/*
+ * 按一次性语义播放指定曲目。
+ * 每次都显式停止旧播放并设置“单曲播放完停止”，避免模块掉电保存或出厂模式为
+ * “全部循环”时，从指定曲目继续把根目录全部文件循环播放。
+ */
+static HAL_StatusTypeDef TTL_UART2_PlayVoiceSongOnce(uint16_t song_number)
+{
+  uint8_t stop_cmd[7];
+  uint8_t mode_cmd[10];
+  uint8_t select_cmd[9];
+
+  TTL_UART2_BuildVoiceStopCommand(stop_cmd);
+  TTL_UART2_BuildVoiceSingleStopModeCommand(mode_cmd);
+  TTL_UART2_BuildVoiceSelectTrackCommand(song_number, select_cmd);
+
+  if (TTL_UART2_TransmitVoiceCommand("stop", stop_cmd,
+                                     (uint16_t)sizeof(stop_cmd)) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+  if (TTL_UART2_TransmitVoiceCommand("mode-single-stop", mode_cmd,
+                                     (uint16_t)sizeof(mode_cmd)) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+
+  return TTL_UART2_TransmitVoiceCommand("select-track", select_cmd,
+                                        (uint16_t)sizeof(select_cmd));
+}
+
 /*
  * 播放语音预警。
  * 流程：切到语音通道 -> 改波特率 -> 发播放命令 -> 改回传感器波特率 -> 恢复通道。
@@ -297,7 +394,6 @@ static void TTL_UART2_LogVoiceCommandHex(const uint8_t *cmd, uint16_t cmd_len)
  */
 static void TTL_UART2_PlayVoiceWarning(const APP_BLE_VoiceWarning_t *warning)
 {
-  uint8_t play_cmd[9];
   uint16_t song_number;
   TTL_UART2_Channel_t restore_channel;
 
@@ -311,7 +407,6 @@ static void TTL_UART2_PlayVoiceWarning(const APP_BLE_VoiceWarning_t *warning)
   {
     return;
   }
-  TTL_UART2_BuildVoiceCommand(song_number, play_cmd);
 
   restore_channel = active_channel;
   (void)HAL_UART_AbortReceive(sensor_uart);
@@ -323,10 +418,9 @@ static void TTL_UART2_PlayVoiceWarning(const APP_BLE_VoiceWarning_t *warning)
 
   if (TTL_UART2_SetBaudRate(TTL_UART2_VOICE_BAUDRATE) == HAL_OK)
   {
-    TTL_UART2_LogVoicePlayback(warning, song_number);
-    TTL_UART2_LogVoiceCommandHex(play_cmd, (uint16_t)sizeof(play_cmd));
-    if (HAL_UART_Transmit(sensor_uart, play_cmd, (uint16_t)sizeof(play_cmd), 100U) == HAL_OK)
+    if (TTL_UART2_PlayVoiceSongOnce(song_number) == HAL_OK)
     {
+      TTL_UART2_LogVoicePlayback(warning, song_number);
       /* 命令发完后等待模块开始播放 */
       HAL_Delay(50U);
     }
@@ -351,7 +445,6 @@ static void TTL_UART2_PlayVoiceWarning(const APP_BLE_VoiceWarning_t *warning)
  */
 void TTL_UART2_PlayStartupGreeting(void)
 {
-  uint8_t play_cmd[9];
   TTL_UART2_Channel_t restore_channel;
 
   if ((sensor_uart == NULL) || (TTL_UART2_STARTUP_SONG_NUMBER == 0U))
@@ -361,8 +454,6 @@ void TTL_UART2_PlayStartupGreeting(void)
 
   /* 等待语音模块完成上电初始化，否则早期命令可能被忽略 */
   HAL_Delay(500U);
-
-  TTL_UART2_BuildVoiceCommand(TTL_UART2_STARTUP_SONG_NUMBER, play_cmd);
 
   restore_channel = active_channel;
   (void)HAL_UART_AbortReceive(sensor_uart);
@@ -374,8 +465,7 @@ void TTL_UART2_PlayStartupGreeting(void)
 
   if (TTL_UART2_SetBaudRate(TTL_UART2_VOICE_BAUDRATE) == HAL_OK)
   {
-    TTL_UART2_LogVoiceCommandHex(play_cmd, (uint16_t)sizeof(play_cmd));
-    if (HAL_UART_Transmit(sensor_uart, play_cmd, (uint16_t)sizeof(play_cmd), 100U) == HAL_OK)
+    if (TTL_UART2_PlayVoiceSongOnce(TTL_UART2_STARTUP_SONG_NUMBER) == HAL_OK)
     {
       /* 命令发完后等待模块开始播放 */
       HAL_Delay(100U);

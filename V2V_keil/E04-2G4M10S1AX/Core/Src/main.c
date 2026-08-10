@@ -80,7 +80,7 @@ static void MX_USART2_UART_Init(void);
 #define USER_DMA_BUFF_SIZE 255
 
 /* 固件版本号：每次发布前手动递增 */
-#define FIRMWARE_VERSION    "v1.8.1"
+#define FIRMWARE_VERSION    "v1.8.2"
 
 static uint8_t rx_buffer[USER_DMA_BUFF_SIZE];
 static uint8_t rx_ready_buffer[USER_DMA_BUFF_SIZE];
