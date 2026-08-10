@@ -12,7 +12,9 @@
 *.pid
 /lyr/camera_detect/radar_fusion
 /lyr/camera_detect/hud_project/hud
-/lyr/camera_detect/dist/
+/lyr/camera_detect/dist/*
+!/lyr/camera_detect/dist/helmet-a35-1.0.8.tar.gz
+!/lyr/camera_detect/dist/helmet-a35-1.0.8.tar.gz.sha256
 
 # Runtime outputs
 **/.buffer/

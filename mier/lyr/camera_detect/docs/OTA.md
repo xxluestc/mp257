@@ -261,7 +261,7 @@ OTA状态                  success
 唯一可交付包的SHA-256为：
 
 ```text
-c30d81e8153e7fec056a4238aeb756900eef8f23ba7a0c19469ac73e0643b20b
+6c43b03a6d7974cc40f733be1324a106d5100a8ae4b9c99fe64f475936d231a8
 ```
 
 安装成功后Dashboard根据`system_version=1.0.8`自动切换为钴蓝/安全橙主题并显示

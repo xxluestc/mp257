@@ -76,9 +76,9 @@ Android 展示最终 success / rolled_back / failed
   "product": "helmet-a35",
   "version": "1.0.8",
   "download_url": "https://example.invalid/ota/helmet-a35-1.0.8.tar.gz",
-  "sha256": "c30d81e8153e7fec056a4238aeb756900eef8f23ba7a0c19469ac73e0643b20b",
-  "size_bytes": 8275006,
-  "release_notes": "A35稳定版更新；升级后Dashboard切换OTA演示主题。",
+  "sha256": "6c43b03a6d7974cc40f733be1324a106d5100a8ae4b9c99fe64f475936d231a8",
+  "size_bytes": 8277588,
+  "release_notes": "A35稳定版更新；增加TF录像故障隔离和彩色录像日志，升级后Dashboard切换OTA演示主题。",
   "mandatory": false
 }
 ```
@@ -196,8 +196,8 @@ dist/helmet-a35-1.0.8.tar.gz.sha256
 tar -tzf dist/helmet-a35-1.0.8.tar.gz
 ```
 
-`dist/` 是本机构建产物，不提交 Git。给队友源码时应发 GitHub 分支或干净源码；
-给云端发布时再单独发送上述两个构建产物。
+`dist/`中的临时测试版本默认不提交Git；最终`1.0.8`包和`.sha256`是发布例外，已经
+随`master`提交。另一台电脑拉取后可直接把这两个文件交给云端，禁止重新压缩或改动。
 
 ## 8. 三方联合验收用例
 
