@@ -48,19 +48,19 @@ VBUS 是底板输入并经过稳压器生成 3.3 V，不应从焊盘私自引出
 
 | 用途 | MCU 引脚 | EWT04 排针序号 | 配置 |
 |---|---|---:|---|
-| 左后方风险灯 | PA7 | 3 | 推挽输出，低电平点亮 |
-| 右后方风险灯 | PA5 | 5 | 推挽输出，低电平点亮 |
+| 左后方风险灯 | PA7 | 3 | 推挽输出，高电平点亮 |
+| 右后方风险灯 | PA5 | 5 | 推挽输出，高电平点亮 |
 
-当前实物采用低电平有效的 LED/MOS 输入，接线逻辑为：
+2026-08-10更换后的风险灯与MP257的PD11告警灯同款，接线逻辑为：
 
 ```text
-PA7/PA5 输出低电平 ── 对应 LED/MOS 通道点亮
-PA7/PA5 输出高电平 ── 对应 LED/MOS 通道熄灭
+PA7/PA5 输出高电平 ── 对应 LED/MOS 通道点亮
+PA7/PA5 输出低电平 ── 对应 LED/MOS 通道熄灭
 ```
 
-如果以后改为 `GPIO -> 限流电阻 -> LED -> GND` 的普通高电平有效接法，必须
-同步修改固件输出极性。不能省略限流电阻。5 V 灯具或大功率 LED 必须使用
-独立 5 V 电源和 MOSFET，WBA 与外部电源共地，PA7/PA5 只连接 MOSFET 控制输入。
+不能省略限流电阻。5V灯具或大功率LED必须使用独立5V电源和MOSFET，WBA与
+外部电源共地，PA7/PA5只连接支持3.3V高电平触发的MOSFET控制输入。PA2底板
+诊断灯没有更换，仍然是低电平有效，不得与PA7/PA5使用同一极性函数。
 
 WBA 上电、复位以及 BLE 断开时，软件均把两个方向灯设为熄灭，避免保留过期
 告警。
@@ -91,9 +91,9 @@ WBA 主动扫描名称 `CH9140BLE2U` 或 FFF0 服务并作为 Central 建立连�
 | `LEFT OFF` | 单独熄灭 PA7 | `ACK LEFT OFF` |
 | `RIGHT ON` | 单独点亮 PA5 | `ACK RIGHT ON` |
 | `RIGHT OFF` | 单独熄灭 PA5 | `ACK RIGHT OFF` |
-| `RISK LEFT` | 仅左灯亮 | `ACK RISK LEFT` |
-| `RISK RIGHT` | 仅右灯亮 | `ACK RISK RIGHT` |
-| `RISK CENTER` | 两灯亮 | `ACK RISK CENTER` |
+| `RISK LEFT` | 仅左灯执行告警时序 | `ACK RISK LEFT` |
+| `RISK RIGHT` | 仅右灯执行告警时序 | `ACK RISK RIGHT` |
+| `RISK CENTER` | 两灯同步执行告警时序 | `ACK RISK CENTER` |
 | `RISK CLEAR` | 两灯灭 | `ACK RISK CLEAR` |
 
 未知命令返回 `ERR UNKNOWN CMD`。旧 WBA 固件不认识 `RISK ...`，出现该返回
@@ -137,10 +137,16 @@ BLE_LED_ENABLED=0
 
 ### 5.2 STM32WBA
 
-- `Core/Src/main.c`：将 PA7、PA5 配置为低速推挽输出，初始高电平（灯灭）。
-- `STM32_WPAN/App/ch9140_client.c`：解析方向灯命令、控制 GPIO 并回传 ACK。
+- `Core/Src/main.c`：将PA7、PA5配置为低速推挽输出，初始低电平（灯灭）。
+- `STM32_WPAN/App/ch9140_client.c`：解析方向灯命令、控制GPIO、运行非阻塞告警
+  时序并回传ACK。
 - BLE 断开回调会自动清除两个方向灯。
 - 原有 `PING` 和 PA2 板载 `LED ON/OFF` 诊断命令保留。
+
+每次`RISK LEFT/RIGHT/CENTER`执行：常亮1秒→200ms灭/200ms亮闪烁3次→短暂
+熄灭200ms→常亮1秒→自动熄灭，总时长约3.4秒。时序基于`HAL_GetTick()`状态机，不使用阻塞延时，
+因此BLE收发、ACK和心跳继续运行。中途的新风险命令会按新方向重启时序，
+`RISK CLEAR`、BLE断开或复位立即取消并熄灯。
 
 ## 6. 编译、烧录与部署
 
@@ -199,7 +205,8 @@ systemctl start dvr.service
 systemctl is-active dvr.service
 ```
 
-预期依次观察到左灯、右灯、双灯亮，最后全部熄灭。
+预期依次观察到左灯、右灯、双灯分别完成“常亮→闪3次→常亮→熄灭”的完整时序，
+最后`clear`立即熄灭全部灯。
 
 也可以分别测试单灯，不改变另一侧状态：
 
@@ -276,5 +283,7 @@ PA7/PA5 两个外接 LED。
 该记录说明排障时不能只看一次 `GATT=ready`，还应确认持续 heartbeat 和实际
 `PING/PONG`。
 
-当前已完成软件、蓝牙和 GPIO 实机闭环。真实道路环境下由雷达/NPU 自动触发
-LEFT/RIGHT/CENTER 的动态验证仍应随下一轮室外雷达测试一起进行。
+2026-08-10外接灯更换后，WBA固件已切换为高电平有效并加入有限时长告警时序。
+需要重新Keil Rebuild和烧录，再完成新灯的PA7/PA5极性与三种方向时序实测。
+2026-08-07表格是旧灯历史记录。真实道路环境下由雷达/NPU自动触发
+LEFT/RIGHT/CENTER的动态验证仍应随下一轮室外雷达测试一起进行。

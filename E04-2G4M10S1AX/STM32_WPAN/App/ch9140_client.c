@@ -14,6 +14,11 @@
 #define CH9140_MAX_PAYLOAD        20U
 #define COMMAND_BUFFER_SIZE       64U
 #define REPLY_BUFFER_SIZE         64U
+#define RISK_INITIAL_ON_MS        1000U
+#define RISK_BLINK_ON_MS          200U
+#define RISK_BLINK_OFF_MS         200U
+#define RISK_BLINK_COUNT          3U
+#define RISK_FINAL_ON_MS          1000U
 
 #define UNPACK_U16(ptr) \
   ((uint16_t)((uint16_t)(ptr)[0] | ((uint16_t)(ptr)[1] << 8)))
@@ -27,6 +32,16 @@ typedef enum
   CH9140_ENABLING_NOTIFY,
   CH9140_READY
 } CH9140_State_t;
+
+typedef enum
+{
+  RISK_PATTERN_IDLE = 0,
+  RISK_PATTERN_INITIAL_ON,
+  RISK_PATTERN_BLINK_OFF,
+  RISK_PATTERN_BLINK_ON,
+  RISK_PATTERN_FINAL_GAP,
+  RISK_PATTERN_FINAL_ON
+} CH9140_RiskPatternPhase_t;
 
 typedef struct
 {
@@ -44,7 +59,17 @@ typedef struct
   uint8_t reply_length;
 } CH9140_Context_t;
 
+typedef struct
+{
+  CH9140_RiskPatternPhase_t phase;
+  uint32_t deadline;
+  uint8_t left;
+  uint8_t right;
+  uint8_t blinks_completed;
+} CH9140_RiskPattern_t;
+
 static CH9140_Context_t client;
+static CH9140_RiskPattern_t risk_pattern;
 
 static SVCCTL_EvtAckStatus_t CH9140_EventHandler(void *event);
 static void CH9140_ParseCommandBytes(const uint8_t *data, uint8_t length);
@@ -53,6 +78,10 @@ static void CH9140_SetLed(uint8_t enabled);
 static void CH9140_SetLeftLed(uint8_t enabled);
 static void CH9140_SetRightLed(uint8_t enabled);
 static void CH9140_SetRiskLeds(uint8_t left, uint8_t right);
+static void CH9140_StopRiskPattern(void);
+static void CH9140_CancelRiskPattern(void);
+static void CH9140_StartRiskPattern(uint8_t left, uint8_t right);
+static void CH9140_ProcessRiskPattern(void);
 static void CH9140_Fail(const char *stage, tBleStatus status);
 
 void CH9140_Client_Init(void)
@@ -61,7 +90,7 @@ void CH9140_Client_Init(void)
   client.state = CH9140_DISCONNECTED;
   client.connection_handle = 0xFFFFU;
   CH9140_SetLed(0U);
-  CH9140_SetRiskLeds(0U, 0U);
+  CH9140_CancelRiskPattern();
   SVCCTL_RegisterCltHandler(CH9140_EventHandler);
 }
 
@@ -73,6 +102,7 @@ void CH9140_Client_OnConnected(uint16_t connection_handle)
   memset(&client, 0, sizeof(client));
   client.connection_handle = connection_handle;
   client.state = CH9140_DISCOVERING_SERVICE;
+  CH9140_CancelRiskPattern();
   uuid.UUID_16 = CH9140_SERVICE_UUID;
 
   BLE_UART_Bridge_SetLinkReady(0U);
@@ -94,7 +124,7 @@ void CH9140_Client_OnDisconnected(void)
   client.command_length = 0U;
   BLE_UART_Bridge_SetLinkReady(0U);
   /* Fail safe: a stale collision indication must not remain lit. */
-  CH9140_SetRiskLeds(0U, 0U);
+  CH9140_CancelRiskPattern();
 }
 
 uint8_t CH9140_Client_IsReady(void)
@@ -120,6 +150,8 @@ void CH9140_Client_Process(void)
 {
   tBleStatus status;
   uint8_t length;
+
+  CH9140_ProcessRiskPattern();
 
   if ((client.state != CH9140_READY) || (client.reply_length == 0U))
   {
@@ -178,6 +210,7 @@ static void CH9140_Fail(const char *stage, tBleStatus status)
   (void)status;
   client.state = CH9140_DISCONNECTED;
   BLE_UART_Bridge_SetLinkReady(0U);
+  CH9140_CancelRiskPattern();
   if (client.connection_handle != 0xFFFFU)
   {
     (void)aci_gap_terminate(client.connection_handle,
@@ -194,22 +227,115 @@ static void CH9140_SetLed(uint8_t enabled)
 
 static void CH9140_SetLeftLed(uint8_t enabled)
 {
-  /* Installed LEFT LED/MOS input on PA7 is active low. */
+  /* Replacement LEFT lamp matches MP257 PD11 and is active high. */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7,
-                    (enabled != 0U) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                    (enabled != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
 static void CH9140_SetRightLed(uint8_t enabled)
 {
-  /* Installed RIGHT LED/MOS input on PA5 is active low. */
+  /* Replacement RIGHT lamp matches MP257 PD11 and is active high. */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5,
-                    (enabled != 0U) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                    (enabled != 0U) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
 static void CH9140_SetRiskLeds(uint8_t left, uint8_t right)
 {
   CH9140_SetLeftLed(left);
   CH9140_SetRightLed(right);
+}
+
+static void CH9140_StopRiskPattern(void)
+{
+  risk_pattern.phase = RISK_PATTERN_IDLE;
+  risk_pattern.deadline = 0U;
+  risk_pattern.blinks_completed = 0U;
+}
+
+static void CH9140_CancelRiskPattern(void)
+{
+  CH9140_StopRiskPattern();
+  risk_pattern.left = 0U;
+  risk_pattern.right = 0U;
+  CH9140_SetRiskLeds(0U, 0U);
+}
+
+static void CH9140_StartRiskPattern(uint8_t left, uint8_t right)
+{
+  if ((left == 0U) && (right == 0U))
+  {
+    CH9140_CancelRiskPattern();
+    return;
+  }
+
+  risk_pattern.left = (left != 0U) ? 1U : 0U;
+  risk_pattern.right = (right != 0U) ? 1U : 0U;
+  risk_pattern.blinks_completed = 0U;
+  risk_pattern.phase = RISK_PATTERN_INITIAL_ON;
+  risk_pattern.deadline = HAL_GetTick() + RISK_INITIAL_ON_MS;
+  CH9140_SetRiskLeds(risk_pattern.left, risk_pattern.right);
+}
+
+static void CH9140_ProcessRiskPattern(void)
+{
+  uint32_t now;
+
+  if (risk_pattern.phase == RISK_PATTERN_IDLE)
+  {
+    return;
+  }
+
+  now = HAL_GetTick();
+  if ((int32_t)(now - risk_pattern.deadline) < 0)
+  {
+    return;
+  }
+
+  switch (risk_pattern.phase)
+  {
+    case RISK_PATTERN_INITIAL_ON:
+      CH9140_SetRiskLeds(0U, 0U);
+      risk_pattern.phase = RISK_PATTERN_BLINK_OFF;
+      risk_pattern.deadline = now + RISK_BLINK_OFF_MS;
+      break;
+
+    case RISK_PATTERN_BLINK_OFF:
+      CH9140_SetRiskLeds(risk_pattern.left, risk_pattern.right);
+      risk_pattern.phase = RISK_PATTERN_BLINK_ON;
+      risk_pattern.deadline = now + RISK_BLINK_ON_MS;
+      break;
+
+    case RISK_PATTERN_BLINK_ON:
+      risk_pattern.blinks_completed++;
+      if (risk_pattern.blinks_completed >= RISK_BLINK_COUNT)
+      {
+        /* Separate the last short flash from the final steady-on stage. */
+        CH9140_SetRiskLeds(0U, 0U);
+        risk_pattern.phase = RISK_PATTERN_FINAL_GAP;
+        risk_pattern.deadline = now + RISK_BLINK_OFF_MS;
+      }
+      else
+      {
+        CH9140_SetRiskLeds(0U, 0U);
+        risk_pattern.phase = RISK_PATTERN_BLINK_OFF;
+        risk_pattern.deadline = now + RISK_BLINK_OFF_MS;
+      }
+      break;
+
+    case RISK_PATTERN_FINAL_GAP:
+      CH9140_SetRiskLeds(risk_pattern.left, risk_pattern.right);
+      risk_pattern.phase = RISK_PATTERN_FINAL_ON;
+      risk_pattern.deadline = now + RISK_FINAL_ON_MS;
+      break;
+
+    case RISK_PATTERN_FINAL_ON:
+      CH9140_CancelRiskPattern();
+      break;
+
+    default:
+      CH9140_CancelRiskPattern();
+      break;
+  }
 }
 
 static void CH9140_QueueReply(const char *text)
@@ -259,42 +385,46 @@ static void CH9140_ParseCommandBytes(const uint8_t *data, uint8_t length)
       }
       else if (strcmp((char *)client.command, "LEFT ON") == 0)
       {
+        CH9140_StopRiskPattern();
         CH9140_SetLeftLed(1U);
         CH9140_QueueReply("ACK LEFT ON\n");
       }
       else if (strcmp((char *)client.command, "LEFT OFF") == 0)
       {
+        CH9140_StopRiskPattern();
         CH9140_SetLeftLed(0U);
         CH9140_QueueReply("ACK LEFT OFF\n");
       }
       else if (strcmp((char *)client.command, "RIGHT ON") == 0)
       {
+        CH9140_StopRiskPattern();
         CH9140_SetRightLed(1U);
         CH9140_QueueReply("ACK RIGHT ON\n");
       }
       else if (strcmp((char *)client.command, "RIGHT OFF") == 0)
       {
+        CH9140_StopRiskPattern();
         CH9140_SetRightLed(0U);
         CH9140_QueueReply("ACK RIGHT OFF\n");
       }
       else if (strcmp((char *)client.command, "RISK LEFT") == 0)
       {
-        CH9140_SetRiskLeds(1U, 0U);
+        CH9140_StartRiskPattern(1U, 0U);
         CH9140_QueueReply("ACK RISK LEFT\n");
       }
       else if (strcmp((char *)client.command, "RISK RIGHT") == 0)
       {
-        CH9140_SetRiskLeds(0U, 1U);
+        CH9140_StartRiskPattern(0U, 1U);
         CH9140_QueueReply("ACK RISK RIGHT\n");
       }
       else if (strcmp((char *)client.command, "RISK CENTER") == 0)
       {
-        CH9140_SetRiskLeds(1U, 1U);
+        CH9140_StartRiskPattern(1U, 1U);
         CH9140_QueueReply("ACK RISK CENTER\n");
       }
       else if (strcmp((char *)client.command, "RISK CLEAR") == 0)
       {
-        CH9140_SetRiskLeds(0U, 0U);
+        CH9140_CancelRiskPattern();
         CH9140_QueueReply("ACK RISK CLEAR\n");
       }
       else if (strcmp((char *)client.command, "PING") == 0)

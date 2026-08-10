@@ -54,9 +54,9 @@ MP257 发送的文本命令必须以 `\n` 或 `\r` 结束：
 | `LED OFF` | 熄灭 D1 | `ACK LED OFF` |
 | `LEFT ON` / `LEFT OFF` | 单独控制 PA7 左灯 | `ACK LEFT ...` |
 | `RIGHT ON` / `RIGHT OFF` | 单独控制 PA5 右灯 | `ACK RIGHT ...` |
-| `RISK LEFT` | 左灯亮、右灯灭 | `ACK RISK LEFT` |
-| `RISK RIGHT` | 右灯亮、左灯灭 | `ACK RISK RIGHT` |
-| `RISK CENTER` | 两灯同时亮 | `ACK RISK CENTER` |
+| `RISK LEFT` | 左灯执行告警时序，右灯灭 | `ACK RISK LEFT` |
+| `RISK RIGHT` | 右灯执行告警时序，左灯灭 | `ACK RISK RIGHT` |
+| `RISK CENTER` | 两灯同步执行告警时序 | `ACK RISK CENTER` |
 | `RISK CLEAR` | 两灯同时熄灭 | `ACK RISK CLEAR` |
 
 其他命令返回 `ERR UNKNOWN CMD`。收到的 BLE 数据也会转发到 WBA UART1，
@@ -105,14 +105,19 @@ Type-C 的 VBUS 会先经过稳压电路生成 3.3 V，不建议从焊盘私自�
 
 | 用途 | MCU 引脚 | 测试底板排针序号 | 电平 |
 |---|---|---:|---|
-| 左后方风险灯 | PA7 | 3 | 低电平点亮 |
-| 右后方风险灯 | PA5 | 5 | 低电平点亮 |
+| 左后方风险灯 | PA7 | 3 | 高电平点亮 |
+| 右后方风险灯 | PA5 | 5 | 高电平点亮 |
 
-当前实物采用低电平有效的 LED/MOS 输入，固件已按该极性配置。若改成
-`GPIO -> 电阻 -> LED -> GND` 的普通高电平有效接法，必须同时把固件极性改回
-高电平有效。不要省略限流电阻，也不要由 GPIO 直接驱动大功率 LED。若灯具
-必须使用 5 V，请使用独立 5 V 电源和两路 MOSFET 开关，WBA 与 5 V 电源必须
-共地，PA7/PA5 只接 MOSFET 控制输入。
+2026-08-10更换后的左右风险灯与MP257的PD11告警灯同款，按高电平有效配置：
+PA7/PA5输出高电平时点亮，输出低电平时熄灭。PA2底板D1没有更换，仍为低电平
+有效。不要省略限流电阻，也不要由GPIO直接驱动大功率LED。若灯具必须使用5V，
+请使用独立5V电源和两路MOSFET开关，WBA与5V电源必须共地，PA7/PA5只接
+支持3.3V高电平触发的MOSFET控制输入。
+
+`RISK LEFT/RIGHT/CENTER`不是持续常亮，而是执行一次非阻塞时序：先常亮1秒，
+再以200ms灭/200ms亮闪烁3次，短暂熄灭200ms后常亮1秒，最后自动熄灭，
+总时长约3.4秒。新风险命令会立即按新方向重新开始；`RISK CLEAR`、BLE断开或
+复位会立即熄灭。`LEFT/RIGHT ON/OFF`保留为人工GPIO测试命令，不执行该时序。
 
 蓝牙断开或 WBA 复位时，两路外接方向灯默认熄灭。
 
@@ -189,7 +194,8 @@ python3 /root/ble_link/ble_uart_test.py --send 'RISK CENTER' --line --listen 5
 python3 /root/ble_link/ble_uart_test.py --send 'RISK CLEAR' --line --listen 5
 ```
 
-预期分别收到 `PONG`、`ACK LED ON`、`ACK LED OFF`，同时观察 D1 的亮灭。
+预期分别收到对应ACK；`LED ON/OFF`控制PA2底板D1，三条`RISK`命令应让左灯、
+右灯、双灯依次完成“常亮→闪3次→常亮→熄灭”的时序，`RISK CLEAR`立即熄灯。
 如果 WBA 一直显示 link down，首先检查 CH9140 的 `BLE_MODE` 是否为高/悬空、
 波特率引脚是否为 `111`，以及天线和供电。
 
@@ -258,6 +264,10 @@ python3 /root/ble_link/ble_uart_test.py --send 'RISK CLEAR' --line --listen 5
 
 本次最初一直停留在 `GAP=scanning` 的直接原因是 CH9140 未接 3.3 V，而不是
 WBA 射频、BLE Central 实现或 GATT 客户端故障。
+
+2026-08-10因外接灯更换为与PD11同款，固件已由低电平有效改为高电平有效，并增加
+有限时长告警时序。该版需要重新用Keil Rebuild、烧录后复测PA7/PA5；上表属于
+旧灯实测记录，不能替代新灯极性与时序验收。
 
 MP257 雷达自动联动、外接方向灯接线、无雷达测试、排障过程和完整实机验证
 记录见

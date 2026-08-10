@@ -906,7 +906,7 @@ BLE操作。
 此外保留`LED ON/OFF`、`LEFT ON/OFF`和`RIGHT ON/OFF`用于分层测试。未知命令返回
 `ERR UNKNOWN CMD`，超过缓冲长度返回`ERR CMD TOO LONG`。
 
-当前实物的PA7和PA5方向灯/MOS输入为低电平点亮；底板PA2诊断LED同样为低电平点亮。外接大功率灯不能直接由GPIO
+2026-08-10更换后的PA7和PA5方向灯与MP257 PD11告警灯同款，为高电平点亮；底板PA2诊断LED仍为低电平点亮。外接大功率灯不能直接由GPIO
 驱动，应使用限流、MOSFET和独立供电，并保证共地。
 
 ### 10.10 失败处理和安全状态
