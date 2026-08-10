@@ -42,7 +42,7 @@ HUD_PID=0
 DASHBOARD_PID=0
 READER_PID=0                  # 关键日志过滤子 shell
 LOG_MAINT_PID=0
-DVR_SHUTDOWN_TIMEOUT_SEC="${DVR_SHUTDOWN_TIMEOUT_SEC:-120}"
+DVR_SHUTDOWN_TIMEOUT_SEC="${DVR_SHUTDOWN_TIMEOUT_SEC:-15}"
 NAV_TTS_CACHE="${CAMERA_DIR}/nav_tts_cache"  # 导航 TTS 缓存目录
 
 # -------------------------- 用法 --------------------------
@@ -104,11 +104,11 @@ load_radar_config() {
 load_radar_config
 
 case "$DVR_SHUTDOWN_TIMEOUT_SEC" in
-    ''|*[!0-9]*) DVR_SHUTDOWN_TIMEOUT_SEC=120 ;;
+    ''|*[!0-9]*) DVR_SHUTDOWN_TIMEOUT_SEC=15 ;;
 esac
-if [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -lt 30 ] ||
-   [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -gt 300 ]; then
-    DVR_SHUTDOWN_TIMEOUT_SEC=120
+if [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -lt 5 ] ||
+   [ "$DVR_SHUTDOWN_TIMEOUT_SEC" -gt 30 ]; then
+    DVR_SHUTDOWN_TIMEOUT_SEC=15
 fi
 
 # CSV固定保存在板载ext4，避免人工弹出TF时丢失实验标注；录像单独使用TF。
@@ -208,55 +208,60 @@ stop_log_reader() {
 }
 
 start_storage_worker() {
+    # TF只决定录像是否可用，不得阻断雷达判断、PD11/蓝牙LED和摔倒告警。
+    # 即使卡缺失或不可写，也给radar_fusion传入一个明确的外置挂载路径；
+    # radar_fusion会持续检测真实挂载，绝不回退写入板载根文件系统。
+    TF_MOUNT_DIR="/run/media/mmcblk0p1"
+    DVR_STORAGE_DIR="${TF_MOUNT_DIR}/dvr"
+
     if [ ! -x "$TF_CONTROL_SCRIPT" ]; then
-        log "错误: TF 控制脚本不可用: ${TF_CONTROL_SCRIPT}"
-        return 1
+        log "警告: TF 控制脚本不可用，录像禁用；风险判断和LED告警继续: ${TF_CONTROL_SCRIPT}"
+    else
+        local mount_output
+        if mount_output=$("$TF_CONTROL_SCRIPT" mount 2>&1); then
+            log "$mount_output"
+        else
+            log "警告: TF 卡挂载失败，录像禁用；风险判断和LED告警继续: ${mount_output}"
+        fi
+
+        local status_output
+        local token
+        local state=""
+        if status_output=$("$TF_CONTROL_SCRIPT" status 2>&1); then
+            for token in $status_output; do
+                case "$token" in
+                    state=*) state=${token#state=} ;;
+                    mount=*) TF_MOUNT_DIR=${token#mount=} ;;
+                esac
+            done
+            DVR_STORAGE_DIR="${TF_MOUNT_DIR%/}/dvr"
+
+            if [ "$state" = "mounted" ] && [ -n "$TF_MOUNT_DIR" ]; then
+                if mkdir -p "$DVR_STORAGE_DIR" &&
+                   probe_file="${DVR_STORAGE_DIR}/.dvr_write_test.$$" &&
+                   printf 'helmet-dvr-write-test\n' > "$probe_file"; then
+                    sync "$probe_file" 2>/dev/null || sync
+                    rm -f "$probe_file"
+                    log "TF 录像主存储已就绪: ${DVR_STORAGE_DIR}"
+                else
+                    rm -f "${DVR_STORAGE_DIR}/.dvr_write_test.$$" 2>/dev/null || true
+                    log "警告: TF 录像目录不可写，录像禁用；风险判断和LED告警继续: ${DVR_STORAGE_DIR}"
+                fi
+            else
+                log "警告: TF 未挂载，录像禁用并等待运行中重新接入；风险判断和LED告警继续: ${status_output}"
+            fi
+        else
+            log "警告: 无法读取 TF 状态，录像禁用；风险判断和LED告警继续: ${status_output}"
+        fi
     fi
+
     if [ ! -x "$LOG_MAINT_SCRIPT" ]; then
-        log "错误: 日志维护脚本不可用: ${LOG_MAINT_SCRIPT}"
-        return 1
+        log "警告: 日志维护脚本不可用，继续启动核心告警链: ${LOG_MAINT_SCRIPT}"
+        return 0
     fi
 
-    # 录像必须写到真实挂载的外置TF。兼容整盘文件系统mmcblk0和首分区
-    # mmcblk0p1；挂载失败时拒绝启动业务，避免告警正常但录像静默丢失。
-    local mount_output
-    if ! mount_output=$("$TF_CONTROL_SCRIPT" mount 2>&1); then
-        log "错误: TF 卡挂载失败，拒绝启动录像业务: ${mount_output}"
-        return 1
-    fi
-    log "$mount_output"
-
-    local status_output
-    local token
-    local state=""
-    status_output=$("$TF_CONTROL_SCRIPT" status 2>&1) || {
-        log "错误: 无法读取 TF 状态: ${status_output}"
-        return 1
-    }
-    for token in $status_output; do
-        case "$token" in
-            state=*) state=${token#state=} ;;
-            mount=*) TF_MOUNT_DIR=${token#mount=} ;;
-        esac
-    done
-    if [ "$state" != "mounted" ] || [ -z "$TF_MOUNT_DIR" ]; then
-        log "错误: TF 状态异常，拒绝启动录像业务: ${status_output}"
-        return 1
-    fi
-
-    DVR_STORAGE_DIR="${TF_MOUNT_DIR%/}/dvr"
-    if ! mkdir -p "$DVR_STORAGE_DIR" "$RADAR_LOG_DIR"; then
-        log "错误: 无法创建 TF 录像目录或板载日志目录"
-        return 1
-    fi
-    local probe_file="${DVR_STORAGE_DIR}/.dvr_write_test.$$"
-    if ! printf 'helmet-dvr-write-test\n' > "$probe_file"; then
-        log "错误: TF 录像目录不可写: ${DVR_STORAGE_DIR}"
-        return 1
-    fi
-    sync "$probe_file" 2>/dev/null || sync
-    rm -f "$probe_file"
-    log "TF 录像主存储已就绪: ${DVR_STORAGE_DIR}"
+    mkdir -p "$RADAR_LOG_DIR" ||
+        log "警告: 无法创建板载日志目录，核心告警链仍继续"
 
     (
         "$LOG_MAINT_SCRIPT" --once || true
@@ -440,10 +445,7 @@ if [ "$BLE_LED_ENABLED" = "1" ]; then
 fi
 wait_for_device /dev/gpiochip3 "告警 GPIO" 100 0
 
-if ! start_storage_worker; then
-    log "错误: TF 录像存储未就绪，dvr.service 将退出并由 systemd 重试"
-    exit 1
-fi
+start_storage_worker
 
 # 创建导航 TTS 缓存目录
 if [ ! -d "$NAV_TTS_CACHE" ]; then

@@ -437,7 +437,18 @@ function eventSummary(event) {
       : "未检测到道路用户";
   }
   if (event.source === "a35_dvr") {
-    return `${event.event_type} · ${event.status}${event.reason ? ` · ${event.reason}` : ""}`;
+    const key = `${event.event_type}:${event.status}`;
+    const descriptions = {
+      "buffer:started": "录像缓存已启动",
+      "buffer:failed": "录像缓存失败",
+      "recording:triggered": "事件录像已触发",
+      "encoding:started": "录像编码进行中",
+      "encoding:failed": "录像编码未启动",
+      "recording:saved": "视频已校验并保存",
+      "recording:failed": "视频保存失败",
+    };
+    return `${descriptions[key] || `${event.event_type} · ${event.status}`}` +
+      `${event.reason ? ` · ${event.reason}` : ""}`;
   }
   if (event.source === "radar") return `${event.label} · ${event.reason || "UNKNOWN"}`;
   if (event.source === "manual_label") return `${event.label} · ${event.status}`;
@@ -447,6 +458,23 @@ function eventSummary(event) {
     return `${event.label} · ${action} · ${event.status}`;
   }
   return `${event.event_type}${event.reason ? ` · ${event.reason}` : ""}`;
+}
+
+function eventTone(event) {
+  const source = String(event.source || "");
+  const type = String(event.event_type || "").toLowerCase();
+  const status = String(event.status || "").toLowerCase();
+  if (/fail|error/.test(status)) return "tone-failed";
+  if (source === "a35_dvr") {
+    if (status === "saved") return "tone-saved";
+    if (status === "triggered") return "tone-triggered";
+    if (status === "started" || type === "encoding") return "tone-processing";
+  }
+  if (source === "radar" || status === "alert" || type === "fall") {
+    return "tone-alert";
+  }
+  if (/ok|sent|received|target/.test(status)) return "tone-ok";
+  return "tone-neutral";
 }
 
 function renderTimeline(events) {
@@ -466,7 +494,7 @@ function renderTimeline(events) {
   }
   for (const event of selected) {
     const row = document.createElement("div");
-    row.className = `timeline-row source-${event.source}`;
+    row.className = `timeline-row source-${event.source} ${eventTone(event)}`;
     const time = document.createElement("time");
     time.textContent = new Date(event.timestamp_ms).toLocaleTimeString("zh-CN", {
       hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -657,7 +685,7 @@ function renderBoot(payload) {
   } else {
     for (const event of critical) {
       const row = document.createElement("article");
-      row.className = `runtime-event-row source-${event.source}`;
+      row.className = `runtime-event-row source-${event.source} ${eventTone(event)}`;
       const timing = document.createElement("time");
       const wall = document.createElement("strong");
       wall.textContent = new Date(event.timestamp_ms).toLocaleTimeString("zh-CN", { hour12: false });

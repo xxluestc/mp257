@@ -368,6 +368,14 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .timeline-row.source-imu_m33 > i, .timeline-row.source-hud_delivery > i { background: var(--amber); }
 .timeline-row.source-manual_label > i { background: var(--danger); }
 .timeline-row.source-radar > i { background: var(--lane); }
+.timeline-row.tone-failed > i { background: var(--danger); box-shadow: 0 0 0 3px rgba(198, 58, 52, .13); }
+.timeline-row.tone-failed > div span, .timeline-row.tone-failed > div strong { color: var(--danger); }
+.timeline-row.tone-triggered > i, .timeline-row.tone-alert > i { background: var(--amber); box-shadow: 0 0 0 3px rgba(154, 86, 0, .13); }
+.timeline-row.tone-triggered > div span, .timeline-row.tone-alert > div span { color: var(--amber); }
+.timeline-row.tone-processing > i { background: var(--lane); box-shadow: 0 0 0 3px rgba(49, 95, 192, .13); }
+.timeline-row.tone-processing > div span { color: var(--lane); }
+.timeline-row.tone-saved > i, .timeline-row.tone-ok > i { background: var(--radar); box-shadow: 0 0 0 3px rgba(8, 127, 115, .13); }
+.timeline-row.tone-saved > div span, .timeline-row.tone-saved > div strong { color: var(--radar); }
 .timeline-empty { margin: 30px 0; color: var(--muted); text-align: center; font-size: 14px; }
 
 /* 系统栏目 */
@@ -439,6 +447,12 @@ tr.dangerous td { color: var(--danger); background: #fff0ef; }
 .runtime-event-row > div small { display: block; margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 12px ui-monospace, monospace; }
 .runtime-event-row.source-control { border-left: 3px solid var(--amber); padding-left: 10px; }
 .runtime-event-row.source-radar { border-left: 3px solid var(--danger); padding-left: 10px; }
+.runtime-event-row.tone-failed { border-left: 3px solid var(--danger); padding-left: 10px; }
+.runtime-event-row.tone-failed > div span, .runtime-event-row.tone-failed > div strong { color: var(--danger); }
+.runtime-event-row.tone-triggered, .runtime-event-row.tone-alert { border-left: 3px solid var(--amber); padding-left: 10px; }
+.runtime-event-row.tone-processing { border-left: 3px solid var(--lane); padding-left: 10px; }
+.runtime-event-row.tone-saved { border-left: 3px solid var(--radar); padding-left: 10px; }
+.runtime-event-row.tone-saved > div span, .runtime-event-row.tone-saved > div strong { color: var(--radar); }
 
 /* 独立控制台：可操作与受保护任务使用不同的结构，避免误触。 */
 .control-layout { min-height: 100%; display: grid; grid-template-rows: 92px minmax(330px, 1fr) 142px minmax(150px, auto); gap: 10px; }

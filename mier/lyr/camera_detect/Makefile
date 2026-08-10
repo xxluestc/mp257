@@ -106,9 +106,10 @@ deploy: deploy-radar
 
 deploy-radar: $(TARGET) hud dashboard-check script-check
 	@echo "Deploying $(TARGET), HUD, Dashboard, models and local audio..."
-	ssh root@$(BOARD_IP) 'mkdir -p $(BOARD_DIR)/models $(BOARD_DIR)/scripts $(BOARD_DIR)/sounds $(BOARD_DIR)/nav_tts_cache $(BOARD_DIR)/dashboard/static'
+	ssh root@$(BOARD_IP) 'mkdir -p $(BOARD_DIR)/models $(BOARD_DIR)/scripts $(BOARD_DIR)/sounds $(BOARD_DIR)/nav_tts_cache $(BOARD_DIR)/dashboard/static $(BOARD_DIR)/stai_mpu'
 	scp $(TARGET) root@$(BOARD_IP):$(BOARD_DIR)/
 	scp $(HUD_DIR)/hud root@$(BOARD_IP):$(HUD_REMOTE)
+	scp $(STAI_MPU_DIR)/*.so* root@$(BOARD_IP):$(BOARD_DIR)/stai_mpu/
 	scp $(MODEL_FILE) $(LABEL_FILE) root@$(BOARD_IP):$(BOARD_DIR)/models/
 	scp start_dvr.sh dvr.service.example dvr-m33.service.example \
 		radar-dashboard.service.example \
@@ -124,7 +125,7 @@ deploy-radar: $(TARGET) hud dashboard-check script-check
 # 完整更新运行态：部署文件、安装最新unit参数并重启A35业务。
 # 不重启M33，不覆盖现场radar_config。
 deploy-runtime: deploy-radar
-	ssh root@$(BOARD_IP) 'cp $(BOARD_DIR)/dvr.service.example /etc/systemd/system/dvr.service && cp $(BOARD_DIR)/radar-dashboard.service.example /etc/systemd/system/radar-dashboard.service && systemctl daemon-reload && systemctl enable radar-dashboard.service dvr.service && systemctl restart radar-dashboard.service dvr.service'
+	ssh root@$(BOARD_IP) 'cp $(BOARD_DIR)/dvr.service.example /etc/systemd/system/dvr.service && cp $(BOARD_DIR)/dvr-m33.service.example /etc/systemd/system/dvr-m33.service && cp $(BOARD_DIR)/radar-dashboard.service.example /etc/systemd/system/radar-dashboard.service && systemctl daemon-reload && systemctl enable dvr-m33.service radar-dashboard.service dvr.service && systemctl restart radar-dashboard.service dvr.service'
 	@echo "Runtime services updated and restarted."
 
 deploy-ota-service: ota-check
@@ -142,7 +143,7 @@ deploy-ota-service: ota-check
 run: run-radar
 
 run-radar:
-	ssh -t root@$(BOARD_IP) 'cd $(BOARD_DIR) && LD_LIBRARY_PATH=/usr/lib:/vendor/lib ./$(TARGET)'
+	ssh -t root@$(BOARD_IP) 'cd $(BOARD_DIR) && LD_LIBRARY_PATH=/usr/lib:/vendor/lib:$(BOARD_DIR)/stai_mpu ./$(TARGET)'
 
 clean:
 	rm -f $(TARGET) *.o

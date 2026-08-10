@@ -1232,6 +1232,7 @@ static dvr_frame_entry_t dvr_frames[DVR_MAX_FRAMES];
 static FILE *dvr_raw_file = NULL;
 static char dvr_raw_path[2048];
 static char dvr_buffer_dir[1024];
+static char dvr_output_path[1024];
 static int dvr_storage_ok = 0;
 static int dvr_has_encoder = 0;
 static int dvr_camera_pixelformat = 0;
@@ -1366,6 +1367,7 @@ static int dvr_start(void) {
     }
 
     dvr_frame_count = 0;
+    dvr_output_path[0] = '\0';
     dvr_save_triggered = 0;
     dvr_encoding = 0;
     dvr_first_trigger_time_us = 0;
@@ -1468,6 +1470,9 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
         fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file) == jpeg_size;
     if (!write_ok) {
         fprintf(stderr, "[DVR] storage write failed: %s\n", strerror(errno));
+        sensor_event_log("a35_dvr", "buffer", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "storage_write_failed", strerror(errno));
         dvr_storage_ok = 0;
         dvr_recording = 0;
         fclose(dvr_raw_file);
@@ -1484,6 +1489,10 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
         if (flush_rc != 0 || sync_rc != 0 || !dvr_storage_available()) {
             fprintf(stderr, "[DVR] storage flush/sync failed or filesystem detached: %s\n",
                     strerror(errno));
+            sensor_event_log("a35_dvr", "buffer", "failed",
+                             NULL, NULL, -1.0f, -1, -1,
+                             "storage_sync_failed",
+                             "TF写入同步失败或文件系统已脱离；告警链继续运行");
             dvr_storage_ok = 0;
             dvr_recording = 0;
             fclose(dvr_raw_file);
@@ -1549,6 +1558,9 @@ static void dvr_stop(void) {
         if (fflush(dvr_raw_file) != 0 ||
             fdatasync(fileno(dvr_raw_file)) != 0) {
             fprintf(stderr, "[DVR] Final storage sync failed: %s\n", strerror(errno));
+            sensor_event_log("a35_dvr", "buffer", "failed",
+                             NULL, NULL, -1.0f, -1, -1,
+                             "final_sync_failed", strerror(errno));
             dvr_storage_ok = 0;
         }
         if (fclose(dvr_raw_file) != 0)
@@ -1584,9 +1596,18 @@ static void play_recording_complete_sound(void) {
 /* 子进程: 将缓冲帧编码为 MP4 (异步, 不阻塞主循环) */
 static int dvr_encode_mp4(void) {
     if (dvr_encoding) return -1;
-    if (dvr_frame_count == 0) return -1;
+    if (dvr_frame_count == 0) {
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "no_frames", "录像没有可编码帧；告警链继续运行");
+        return -1;
+    }
     if (!dvr_has_encoder) {
         printf("[系统] [DVR] No video encoder available; raw buffer retained\n");
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "encoder_unavailable",
+                         "ffmpeg/ffprobe不可用；原始缓存保留，告警链继续运行");
         return -1;
     }
 
@@ -1621,6 +1642,12 @@ static int dvr_encode_mp4(void) {
     int total = end_idx - start_idx + 1;
     if (total < 2) {
         printf("[保存] [DVR] Too few frames (%d), skipping encode\n", total);
+        char details[128];
+        snprintf(details, sizeof(details),
+                 "frames=%d；帧数不足，告警链继续运行", total);
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "too_few_frames", details);
         dvr_encoding = 0;
         return -1;
     }
@@ -1640,8 +1667,7 @@ static int dvr_encode_mp4(void) {
     printf("[保存] [DVR] FPS: %.1f, Frames: %d\n", fps, total);
 
     /* 生成输出文件名 */
-    char output_path[1024];
-    dvr_make_filename(output_path, sizeof(output_path), "emergency");
+    dvr_make_filename(dvr_output_path, sizeof(dvr_output_path), "emergency");
 
     /*
      * radar_fusion 已经是多线程进程，不能 fork 后继续 malloc/stdio/GStreamer。
@@ -1652,11 +1678,14 @@ static int dvr_encode_mp4(void) {
     FILE *job = fopen(job_path, "w");
     if (!job) {
         fprintf(stderr, "[DVR] Cannot create encoder job: %s\n", strerror(errno));
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "job_create_failed", strerror(errno));
         dvr_encoding = 0;
         return -1;
     }
     fprintf(job, "DVRJOB1\nraw\t%s\noutput\t%s\nfps\t%.6f\nentries\n",
-            dvr_raw_path, output_path, fps);
+            dvr_raw_path, dvr_output_path, fps);
     for (int i = start_idx; i <= end_idx; i++) {
         fprintf(job, "%lld\t%u\n", (long long)dvr_frames[i].file_offset,
                 dvr_frames[i].jpeg_size);
@@ -1665,6 +1694,9 @@ static int dvr_encode_mp4(void) {
                  fclose(job) == 0;
     if (!job_ok) {
         fprintf(stderr, "[DVR] Encoder job sync failed: %s\n", strerror(errno));
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "job_sync_failed", strerror(errno));
         dvr_encoding = 0;
         return -1;
     }
@@ -1679,11 +1711,21 @@ static int dvr_encode_mp4(void) {
     if (spawn_rc != 0) {
         fprintf(stderr, "[DVR] Encoder worker spawn failed: %s\n",
                 strerror(spawn_rc));
+        sensor_event_log("a35_dvr", "encoding", "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         "worker_spawn_failed", strerror(spawn_rc));
         dvr_encoding = 0;
         return -1;
     }
     dvr_encoder_pid = worker_pid;
     printf("[保存] [DVR] Safe encoder worker started (pid=%d)\n", worker_pid);
+    char details[512];
+    snprintf(details, sizeof(details),
+             "path=%.400s frames=%d fps=%.1f pid=%d",
+             dvr_output_path, total, fps, worker_pid);
+    sensor_event_log("a35_dvr", "encoding", "started",
+                     NULL, NULL, -1.0f, -1, -1,
+                     "async_worker", details);
     return 0;
 
 }
@@ -2487,13 +2529,26 @@ int main(int argc, char *argv[]) {
             int enc_status;
             pid_t reaped = waitpid(dvr_encoder_pid, &enc_status, WNOHANG);
             if (reaped == dvr_encoder_pid) {
+                int encode_ok = WIFEXITED(enc_status) &&
+                                WEXITSTATUS(enc_status) == 0;
                 if (WIFEXITED(enc_status)) {
                     printf("[保存] [DVR] Encoder finished (exit=%d)\n", WEXITSTATUS(enc_status));
-                    if (WEXITSTATUS(enc_status) == 0)
+                    if (encode_ok)
                         play_recording_complete_sound();
                     else
                         fprintf(stderr, "[DVR] Recording was NOT committed; recovery buffer retained\n");
                 }
+                char details[1200];
+                snprintf(details, sizeof(details),
+                         "path=%s result=%s exit=%d",
+                         dvr_output_path[0] != '\0' ? dvr_output_path : "unknown",
+                         encode_ok ? "validated_fsynced" : "not_committed",
+                         WIFEXITED(enc_status) ? WEXITSTATUS(enc_status) : -1);
+                sensor_event_log("a35_dvr", "recording",
+                                 encode_ok ? "saved" : "failed",
+                                 NULL, NULL, -1.0f, -1, -1,
+                                 encode_ok ? "validated" : "encoder_failed",
+                                 details);
                 dvr_encoder_pid = 0;
                 dvr_encoding = 0;
                 dvr_save_triggered = 0;
@@ -2512,6 +2567,9 @@ int main(int argc, char *argv[]) {
                 npu_denied = 0;
                 printf("[保存] [DVR] State reset, ready for next trigger\n");
             } else if (reaped < 0) {
+                sensor_event_log("a35_dvr", "recording", "failed",
+                                 NULL, NULL, -1.0f, -1, -1,
+                                 "worker_wait_failed", strerror(errno));
                 dvr_encoder_pid = 0;
                 dvr_encoding = 0;
             }
@@ -2905,7 +2963,21 @@ int main(int argc, char *argv[]) {
     if (dvr_encoder_pid > 0) {
         printf("[保存] [DVR] Waiting for encoder (pid=%d)...\n", dvr_encoder_pid);
         int enc_status;
-        waitpid(dvr_encoder_pid, &enc_status, 0);
+        pid_t reaped = waitpid(dvr_encoder_pid, &enc_status, 0);
+        int encode_ok = reaped == dvr_encoder_pid && WIFEXITED(enc_status) &&
+                        WEXITSTATUS(enc_status) == 0;
+        char details[1200];
+        snprintf(details, sizeof(details),
+                 "path=%s result=%s exit=%d shutdown=1",
+                 dvr_output_path[0] != '\0' ? dvr_output_path : "unknown",
+                 encode_ok ? "validated_fsynced" : "not_committed",
+                 (reaped == dvr_encoder_pid && WIFEXITED(enc_status))
+                     ? WEXITSTATUS(enc_status) : -1);
+        sensor_event_log("a35_dvr", "recording",
+                         encode_ok ? "saved" : "failed",
+                         NULL, NULL, -1.0f, -1, -1,
+                         encode_ok ? "validated" : "encoder_failed",
+                         details);
         dvr_encoder_pid = 0;
         dvr_encoding = 0;
     }

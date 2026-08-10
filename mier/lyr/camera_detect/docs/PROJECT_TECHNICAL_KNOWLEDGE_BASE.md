@@ -905,7 +905,7 @@ BLE操作。
 | `RISK LEFT` | PA7左灯亮、PA5右灯灭 | `ACK RISK LEFT` |
 | `RISK RIGHT` | PA5右灯亮、PA7左灯灭 | `ACK RISK RIGHT` |
 | `RISK CENTER` | 两灯同时亮 | `ACK RISK CENTER` |
-| `RISK CLEAR` | 两灯同时灭 | `ACK RISK CLEAR` |
+| `RISK CLEAR` | 当前风险灯保持1秒后灭 | `ACK RISK CLEAR` |
 
 此外保留`LED ON/OFF`、`LEFT ON/OFF`和`RIGHT ON/OFF`用于分层测试。未知命令返回
 `ERR UNKNOWN CMD`，超过缓冲长度返回`ERR CMD TOO LONG`。
@@ -1495,8 +1495,8 @@ CLOCK_BOOTTIME里程碑：应用内部
 
 ### 17.5 下一阶段应该考虑“分级ready”
 
-早期完整业务把摄像头、TF、融合和部分网络准备绑得较紧。当前雷达/摄像头仍可分阶段
-初始化，但为了保证每次告警都具备录像条件，TF未就绪时`dvr.service`明确失败重试：
+早期完整业务把摄像头、TF、融合和部分网络准备绑得较紧。当前已按故障域分阶段：
+TF未就绪时录像明确失败并上报，但不会阻断雷达判断和LED告警：
 
 ```text
 Level 1：M33 + RPMsg + 雷达基础告警
@@ -1505,8 +1505,8 @@ Level 3：外置TF真实挂载且可写 + 事件录像
 Level 4：Wi-Fi + Dashboard + 手机协同
 ```
 
-但拆分后要处理晚到设备、启动期间事件缓存、状态切换和失败降级。没有现场回归时只做
-设计，不应直接改生产路径。
+拆分后通过真实挂载检查、运行中重复探测、有界事件缓存和Dashboard红色故障事件处理
+晚到设备与失败降级。正式视频仍只允许写TF，不回退到板载根文件系统。
 
 ## 18. 运行可靠性
 

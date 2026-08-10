@@ -303,7 +303,7 @@ g_radar_npu_alert + dangerous.direction
 | `RISK LEFT` | PA7亮、PA5灭 | `ACK RISK LEFT` |
 | `RISK RIGHT` | PA5亮、PA7灭 | `ACK RISK RIGHT` |
 | `RISK CENTER` | 两灯都亮 | `ACK RISK CENTER` |
-| `RISK CLEAR` | 两灯都灭 | `ACK RISK CLEAR` |
+| `RISK CLEAR` | 当前风险灯保持1秒后灭 | `ACK RISK CLEAR` |
 
 断线或WBA复位时两灯默认熄灭，MP257串口暂不可用时每2秒重试，不阻塞雷达主循环。
 

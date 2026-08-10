@@ -144,6 +144,19 @@ class DashboardTest(unittest.TestCase):
         self.assertIn('body[data-release="1.0.8"]', styles)
         self.assertIn('content: "OTA DEMO"', styles)
 
+    def test_dashboard_exposes_colored_dvr_lifecycle_events(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        app = (static_dir / "app.js").read_text(encoding="utf-8")
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        styles = (static_dir / "styles.css").read_text(encoding="utf-8")
+        for label in (
+            "事件录像已触发", "录像编码进行中", "视频已校验并保存", "视频保存失败"
+        ):
+            self.assertIn(label, app)
+        self.assertIn("关键事件与录像日志", html)
+        for tone in ("tone-failed", "tone-triggered", "tone-processing", "tone-saved"):
+            self.assertIn(tone, styles)
+
     def test_read_only_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

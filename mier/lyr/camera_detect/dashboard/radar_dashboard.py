@@ -1122,7 +1122,7 @@ class TaskController:
                             text=True,
                             encoding="utf-8",
                             errors="replace",
-                            timeout=180,
+                            timeout=30,
                         )
                     except (OSError, subprocess.SubprocessError) as exc:
                         details = str(exc)
@@ -1198,7 +1198,7 @@ class TaskController:
                         text=True,
                         encoding="utf-8",
                         errors="replace",
-                        timeout=180,
+                        timeout=30,
                     )
                 except (OSError, subprocess.SubprocessError) as exc:
                     details = str(exc)

@@ -19,6 +19,7 @@
 #define RISK_BLINK_OFF_MS         200U
 #define RISK_BLINK_COUNT          3U
 #define RISK_FINAL_ON_MS          1000U
+#define RISK_CLEAR_HOLD_MS        1000U
 
 #define UNPACK_U16(ptr) \
   ((uint16_t)((uint16_t)(ptr)[0] | ((uint16_t)(ptr)[1] << 8)))
@@ -40,7 +41,8 @@ typedef enum
   RISK_PATTERN_BLINK_OFF,
   RISK_PATTERN_BLINK_ON,
   RISK_PATTERN_FINAL_GAP,
-  RISK_PATTERN_FINAL_ON
+  RISK_PATTERN_FINAL_ON,
+  RISK_PATTERN_CLEAR_HOLD
 } CH9140_RiskPatternPhase_t;
 
 typedef struct
@@ -80,6 +82,7 @@ static void CH9140_SetRightLed(uint8_t enabled);
 static void CH9140_SetRiskLeds(uint8_t left, uint8_t right);
 static void CH9140_StopRiskPattern(void);
 static void CH9140_CancelRiskPattern(void);
+static void CH9140_ScheduleRiskClear(void);
 static void CH9140_StartRiskPattern(uint8_t left, uint8_t right);
 static void CH9140_ProcessRiskPattern(void);
 static void CH9140_Fail(const char *stage, tBleStatus status);
@@ -260,6 +263,24 @@ static void CH9140_CancelRiskPattern(void)
   CH9140_SetRiskLeds(0U, 0U);
 }
 
+/*
+ * 目标消失只延迟风险灯熄灭，不阻塞BLE主循环。新的RISK命令会覆盖这个
+ * CLEAR_HOLD；BLE断开、连接失败和复位仍调用Cancel并立即清灯，避免陈旧告警。
+ */
+static void CH9140_ScheduleRiskClear(void)
+{
+  if ((risk_pattern.left == 0U) && (risk_pattern.right == 0U))
+  {
+    CH9140_CancelRiskPattern();
+    return;
+  }
+
+  CH9140_SetRiskLeds(risk_pattern.left, risk_pattern.right);
+  risk_pattern.phase = RISK_PATTERN_CLEAR_HOLD;
+  risk_pattern.deadline = HAL_GetTick() + RISK_CLEAR_HOLD_MS;
+  risk_pattern.blinks_completed = 0U;
+}
+
 static void CH9140_StartRiskPattern(uint8_t left, uint8_t right)
 {
   if ((left == 0U) && (right == 0U))
@@ -329,6 +350,10 @@ static void CH9140_ProcessRiskPattern(void)
       break;
 
     case RISK_PATTERN_FINAL_ON:
+      CH9140_CancelRiskPattern();
+      break;
+
+    case RISK_PATTERN_CLEAR_HOLD:
       CH9140_CancelRiskPattern();
       break;
 
@@ -424,7 +449,7 @@ static void CH9140_ParseCommandBytes(const uint8_t *data, uint8_t length)
       }
       else if (strcmp((char *)client.command, "RISK CLEAR") == 0)
       {
-        CH9140_CancelRiskPattern();
+        CH9140_ScheduleRiskClear();
         CH9140_QueueReply("ACK RISK CLEAR\n");
       }
       else if (strcmp((char *)client.command, "PING") == 0)

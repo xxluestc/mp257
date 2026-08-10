@@ -18,9 +18,9 @@ ExecStart=/xxl/camera_detect/start_dvr.sh
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=/xxl/camera_detect
-# radar_fusion退出时会把已触发的原始帧编码、完整解码校验并fsync到TF。
-# 给予足够时间，避免systemd在安全停止/关机期间杀死编码worker。
-TimeoutStopSec=150
+# 正常退出时给当前编码一次短时善后机会；真正的可靠性来自运行期异步编码、
+# 完整解码校验和fsync，而不是用超长停止超时掩盖问题。物理断电不受此参数保护。
+TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target

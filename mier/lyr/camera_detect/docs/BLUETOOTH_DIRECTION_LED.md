@@ -14,7 +14,7 @@ MP257 根据现有雷达与摄像头 NPU 融合逻辑选出当前最危险目标
 | LEFT（左后方） | `RISK LEFT` | PA7 左灯亮，PA5 右灯灭 |
 | RIGHT（右后方） | `RISK RIGHT` | PA5 右灯亮，PA7 左灯灭 |
 | CENTER（正后方） | `RISK CENTER` | PA7、PA5 同时亮 |
-| 无最终风险 | `RISK CLEAR` | 两灯同时熄灭 |
+| 无最终风险 | `RISK CLEAR` | 当前风险灯保持1秒后熄灭 |
 
 该功能没有修改已有的雷达阈值、危险目标选择、NPU、DVR、M33、摔倒、Audio
 或 MP257 本机 LED 逻辑，只消费已有的 `g_radar_npu_alert` 最终状态。
@@ -94,7 +94,7 @@ WBA 主动扫描名称 `CH9140BLE2U` 或 FFF0 服务并作为 Central 建立连�
 | `RISK LEFT` | 仅左灯执行告警时序 | `ACK RISK LEFT` |
 | `RISK RIGHT` | 仅右灯执行告警时序 | `ACK RISK RIGHT` |
 | `RISK CENTER` | 两灯同步执行告警时序 | `ACK RISK CENTER` |
-| `RISK CLEAR` | 两灯灭 | `ACK RISK CLEAR` |
+| `RISK CLEAR` | 当前风险灯延时1秒熄灭 | `ACK RISK CLEAR` |
 
 未知命令返回 `ERR UNKNOWN CMD`。旧 WBA 固件不认识 `RISK ...`，出现该返回
 说明 WBA 尚未烧录本功能对应的新固件。
@@ -146,7 +146,9 @@ BLE_LED_ENABLED=0
 每次`RISK LEFT/RIGHT/CENTER`执行：常亮1秒→200ms灭/200ms亮闪烁3次→短暂
 熄灭200ms→常亮1秒→自动熄灭，总时长约3.4秒。时序基于`HAL_GetTick()`状态机，不使用阻塞延时，
 因此BLE收发、ACK和心跳继续运行。中途的新风险命令会按新方向重启时序，
-`RISK CLEAR`、BLE断开或复位立即取消并熄灯。
+`RISK CLEAR`收到后使用非阻塞定时器把当前风险灯保持1秒再熄灭；这1秒内的新
+`RISK LEFT/RIGHT/CENTER`会覆盖旧状态并立即启动新时序。BLE断开或复位仍立即
+取消并熄灯，避免链路失效后留下陈旧告警。
 
 ## 6. 编译、烧录与部署
 
@@ -274,7 +276,7 @@ PA7/PA5 两个外接 LED。
 | `RISK LEFT` | 收到 ACK，左灯亮 |
 | `RISK RIGHT` | 收到 ACK，右灯亮 |
 | `RISK CENTER` | 收到 ACK，两灯亮 |
-| `RISK CLEAR` | 收到 ACK，两灯灭 |
+| `RISK CLEAR` | 立即收到 ACK，当前风险灯约1秒后熄灭 |
 | `dvr.service` 启动接管串口 | 通过 |
 | 业务启动自动清灯 | 收到 `ACK RISK CLEAR` |
 

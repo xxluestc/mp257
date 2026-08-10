@@ -57,7 +57,7 @@ MP257 发送的文本命令必须以 `\n` 或 `\r` 结束：
 | `RISK LEFT` | 左灯执行告警时序，右灯灭 | `ACK RISK LEFT` |
 | `RISK RIGHT` | 右灯执行告警时序，左灯灭 | `ACK RISK RIGHT` |
 | `RISK CENTER` | 两灯同步执行告警时序 | `ACK RISK CENTER` |
-| `RISK CLEAR` | 两灯同时熄灭 | `ACK RISK CLEAR` |
+| `RISK CLEAR` | 保持当前风险灯1秒后熄灭 | `ACK RISK CLEAR` |
 
 其他命令返回 `ERR UNKNOWN CMD`。收到的 BLE 数据也会转发到 WBA UART1，
 所以虚拟机的 `/dev/ttyUSB0` 能看到 MP257 发出的命令。连接状态会输出：
@@ -116,8 +116,9 @@ PA7/PA5输出高电平时点亮，输出低电平时熄灭。PA2底板D1没有�
 
 `RISK LEFT/RIGHT/CENTER`不是持续常亮，而是执行一次非阻塞时序：先常亮1秒，
 再以200ms灭/200ms亮闪烁3次，短暂熄灭200ms后常亮1秒，最后自动熄灭，
-总时长约3.4秒。新风险命令会立即按新方向重新开始；`RISK CLEAR`、BLE断开或
-复位会立即熄灭。`LEFT/RIGHT ON/OFF`保留为人工GPIO测试命令，不执行该时序。
+总时长约3.4秒。新风险命令会立即按新方向重新开始；`RISK CLEAR`会把当前风险灯
+保持1秒再熄灭，期间若收到新风险则立即切换并重新开始。BLE断开或复位仍立即熄灯，
+避免断链后保留陈旧告警。`LEFT/RIGHT ON/OFF`保留为人工GPIO测试命令，不执行该时序。
 
 蓝牙断开或 WBA 复位时，两路外接方向灯默认熄灭。
 
@@ -195,7 +196,8 @@ python3 /root/ble_link/ble_uart_test.py --send 'RISK CLEAR' --line --listen 5
 ```
 
 预期分别收到对应ACK；`LED ON/OFF`控制PA2底板D1，三条`RISK`命令应让左灯、
-右灯、双灯依次完成“常亮→闪3次→常亮→熄灭”的时序，`RISK CLEAR`立即熄灯。
+右灯、双灯依次完成“常亮→闪3次→常亮→熄灭”的时序；在风险时序进行中发送
+`RISK CLEAR`，当前方向灯应再保持1秒后熄灭。
 如果 WBA 一直显示 link down，首先检查 CH9140 的 `BLE_MODE` 是否为高/悬空、
 波特率引脚是否为 `111`，以及天线和供电。
 
