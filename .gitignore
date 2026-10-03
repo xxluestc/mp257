@@ -1,10 +1,11 @@
 # Repository scope
 #
-# This repository intentionally tracks /mier and the two maintained STM32WBA
-# firmware projects. Files elsewhere are local reference material.
+# This repository intentionally tracks project documentation, /mier, and the
+# two maintained STM32WBA firmware projects. Files elsewhere are local references.
 /*
 !/.gitignore
 !/README.md
+!/docs/
 !/mier/
 !/E04-2G4M10S1AX/
 !/V2V_keil/

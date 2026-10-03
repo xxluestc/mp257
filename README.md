@@ -1,63 +1,79 @@
 # STM32MP257 主动安全骑行辅助系统
 
-当前仓库维护三个相互独立的工程：
+面向骑行中侧后方来车、摔倒和导航提醒等场景的嵌入式项目。系统以 STM32MP257 为核心，结合毫米波雷达、摄像头与端侧 NPU，在开发板上完成风险判断，通过骨传导音频、HUD 和方向灯提醒骑行者，并保存风险事件前后的录像。
+
+项目围绕“感知风险 → 判断事件 → 提醒骑行者 → 留存现场”组织功能，同时提供本地 Web Dashboard 和应用层 OTA，支持原型演示、运行状态观察和版本更新。
+
+## 项目要解决的问题
+
+骑行者需要持续关注前方路况，侧后方快速接近的车辆往往难以及时察觉；发生异常时，也需要保留事件前后的现场信息。这个项目将环境感知、即时提醒和事件录像放在同一套系统中，让风险信息从传感器到提示设备形成完整的处理链路。
+
+## 核心功能
+
+| 功能 | 项目中的实现 |
+|---|---|
+| **侧后方来车预警** | 毫米波雷达提供目标距离、速度、角度和碰撞时间信息；摄像头图像经 NPU 检测道路使用者，结合雷达风险与视觉连续确认触发告警。 |
+| **方向提示** | 对危险目标方向进行滤波与连续确认，将左后方、正后方、右后方风险传到 STM32WBA54，控制左右方向灯。 |
+| **事件录像** | 风险触发时保存前后各 15 秒的视频，编码为 MP4 并存入外置 TF 卡，保留事件发生前后的上下文。 |
+| **摔倒告警** | A35 接收 M33 的 IMU 摔倒事件，联动本地灯光、音频和录像，并经 HUD 向手机转发事件。 |
+| **导航与语音提醒** | 接收手机导航和道路风险消息，在 OLED/HUD 显示导航信息，并通过骨传导音频播报提示。 |
+| **本地状态面板** | Web Dashboard 展示雷达目标、融合状态、传感器事件、录像进度和设备健康信息，支持实验标注与设备控制。 |
+| **应用层 OTA** | 对 A35 运行程序与资源进行版本更新，提供包校验、健康检查和失败回滚。 |
+
+## 系统架构
+
+STM32MP257 的 A35 Linux 侧负责视觉推理、雷达融合、录像与人机交互；M33 侧的 IMU 事件通过 OpenAMP/RPMsg 进入 A35。蓝牙方向灯使用独立的 STM32WBA54 固件。
+
+```mermaid
+flowchart LR
+    Radar[毫米波雷达] -->|距离 / 速度 / 角度| A35
+    Camera[摄像头] --> NPU[NPU 道路目标检测]
+    NPU --> A35[STM32MP257 A35 Linux<br/>风险判断与事件处理]
+    M33[外部 M33 固件<br/>IMU 事件] -->|OpenAMP / RPMsg| A35
+    Phone[手机 App] -->|导航 / 道路风险消息| A35
+
+    A35 --> Audio[骨传导音频 / 本机告警灯]
+    A35 --> HUD[OLED / HUD]
+    HUD -->|异常事件转发| Phone
+    A35 --> DVR[事件录像<br/>外置 TF 卡]
+    A35 --> BLE[CH9140 BLE 链路]
+    BLE --> WBA[STM32WBA54<br/>左右方向灯]
+    A35 --> Dashboard[Web Dashboard]
+    OTA[应用层 OTA 服务] -->|校验 / 更新 / 回滚| A35
+```
+
+## 实现特点
+
+- **雷达与视觉共同参与判断。** 雷达提供接近风险信息，NPU 提供道路目标确认，融合结果统一驱动告警、方向灯和录像。
+- **推理在设备本地完成。** 摄像头检测使用 STM32MP257 的 NPU，核心碰撞风险判断在 A35 上运行。
+- **围绕事件保存视频。** DVR 缓冲与风险触发联动；视频经过结构检查与完整解码校验后提交为正式文件。TF 卡异常时隔离录像故障，保留告警链运行。
+- **可以观察完整的事件过程。** Dashboard 和同步记录串联雷达、视觉、IMU、提示与录像，便于对照现场事件分析系统行为。
+- **具备原型运行与维护能力。** systemd 服务、存储管理、安全停止和 OTA 回滚共同支持设备持续运行与现场演示。
+
+## V2V 协同预警实验
+
+仓库还包含一套独立的双 STM32WBA54 V2V 实验固件。两个终端同时进行 BLE 广播与扫描，交换本机 GPS/IMU 状态，根据相对位置和接近趋势生成方向风险提示，并控制 MP3 模块播放语音。
+
+该部分用于探索终端之间的协同预警，目前按固定双端点、单对端跟踪实现，仍需现场标定与场景验证。它与主系统的 CH9140 蓝牙方向灯使用不同的通信协议，分别维护。
+
+## 仓库内容与实现范围
 
 ```text
 mp257/
-├── mier/lyr/camera_detect/   # STM32MP257 A35 Linux核心业务
-├── E04-2G4M10S1AX/           # STM32WBA54 + CH9140 BLE方向灯固件
-└── V2V_keil/E04-2G4M10S1AX/ # 双WBA广播/扫描、GPS/IMU和语音实验固件
+├── README.md                 # 项目介绍
+├── docs/                     # 文档总览
+├── mier/lyr/camera_detect/    # A35 Linux 核心程序、HUD、Dashboard、OTA 与资源
+├── E04-2G4M10S1AX/            # CH9140 链路对应的 WBA 蓝牙方向灯固件
+└── V2V_keil/E04-2G4M10S1AX/  # 双 WBA V2V 语音预警实验固件
 ```
 
-旧的`A_Core`、`recorder`、`camera`等目录是早期实验遗留，不是当前业务入口。
-当前录像、雷达、NPU、HUD、Dashboard、OTA与运维代码均以
-[`mier/lyr/camera_detect`](mier/lyr/camera_detect/README.md)为准。
+本仓库主要展示 A35 应用与两套 WBA 固件。手机 App、云端服务和 MP257 M33 固件在仓库之外维护；当前代码包含对应的消息接收或转发接口。手机短信发送仍缺少端到端回执确认，V2V 实验中的 MP257 外部状态发送端也尚未完成对接。
 
-## 从新电脑开始
+当前项目以骑行辅助原型和实验验证为定位。功能实现、验证记录及后续标定事项分别保存在对应工程文档中。
 
-```bash
-git clone https://github.com/xxluestc/mp257.git
-cd mp257/mier/lyr/camera_detect
-make clean
-make
-make deploy-radar BOARD_IP=192.168.88.10
-```
+## 相关资料
 
-A35主机需要AArch64交叉编译器、Python 3与make，并能够通过SSH/SCP登录开发板。
-现场`/xxl/camera_detect/radar_config`不会被部署目标覆盖。
-
-WBA固件在Windows中用Keil打开
-[`E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx`](E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx)，
-安装STM32WBA54 Device Family Pack后选择`E04_BLE_UART`执行Rebuild，再用
-ST-LINK烧录。完整接线、LED低有效极性和联调方法见
-[WBA工程说明](E04-2G4M10S1AX/README.md)。
-
-独立双终端V2V语音固件在Windows中用Keil打开
-[`V2V_keil/E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx`](V2V_keil/E04-2G4M10S1AX/MDK-ARM/02_test.uvprojx)。
-它与CH9140方向灯固件使用不同协议，不能互相覆盖或混烧。其完整数据流、端点ID、
-GPS/IMU、MP3语音和验证方法见[双终端V2V工程说明](V2V_keil/E04-2G4M10S1AX/README.md)。
-
-## 当前运行结论
-
-- A35事件录像使用外置TF；脚本兼容`/dev/mmcblk0`和`/dev/mmcblk0p1`并验证真实挂载
-  与可写性。实验CSV使用板载`/usr/local/helmet` userfs/ext4。
-- 旧故障TF已经停用；新卡必须通过重挂、SHA-256和整段视频解码验收。
-- Dashboard监听`0.0.0.0:8080`，网线和WiFi均使用8080端口，IP随接口变化。
-- Dashboard提供TF挂载/弹出、安全停止项目和安全关机；命令行也有等价脚本。
-- 风险录像在正式提交前经过MP4结构、ffprobe和整段解码校验。
-- 雷达LEFT/CENTER/RIGHT会经MP257 USART2、CH9140 BLE传给WBA方向灯。
-
-## 主要文档
-
-- [A35核心工程](mier/lyr/camera_detect/README.md)
-- [日常操作指南](mier/lyr/camera_detect/docs/操作指南.md)
-- [录像可靠性与TF主存储](mier/lyr/camera_detect/docs/DVR_RELIABILITY.md)
-- [跨电脑编译部署交接](mier/lyr/camera_detect/docs/跨电脑编译部署交接.md)
-- [比赛演示与事件链](mier/lyr/camera_detect/docs/COMPETITION_PREPARATION.md)
-- [雷达实验与人工标注](mier/lyr/camera_detect/docs/RADAR_EXPERIMENT.md)
-- [A35 OTA](mier/lyr/camera_detect/docs/OTA.md)
-- [WBA蓝牙方向灯](E04-2G4M10S1AX/README.md)
-- [双WBA V2V语音终端](V2V_keil/E04-2G4M10S1AX/README.md)
-
-运行日志、录像、实验CSV、现场配置、构建产物与IDE临时文件不提交；需要回看旧实现时
-使用Git历史，不在当前工程中新增`old`、`bak`或版本副本。
+- [文档总览](docs/README.md)：架构、验证记录、编译部署与日常维护资料。
+- [系统数据流](mier/lyr/camera_detect/docs/DATA_FLOW.md)：感知、判断、告警与录像之间的数据流转。
+- [事件链与演示说明](mier/lyr/camera_detect/docs/COMPETITION_PREPARATION.md)：典型场景的处理过程及当前验证边界。
+- [V2V 实验说明](V2V_keil/E04-2G4M10S1AX/README.md)：双终端状态交换、相对风险判断与语音事件机制。
