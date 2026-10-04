@@ -1,4 +1,4 @@
-> 历史实现与实验资料：本文原有单线程、TF 原始缓冲及旧源码阅读顺序属于 1.0.8 阶段。当前应用以 [DATA_FLOW](DATA_FLOW.md) 和 [多线程/RAM 实现](../../../docs/VIDEO_PIPELINE_DESIGN.md) 为准；本文的实机记录不代表本次重构已验收。
+> 历史实现与实验资料：本文原有单线程、TF 原始缓冲及旧源码阅读顺序属于 1.0.8 阶段。当前应用以 [DATA_FLOW](DATA_FLOW.md) 和 [多线程/RAM 实现](../../../docs/VIDEO_PIPELINE_DESIGN.md) 为准。
 
 # STM32MP257 骑行辅助系统面试准备
 

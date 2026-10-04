@@ -56,4 +56,4 @@ BLE 输出沿用 UART → CH9140 → WBA54 协议，CLEAR / LEFT / CENTER / RIGH
 | 编码与提交 | [dvr_encode_worker.py](../scripts/dvr_encode_worker.py)、[dvr_validation.py](../scripts/dvr_validation.py) |
 | RPMsg、遥测、导航 | src/events、src/telemetry、src/navigation |
 
-线程是 Linux 调度单位，未固定绑定 CPU。当前代码经主机检查，本次未进行板端验收。
+线程是 Linux 调度单位，由调度器分配 CPU 执行时间。

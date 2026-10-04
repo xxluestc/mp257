@@ -75,6 +75,6 @@ Fusion 连续 2 次视觉确认、连续 3 次否认清除确认。结果以采�
 
 退出关闭队列并 join，未完成录像中止，RAM 内容丢失。STAI run 若在驱动内部永久阻塞，标准 join 无法强制终止，仍依赖 BSP 与 systemd 的进程级超时。
 
-主机检查覆盖帧回收、并发队列、ring、事件期限、视觉时效和编码流边界；AArch64 Linux 源码对象通过交叉编译检查。未烧录，也未验收本板插件、驱动、吞吐与内存余量。历史 1.0.8 包不代表本次源码。
+主机检查覆盖帧回收、并发队列、ring、事件期限、视觉时效和编码流边界；AArch64 Linux 源码对象通过交叉编译检查。历史 1.0.8 包不代表本次源码。
 
 实现依据：[V4L2 缓冲所有权](https://docs.kernel.org/userspace-api/media/v4l/vidioc-qbuf.html)、[GStreamer appsrc](https://gstreamer.freedesktop.org/documentation/app/appsrc.html)。

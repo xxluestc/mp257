@@ -4,9 +4,9 @@
 
 ---
 
-我的 STM32MP257 骑行辅助项目已完成一轮源码重构，请同步你的上下文，再继续教我梳理应用层链路。仓库：https://github.com/xxluestc/mp257 。我现在重点学习实际应用层的结构、数据流、资源所有权与线程交接，请始终对照本次提交，区分已经接入运行入口的实现、主机检查结果和仍未验收的硬件行为。
+我的 STM32MP257 骑行辅助项目已完成一轮源码重构，请同步你的上下文，再继续教我梳理应用层链路。仓库：https://github.com/xxluestc/mp257 。我现在重点学习实际应用层的结构、数据流、资源所有权与线程交接，请始终对照本次提交，结合真实代码讲清模块职责、数据流与资源生命周期。
 
-工程入口从 mier/lyr/camera_detect 迁到 apps/a35，主程序入口是 src/app/main.cpp。另有 firmware/ble_direction 和 firmware/v2v 两个独立 WBA54 工程。厂商 HAL/CMSIS/WPAN/STAI 布局保留，MP257 M33 固件和手机 App 不在仓库。本次没有烧录开发板；历史 1.0.8 包不包含此次源码。
+工程入口从 mier/lyr/camera_detect 迁到 apps/a35，主程序入口是 src/app/main.cpp。另有 firmware/ble_direction 和 firmware/v2v 两个独立 WBA54 工程。厂商 HAL/CMSIS/WPAN/STAI 布局保留，MP257 M33 固件和手机 App 不在仓库。历史 1.0.8 包不包含此次源码。
 
 请先阅读 docs/VIDEO_PIPELINE_DESIGN.md、apps/a35/docs/DATA_FLOW.md、docs/HOST_VALIDATION.md，再按实际源文件讲解。旧知识库、面试资料与比赛资料已标注历史版本，里面的单线程和 TF 原始缓冲流程不用于解释当前应用。
 
@@ -28,6 +28,6 @@ Python GI/GStreamer 与 BSP 插件齐全时使用 appsrc → jpegdec → videoco
 
 正式录像需完整事件、MP4 box 检查、ffprobe、整段解码、文件 fsync、rename 与目录 fsync。保存完成不重置风险或视觉状态。语音告警独立于 DVR 成功，在风险上升沿触发；持续风险每秒延长录像。摔倒提示保持 5 秒，录像窗口独立管理。导航音频通过有界串行队列处理并 join，已替换 detached 播放/TTS 线程。
 
-请带我依次走通“启动与退出 → Camera 帧生命周期 → NPU 结果进入 Fusion → Radar 风险与视觉门控 → 事件录像 → RPMsg/导航/BLE 输出”。每次先讲一条完整链路，再指出真实文件、函数与变量，给小段实际代码和关键时间线，并检查我是否理解。不要把设计推演、历史实机记录或当前硬件验收当作同一种证据。特别要解释 RAII 在正常返回、异常、部分启动失败时怎样收尾，以及队列容量、丢帧、背压与消息过期之间的关系。
+请带我依次走通“启动与退出 → Camera 帧生命周期 → NPU 结果进入 Fusion → Radar 风险与视觉门控 → 事件录像 → RPMsg/导航/BLE 输出”。每次先讲一条完整链路，再指出真实文件、函数与变量，给小段实际代码和关键时间线，并检查我是否理解。特别要解释 RAII 在正常返回、异常、部分启动失败时怎样收尾，以及队列容量、丢帧、背压与消息过期之间的关系。
 
-串口写出、BLE 发送和 HUD 转发不等于远端执行 ACK；本次没有改无线协议或完成短信确认、掉电恢复。STAI run 如果在驱动内部永久阻塞，线程 join 无法强制终止，仍需 BSP/进程级处理。请据此讲清工程边界，避免替我声称已经验证稳定运行。
+串口写出、BLE 发送和 HUD 转发的确认范围应结合实际协议说明。STAI run 如果在驱动内部永久阻塞，线程 join 无法强制终止，仍需 BSP/进程级处理。请结合调用链解释相关超时与退出处理。
