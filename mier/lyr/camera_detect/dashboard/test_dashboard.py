@@ -72,9 +72,23 @@ class DashboardTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             store = RadarStore(Path(temporary))
             controller = TaskController(store.data_dir)
-            controller._record("ota", "pause", "ok", "test audit")
-            controller._record("ota", "run", "ok", "test audit")
-            events = store.read_key_events(4)
+            now_s = 1_700_000_000.0
+            original_read_text = Path.read_text
+
+            def read_text(path: Path, *args: object, **kwargs: object) -> str:
+                if path == Path("/proc/uptime"):
+                    return "60.00 0.00\n"
+                return original_read_text(path, *args, **kwargs)
+
+            # A fixed boot window makes this test independent of the host OS
+            # and checks that events from the previous boot are excluded.
+            with patch("radar_dashboard.time.time", return_value=now_s - 120):
+                controller._record("dvr", "pause", "ok", "previous boot")
+            with patch("radar_dashboard.time.time", return_value=now_s):
+                controller._record("ota", "pause", "ok", "test audit")
+                controller._record("ota", "run", "ok", "test audit")
+                with patch.object(Path, "read_text", autospec=True, side_effect=read_text):
+                    events = store.read_key_events(4)
             self.assertEqual(len(events), 2)
             self.assertEqual(events[0]["source"], "control")
             self.assertEqual({event["reason"] for event in events}, {"pause", "run"})
