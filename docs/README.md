@@ -47,6 +47,8 @@ OTA 覆盖 A35 应用和运行资源，M33 固件、内核、设备树及系统�
 
 ## 开发参考
 
+- [代码与维护约定](CODING_CONVENTIONS.md)
+- [多线程与 RAM 视频缓存设计（待实现）](VIDEO_PIPELINE_DESIGN.md)
 - [项目技术知识库](../mier/lyr/camera_detect/docs/PROJECT_TECHNICAL_KNOWLEDGE_BASE.md)
 - [项目讲解与面试准备](../mier/lyr/camera_detect/docs/INTERVIEW_PREPARATION.md)
 

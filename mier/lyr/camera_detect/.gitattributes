@@ -1,0 +1,10 @@
+/*.[ch] text eol=lf
+/*.cpp text eol=lf
+/*.hpp text eol=lf
+/hud_project/main.c text eol=lf
+/hud_project/common.h text eol=lf
+/hud_project/oled.c text eol=lf
+/hud_project/oled.h text eol=lf
+/hud_project/udp.c text eol=lf
+/hud_project/udp.h text eol=lf
+/tools/*.py text eol=lf

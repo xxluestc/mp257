@@ -1,0 +1,11 @@
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-memset-usage,
+  bugprone-use-after-move,
+  bugprone-incorrect-roundings,
+  performance-move-const-arg
+WarningsAsErrors: ''
+HeaderFilterRegex: '(^|/)(camera|npu_detect|ble_risk_output|nav_tts)\.h$|/hud_project/(common|oled|udp)\.h$'
+FormatStyle: file

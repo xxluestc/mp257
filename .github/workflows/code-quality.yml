@@ -1,0 +1,29 @@
+name: Source quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mier/lyr/camera_detect
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned formatter
+        run: python -m pip install clang-format==18.1.8
+      - name: Check C and C++ formatting
+        run: python tools/check_format.py
+      - name: Check shell and Python sources
+        run: make script-check ota-check
+      - name: Run Dashboard host tests
+        run: make dashboard-check

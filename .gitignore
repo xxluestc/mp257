@@ -6,6 +6,8 @@
 !/.gitignore
 !/README.md
 !/docs/
+!/.editorconfig
+!/.github/
 !/mier/
 !/E04-2G4M10S1AX/
 !/V2V_keil/
