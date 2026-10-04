@@ -73,116 +73,124 @@
 #include "nav_tts.h"
 
 /* ======================== 配置常量 ======================== */
-#define UART_DEVICE            "/dev/ttySTM1"
-#define BAUDRATE               921600
-#define TTC_THRESHOLD_DEFAULT  2.5f
+#define UART_DEVICE "/dev/ttySTM1"
+#define BAUDRATE 921600
+#define TTC_THRESHOLD_DEFAULT 2.5f
 #define DIST_THRESHOLD_DEFAULT 3
-#define HEAD_CMD               0x58
-#define HEAD_REPLY             0x59
-#define HEAD_REPORT            0x5A
-#define TYPE_BSD               7
-#define ROAD_USER_CLASSES      {1,2,3,4,6,7,8}
-#define NPU_CONFIRM_FRAMES     2
-#define NPU_DENY_FRAMES        3
-#define TARGET_TIMEOUT_S       3
-#define MAX_RADAR_OBJECTS      8
-#define ANGLE_LEFT_DEFAULT    -10.0f
-#define ANGLE_RIGHT_DEFAULT    10.0f
+#define HEAD_CMD 0x58
+#define HEAD_REPLY 0x59
+#define HEAD_REPORT 0x5A
+#define TYPE_BSD 7
+#define ROAD_USER_CLASSES {1, 2, 3, 4, 6, 7, 8}
+#define NPU_CONFIRM_FRAMES 2
+#define NPU_DENY_FRAMES 3
+#define TARGET_TIMEOUT_S 3
+#define MAX_RADAR_OBJECTS 8
+#define ANGLE_LEFT_DEFAULT -10.0f
+#define ANGLE_RIGHT_DEFAULT 10.0f
 #define ANGLE_FILTER_ALPHA_DEFAULT 0.35f
 #define DIRECTION_STABLE_SAMPLES_DEFAULT 3
 #define DIRECTION_HYSTERESIS_DEG 2.0f
 #define ANGLE_DIRECTION_SIGN_DEFAULT -1.0f
-#define RADAR_LOG_DIR_DEFAULT  "/usr/local/helmet/radar_experiments"
-#define BLE_LED_UART_DEFAULT   "/dev/ttySTM0"
+#define RADAR_LOG_DIR_DEFAULT "/usr/local/helmet/radar_experiments"
+#define BLE_LED_UART_DEFAULT "/dev/ttySTM0"
 
 /* LED */
-#define GPIO_CHIP_DEV          "/dev/gpiochip3"
-#define GPIO_LED_LINE          11
-#define LED_BLINK_ON_MS        200
-#define LED_BLINK_OFF_MS       200
+#define GPIO_CHIP_DEV "/dev/gpiochip3"
+#define GPIO_LED_LINE 11
+#define LED_BLINK_ON_MS 200
+#define LED_BLINK_OFF_MS 200
 
 /* DVR */
-#define DVR_BASE_DIR_DEFAULT   "/run/media/mmcblk0p1/dvr"
-#define DVR_MOUNT_DIR_DEFAULT  "/run/media/mmcblk0p1"
-#define DVR_PATH_CAPACITY      768
-#define DVR_SAVE_BEFORE_SEC    15
-#define DVR_SAVE_AFTER_SEC     15
-#define DVR_CAPTURE_FPS        25
+#define DVR_BASE_DIR_DEFAULT "/run/media/mmcblk0p1/dvr"
+#define DVR_MOUNT_DIR_DEFAULT "/run/media/mmcblk0p1"
+#define DVR_PATH_CAPACITY 768
+#define DVR_SAVE_BEFORE_SEC 15
+#define DVR_SAVE_AFTER_SEC 15
+#define DVR_CAPTURE_FPS 25
 #define DVR_CAPTURE_INTERVAL_US (1000000 / DVR_CAPTURE_FPS)
 #define DVR_MAX_EVENT_SPAN_SEC 60
-#define DVR_BUFFER_WINDOW_SEC  (DVR_SAVE_BEFORE_SEC + DVR_MAX_EVENT_SPAN_SEC + DVR_SAVE_AFTER_SEC)
+#define DVR_BUFFER_WINDOW_SEC (DVR_SAVE_BEFORE_SEC + DVR_MAX_EVENT_SPAN_SEC + DVR_SAVE_AFTER_SEC)
 #define DVR_STORAGE_SYNC_FRAMES (DVR_CAPTURE_FPS * 2)
-#define DVR_MIN_MP4_BYTES      4096
-#define DVR_ENCODER_WORKER     "/xxl/camera_detect/scripts/dvr_encode_worker.py"
+#define DVR_MIN_MP4_BYTES 4096
+#define DVR_ENCODER_WORKER "/xxl/camera_detect/scripts/dvr_encode_worker.py"
 
 extern char **environ;
 
 /* RPMsg (M33 IMU/V2X alerts) */
-#define RPMSG_DEVICE           "/dev/ttyRPMSG0"
-#define RPMSG_READY_MSG        "v2x_imu_alert_reader_ready\n"
-#define RPMSG_BAUD             B115200
+#define RPMSG_DEVICE "/dev/ttyRPMSG0"
+#define RPMSG_READY_MSG "v2x_imu_alert_reader_ready\n"
+#define RPMSG_BAUD B115200
 
 /* Audio alert files */
-#define AUDIO_FALL             "/xxl/camera_detect/sounds/fall_alert.wav"
-#define AUDIO_COLLISION        "/xxl/camera_detect/sounds/collision_alert.wav"
-#define AUDIO_V2X_NEARBY       "/xxl/camera_detect/sounds/v2x_nearby.wav"
-#define AUDIO_V2X_LEFT_FRONT   "/xxl/camera_detect/sounds/v2x_left_front.wav"
-#define AUDIO_V2X_RIGHT_FRONT  "/xxl/camera_detect/sounds/v2x_right_front.wav"
-#define AUDIO_V2X_LEFT         "/xxl/camera_detect/sounds/v2x_left.wav"
-#define AUDIO_V2X_RIGHT        "/xxl/camera_detect/sounds/v2x_right.wav"
+#define AUDIO_FALL "/xxl/camera_detect/sounds/fall_alert.wav"
+#define AUDIO_COLLISION "/xxl/camera_detect/sounds/collision_alert.wav"
+#define AUDIO_V2X_NEARBY "/xxl/camera_detect/sounds/v2x_nearby.wav"
+#define AUDIO_V2X_LEFT_FRONT "/xxl/camera_detect/sounds/v2x_left_front.wav"
+#define AUDIO_V2X_RIGHT_FRONT "/xxl/camera_detect/sounds/v2x_right_front.wav"
+#define AUDIO_V2X_LEFT "/xxl/camera_detect/sounds/v2x_left.wav"
+#define AUDIO_V2X_RIGHT "/xxl/camera_detect/sounds/v2x_right.wav"
 #define AUDIO_RECORDING_COMPLETE "/xxl/camera_detect/sounds/recording_complete.wav"
 
 /* HUD / App 转发地址（与 v2x_alert_link.sh 一致） */
-#define HUD_INPUT_IP           "127.0.0.1"
-#define HUD_INPUT_PORT         8890
+#define HUD_INPUT_IP "127.0.0.1"
+#define HUD_INPUT_PORT 8890
 
 /* ======================== 雷达协议结构体 ======================== */
 #pragma pack(push, 1)
-typedef struct { int8_t range_val, angle_val, velo_val, objId; } bsd_obj_t;
-typedef struct { uint16_t obj_num, reserved; bsd_obj_t obj[MAX_RADAR_OBJECTS]; } bsd_det_t;
+
+typedef struct {
+    int8_t range_val, angle_val, velo_val, objId;
+} bsd_obj_t;
+
+typedef struct {
+    uint16_t obj_num, reserved;
+    bsd_obj_t obj[MAX_RADAR_OBJECTS];
+} bsd_det_t;
+
 #pragma pack(pop)
 
 /* ======================== DVR 帧记录 ======================== */
 typedef struct {
-    uint64_t timestamp_us;   /* 从启动开始的时间戳 */
-    off_t     file_offset;   /* 在帧文件中的偏移 */
-    uint32_t  jpeg_size;     /* JPEG 数据大小 */
-    uint32_t  frame_index;   /* 帧序号 */
+    uint64_t timestamp_us; /* 从启动开始的时间戳 */
+    off_t file_offset;     /* 在帧文件中的偏移 */
+    uint32_t jpeg_size;    /* JPEG 数据大小 */
+    uint32_t frame_index;  /* 帧序号 */
 } dvr_frame_entry_t;
 
 #define DVR_MAX_FRAMES (DVR_BUFFER_WINDOW_SEC * DVR_CAPTURE_FPS)
 
 /* ======================== 全局状态 ======================== */
-static volatile int g_running    = 1;
-static volatile int g_led_alert  = 0;
-static volatile int g_radar_npu_alert = 0;   /* 雷达+NPU 确认告警 */
-static volatile int g_imu_fall_alert  = 0;   /* IMU 摔倒告警 */
-static volatile int g_v2x_alert       = 0;   /* V2X 告警 */
+static volatile int g_running = 1;
+static volatile int g_led_alert = 0;
+static volatile int g_radar_npu_alert = 0; /* 雷达+NPU 确认告警 */
+static volatile int g_imu_fall_alert = 0;  /* IMU 摔倒告警 */
+static volatile int g_v2x_alert = 0;       /* V2X 告警 */
 static volatile uint64_t g_imu_fall_time_us = 0;
 static volatile uint64_t g_last_v2x_audio_us = 0;
-#define V2X_AUDIO_COOLDOWN_US 2000000ULL     /* V2X 语音 2 秒防连播 */
-static int g_led_fd              = -1;
+#define V2X_AUDIO_COOLDOWN_US 2000000ULL /* V2X 语音 2 秒防连播 */
+static int g_led_fd = -1;
 static std::atomic<uint64_t> g_pending_fall_dvr_us{0};
 static char g_last_road_user_label[32] = "unknown";
-static float g_last_road_user_score    = 0.0f;
-static struct timeval g_t_start;             /* 程序启动时间 (全局) */
+static float g_last_road_user_score = 0.0f;
+static struct timeval g_t_start; /* 程序启动时间 (全局) */
 
 /* 可在命令行调整的雷达阈值 */
-static float g_ttc_threshold  = TTC_THRESHOLD_DEFAULT;
+static float g_ttc_threshold = TTC_THRESHOLD_DEFAULT;
 static float g_dist_threshold = DIST_THRESHOLD_DEFAULT;
-static float g_angle_left_threshold  = ANGLE_LEFT_DEFAULT;
+static float g_angle_left_threshold = ANGLE_LEFT_DEFAULT;
 static float g_angle_right_threshold = ANGLE_RIGHT_DEFAULT;
 static float g_angle_filter_alpha = ANGLE_FILTER_ALPHA_DEFAULT;
 static float g_angle_direction_sign = ANGLE_DIRECTION_SIGN_DEFAULT;
-static int   g_direction_stable_samples = DIRECTION_STABLE_SAMPLES_DEFAULT;
-static char  g_radar_log_dir[PATH_MAX] = RADAR_LOG_DIR_DEFAULT;
-static char  g_ble_led_uart[PATH_MAX] = BLE_LED_UART_DEFAULT;
-static bool  g_ble_led_enabled = true;
-static bool  g_first_camera_frame_logged = false;
-static bool  g_first_radar_frame_logged = false;
-static char  g_dvr_base_dir[DVR_PATH_CAPACITY] = DVR_BASE_DIR_DEFAULT;
-static char  g_dvr_mount_dir[DVR_PATH_CAPACITY] = DVR_MOUNT_DIR_DEFAULT;
-static char  g_dvr_mount_parent[DVR_PATH_CAPACITY] = "/run/media";
+static int g_direction_stable_samples = DIRECTION_STABLE_SAMPLES_DEFAULT;
+static char g_radar_log_dir[PATH_MAX] = RADAR_LOG_DIR_DEFAULT;
+static char g_ble_led_uart[PATH_MAX] = BLE_LED_UART_DEFAULT;
+static bool g_ble_led_enabled = true;
+static bool g_first_camera_frame_logged = false;
+static bool g_first_radar_frame_logged = false;
+static char g_dvr_base_dir[DVR_PATH_CAPACITY] = DVR_BASE_DIR_DEFAULT;
+static char g_dvr_mount_dir[DVR_PATH_CAPACITY] = DVR_MOUNT_DIR_DEFAULT;
+static char g_dvr_mount_parent[DVR_PATH_CAPACITY] = "/run/media";
 
 /*
  * 启动优化统一使用 CLOCK_BOOTTIME。它不受 NTP/RTC 校时影响，并与
@@ -190,7 +198,8 @@ static char  g_dvr_mount_parent[DVR_PATH_CAPACITY] = "/run/media";
  */
 static double boot_time_seconds(void) {
     struct timespec ts;
-    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0) return -1.0;
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0)
+        return -1.0;
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
 }
 
@@ -199,7 +208,10 @@ static void startup_mark(const char *milestone) {
 }
 
 /* ======================== 信号处理 ======================== */
-static void sig_handler(int sig) { (void)sig; g_running = 0; }
+static void sig_handler(int sig) {
+    (void)sig;
+    g_running = 0;
+}
 
 /* ======================== GPIO LED (字符设备 API) ======================== */
 
@@ -238,7 +250,8 @@ static int gpio_init(void) {
  * @param val 0 熄灭，非 0 点亮
  */
 static void gpio_set(int val) {
-    if (g_led_fd < 0) return;
+    if (g_led_fd < 0)
+        return;
     struct gpiohandle_data data;
     data.values[0] = (uint8_t)(val ? 1 : 0);
     ioctl(g_led_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
@@ -250,15 +263,21 @@ static void gpio_set(int val) {
  * 熄灭 LED 并关闭 GPIO 线句柄。
  */
 static void gpio_deinit(void) {
-    if (g_led_fd >= 0) { gpio_set(0); close(g_led_fd); g_led_fd = -1; }
+    if (g_led_fd >= 0) {
+        gpio_set(0);
+        close(g_led_fd);
+        g_led_fd = -1;
+    }
 }
 
 static void *led_thread(void *arg) {
     (void)arg;
     while (g_running) {
         if (g_led_alert) {
-            gpio_set(1); usleep(LED_BLINK_ON_MS  * 1000);
-            gpio_set(0); usleep(LED_BLINK_OFF_MS * 1000);
+            gpio_set(1);
+            usleep(LED_BLINK_ON_MS * 1000);
+            gpio_set(0);
+            usleep(LED_BLINK_OFF_MS * 1000);
         } else {
             gpio_set(0);
             usleep(100000);
@@ -297,22 +316,39 @@ static void kill_device_holders(const char *device) {
  */
 static int set_uart(int fd, int baudrate) {
     struct termios tty;
-    if (tcgetattr(fd, &tty) != 0) { perror("tcgetattr"); return -1; }
+    if (tcgetattr(fd, &tty) != 0) {
+        perror("tcgetattr");
+        return -1;
+    }
     speed_t speed;
     switch (baudrate) {
-        case 9600: speed = B9600; break;
-        case 115200: speed = B115200; break;
-        case 921600: speed = B921600; break;
-        default: fprintf(stderr, "Unsupported baudrate: %d\n", baudrate); return -1;
+    case 9600:
+        speed = B9600;
+        break;
+    case 115200:
+        speed = B115200;
+        break;
+    case 921600:
+        speed = B921600;
+        break;
+    default:
+        fprintf(stderr, "Unsupported baudrate: %d\n", baudrate);
+        return -1;
     }
-    cfsetospeed(&tty, speed); cfsetispeed(&tty, speed);
+    cfsetospeed(&tty, speed);
+    cfsetispeed(&tty, speed);
     tty.c_cflag &= ~(PARENB | CSTOPB | CSIZE | CRTSCTS);
     tty.c_cflag |= CS8 | CREAD | CLOCAL;
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
+    tty.c_iflag &=
+        ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
     tty.c_oflag &= ~OPOST & ~ONLCR;
     tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    tty.c_cc[VMIN] = 0; tty.c_cc[VTIME] = 1;
-    if (tcsetattr(fd, TCSANOW, &tty) != 0) { perror("tcsetattr"); return -1; }
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 1;
+    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+        perror("tcsetattr");
+        return -1;
+    }
     tcflush(fd, TCIOFLUSH);
     return 0;
 }
@@ -325,7 +361,8 @@ static int set_uart(int fd, int baudrate) {
  */
 static uint16_t calc_sum16(const uint8_t *data, int len) {
     uint32_t sum = 0;
-    for (int i = 0; i < len; i++) sum += data[i];
+    for (int i = 0; i < len; i++)
+        sum += data[i];
     return (uint16_t)(sum & 0xFFFF);
 }
 
@@ -337,7 +374,8 @@ static uint16_t calc_sum16(const uint8_t *data, int len) {
  */
 static uint8_t calc_sum8(const uint8_t *data, int len) {
     uint32_t sum = 0;
-    for (int i = 0; i < len; i++) sum += data[i];
+    for (int i = 0; i < len; i++)
+        sum += data[i];
     return (uint8_t)(sum & 0xFF);
 }
 
@@ -358,12 +396,18 @@ static int send_cmd(int fd, uint8_t group, uint8_t cmd, const uint8_t *params, i
     frame[idx++] = HEAD_CMD;
     frame[idx++] = (group << 5) | (cmd & 0x1F);
     frame[idx++] = (uint8_t)param_len;
-    if (params && param_len > 0) { memcpy(&frame[idx], params, param_len); idx += param_len; }
+    if (params && param_len > 0) {
+        memcpy(&frame[idx], params, param_len);
+        idx += param_len;
+    }
     uint16_t csum = calc_sum16(frame, idx);
     frame[idx++] = (uint8_t)(csum & 0xFF);
     frame[idx++] = (uint8_t)((csum >> 8) & 0xFF);
     int written = write(fd, frame, idx);
-    if (written != idx) { fprintf(stderr, "radar write failed: %s\n", strerror(errno)); return -1; }
+    if (written != idx) {
+        fprintf(stderr, "radar write failed: %s\n", strerror(errno));
+        return -1;
+    }
     tcdrain(fd);
     return 0;
 }
@@ -372,26 +416,46 @@ static int send_cmd(int fd, uint8_t group, uint8_t cmd, const uint8_t *params, i
  * @brief 清空串口接收缓冲区的残余数据
  * @param fd 串口文件描述符
  */
-static void flush_rx(int fd) { uint8_t tmp[256]; int n; while ((n = read(fd, tmp, sizeof(tmp))) > 0); }
+static void flush_rx(int fd) {
+    uint8_t tmp[256];
+    int n;
+    while ((n = read(fd, tmp, sizeof(tmp))) > 0)
+        ;
+}
 
 /* ======================== JPEG 解码 (静默) ======================== */
-struct my_jpeg_error { struct jpeg_error_mgr pub; jmp_buf setjmp_buf; };
-static void my_jpeg_emit_message(j_common_ptr cinfo, int msg_level) { (void)cinfo; (void)msg_level; }
+struct my_jpeg_error {
+    struct jpeg_error_mgr pub;
+    jmp_buf setjmp_buf;
+};
+
+static void my_jpeg_emit_message(j_common_ptr cinfo, int msg_level) {
+    (void)cinfo;
+    (void)msg_level;
+}
+
 static void my_jpeg_error_exit(j_common_ptr cinfo) {
     struct my_jpeg_error *myerr = (struct my_jpeg_error *)cinfo->err;
     longjmp(myerr->setjmp_buf, 1);
 }
+
 static int jpeg_decode_rgb_silent(const unsigned char *jpeg_data, unsigned long jpeg_size,
-                                   unsigned char *out_rgb, int *out_width, int *out_height) {
+                                  unsigned char *out_rgb, int *out_width, int *out_height) {
     struct jpeg_decompress_struct cinfo;
     struct my_jpeg_error jerr;
     cinfo.err = jpeg_std_error(&jerr.pub);
     jerr.pub.error_exit = my_jpeg_error_exit;
     jerr.pub.emit_message = my_jpeg_emit_message;
-    if (setjmp(jerr.setjmp_buf)) { jpeg_destroy_decompress(&cinfo); return -1; }
+    if (setjmp(jerr.setjmp_buf)) {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
     jpeg_create_decompress(&cinfo);
     jpeg_mem_src(&cinfo, jpeg_data, jpeg_size);
-    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) { jpeg_destroy_decompress(&cinfo); return -1; }
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
     cinfo.out_color_space = JCS_RGB;
     jpeg_start_decompress(&cinfo);
     *out_width = cinfo.output_width;
@@ -399,7 +463,7 @@ static int jpeg_decode_rgb_silent(const unsigned char *jpeg_data, unsigned long 
     int row_stride = cinfo.output_width * cinfo.output_components;
     unsigned char *row_ptr = out_rgb;
     while (cinfo.output_scanline < cinfo.output_height) {
-        unsigned char *buf[1] = { row_ptr };
+        unsigned char *buf[1] = {row_ptr};
         jpeg_read_scanlines(&cinfo, buf, 1);
         row_ptr += row_stride;
     }
@@ -415,7 +479,9 @@ static void resize_rgb(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw,
             int sx = x * sw / dw;
             int si = (sy * sw + sx) * 3;
             int di = (y * dw + x) * 3;
-            dst[di]=src[si]; dst[di+1]=src[si+1]; dst[di+2]=src[si+2];
+            dst[di] = src[si];
+            dst[di + 1] = src[si + 1];
+            dst[di + 2] = src[si + 2];
         }
     }
 }
@@ -423,7 +489,9 @@ static void resize_rgb(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw,
 static int is_road_user(int class_index) {
     static const int road_classes[] = ROAD_USER_CLASSES;
     static const int count = sizeof(road_classes) / sizeof(road_classes[0]);
-    for (int i = 0; i < count; i++) if (class_index == road_classes[i]) return 1;
+    for (int i = 0; i < count; i++)
+        if (class_index == road_classes[i])
+            return 1;
     return 0;
 }
 
@@ -490,58 +558,56 @@ static unsigned int g_sensor_pending_count = 0;
 static unsigned int g_sensor_pending_dropped = 0;
 
 #define TELEMETRY_LOG_MAX_BYTES (20U * 1024U * 1024U)
-#define TELEMETRY_LOG_BACKUPS   4
+#define TELEMETRY_LOG_BACKUPS 4
 #define TELEMETRY_SIZE_CHECK_WRITES 256U
 
 static const char *radar_direction_name(radar_direction_t direction) {
     switch (direction) {
-        case RADAR_DIR_LEFT:   return "LEFT";
-        case RADAR_DIR_CENTER: return "CENTER";
-        case RADAR_DIR_RIGHT:  return "RIGHT";
-        default:               return "UNKNOWN";
+    case RADAR_DIR_LEFT:
+        return "LEFT";
+    case RADAR_DIR_CENTER:
+        return "CENTER";
+    case RADAR_DIR_RIGHT:
+        return "RIGHT";
+    default:
+        return "UNKNOWN";
     }
 }
 
-static radar_direction_t classify_radar_direction(float angle,
-                                                   radar_direction_t current) {
+static radar_direction_t classify_radar_direction(float angle, radar_direction_t current) {
     /*
      * 在边界处加入滞回：已经处于 LEFT/RIGHT 时，目标必须明显回到 CENTER
      * 才允许切换，避免阈值附近一帧一跳。
      */
-    if (current == RADAR_DIR_LEFT &&
-        angle <= g_angle_left_threshold + DIRECTION_HYSTERESIS_DEG)
+    if (current == RADAR_DIR_LEFT && angle <= g_angle_left_threshold + DIRECTION_HYSTERESIS_DEG)
         return RADAR_DIR_LEFT;
-    if (current == RADAR_DIR_RIGHT &&
-        angle >= g_angle_right_threshold - DIRECTION_HYSTERESIS_DEG)
+    if (current == RADAR_DIR_RIGHT && angle >= g_angle_right_threshold - DIRECTION_HYSTERESIS_DEG)
         return RADAR_DIR_RIGHT;
 
-    if (angle <= g_angle_left_threshold) return RADAR_DIR_LEFT;
-    if (angle >= g_angle_right_threshold) return RADAR_DIR_RIGHT;
+    if (angle <= g_angle_left_threshold)
+        return RADAR_DIR_LEFT;
+    if (angle >= g_angle_right_threshold)
+        return RADAR_DIR_RIGHT;
     return RADAR_DIR_CENTER;
 }
 
-static radar_direction_t update_direction_filter(int obj_id, float raw_angle,
-                                                 uint64_t now_ms,
+static radar_direction_t update_direction_filter(int obj_id, float raw_angle, uint64_t now_ms,
                                                  float *filtered_angle_out) {
-    radar_direction_filter_t *filter =
-        &g_direction_filters[(unsigned int)obj_id & 0xFFU];
+    radar_direction_filter_t *filter = &g_direction_filters[(unsigned int)obj_id & 0xFFU];
 
     if (!filter->valid || now_ms - filter->last_seen_ms > 5000ULL) {
         memset(filter, 0, sizeof(*filter));
         filter->valid = 1;
         filter->filtered_angle = raw_angle;
         filter->stable_direction =
-            classify_radar_direction(
-                g_angle_direction_sign * raw_angle, RADAR_DIR_UNKNOWN);
+            classify_radar_direction(g_angle_direction_sign * raw_angle, RADAR_DIR_UNKNOWN);
         filter->candidate_direction = filter->stable_direction;
     } else {
-        filter->filtered_angle =
-            g_angle_filter_alpha * raw_angle +
-            (1.0f - g_angle_filter_alpha) * filter->filtered_angle;
+        filter->filtered_angle = g_angle_filter_alpha * raw_angle +
+                                 (1.0f - g_angle_filter_alpha) * filter->filtered_angle;
 
         radar_direction_t candidate = classify_radar_direction(
-            g_angle_direction_sign * filter->filtered_angle,
-            filter->stable_direction);
+            g_angle_direction_sign * filter->filtered_angle, filter->stable_direction);
         if (candidate == filter->stable_direction) {
             filter->candidate_direction = candidate;
             filter->candidate_count = 0;
@@ -579,7 +645,8 @@ static radar_direction_t update_direction_filter(int obj_id, float raw_angle,
 static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
     radar_result_t result = {0};
     int obj_count = bsd->obj_num;
-    if (obj_count > MAX_RADAR_OBJECTS) obj_count = MAX_RADAR_OBJECTS;
+    if (obj_count > MAX_RADAR_OBJECTS)
+        obj_count = MAX_RADAR_OBJECTS;
     result.obj_count = obj_count;
     result.dangerous_index = -1;
     result.dangerous_obj_id = -1;
@@ -589,8 +656,7 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
 
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    uint64_t now_ms = (uint64_t)tv_now.tv_sec * 1000ULL +
-                      (uint64_t)tv_now.tv_usec / 1000ULL;
+    uint64_t now_ms = (uint64_t)tv_now.tv_sec * 1000ULL + (uint64_t)tv_now.tv_usec / 1000ULL;
 
     for (int i = 0; i < obj_count; i++) {
         const bsd_obj_t *o = &bsd->obj[i];
@@ -601,8 +667,7 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
         target->angle = (float)o->angle_val;
         target->ttc = -1.0f;
         target->direction =
-            update_direction_filter(target->obj_id, target->angle, now_ms,
-                                    &target->filtered_angle);
+            update_direction_filter(target->obj_id, target->angle, now_ms, &target->filtered_angle);
 
         if (target->distance <= 0.0f)
             continue;
@@ -613,26 +678,22 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
 
         if (target->velocity < 0.0f) {
             target->ttc = target->distance / -target->velocity;
-            if (target->ttc < result.min_ttc) result.min_ttc = target->ttc;
+            if (target->ttc < result.min_ttc)
+                result.min_ttc = target->ttc;
             result.approaching = 1;
         }
-        if ((target->ttc >= 0.0f &&
-             target->ttc < g_ttc_threshold) ||
+        if ((target->ttc >= 0.0f && target->ttc < g_ttc_threshold) ||
             target->distance <= g_dist_threshold) {
             result.should_alert = 1;
         }
 
-        float dist_ratio = target->distance /
-                           fmaxf(g_dist_threshold, 0.1f);
-        float ttc_ratio = (target->ttc >= 0.0f)
-                              ? target->ttc / fmaxf(g_ttc_threshold, 0.1f)
-                              : FLT_MAX;
+        float dist_ratio = target->distance / fmaxf(g_dist_threshold, 0.1f);
+        float ttc_ratio =
+            (target->ttc >= 0.0f) ? target->ttc / fmaxf(g_ttc_threshold, 0.1f) : FLT_MAX;
         float risk = fminf(dist_ratio, ttc_ratio);
         if (risk < best_risk ||
-            (fabsf(risk - best_risk) < 0.0001f &&
-             result.dangerous_index >= 0 &&
-             target->distance <
-                 result.targets[result.dangerous_index].distance)) {
+            (fabsf(risk - best_risk) < 0.0001f && result.dangerous_index >= 0 &&
+             target->distance < result.targets[result.dangerous_index].distance)) {
             best_risk = risk;
             result.dangerous_index = i;
             result.dangerous_obj_id = target->obj_id;
@@ -652,24 +713,34 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
  * 支持 HEAD_REPORT 报告帧和 HEAD_REPLY 回复帧，自动校验 sum8 校验和。
  */
 static int process_radar_frame(const uint8_t *frame, int frame_len, radar_result_t *out) {
-    if (frame_len < 4) return -1;
+    if (frame_len < 4)
+        return -1;
     uint8_t head = frame[0];
     if (head == HEAD_REPORT) {
         uint8_t len = frame[1];
-        if (2 + len + 1 > frame_len) return -1;
-        if (calc_sum8(frame, 2 + len) != frame[2 + len]) return -1;
+        if (2 + len + 1 > frame_len)
+            return -1;
+        if (calc_sum8(frame, 2 + len) != frame[2 + len])
+            return -1;
         const uint8_t *payload = &frame[2];
-        if (payload[0] != TYPE_BSD) return 0;
+        if (payload[0] != TYPE_BSD)
+            return 0;
         /* LEN 包含 1 字节 TYPE；跳过 TYPE 后剩余长度必须同步减 1。 */
         int data_len = (int)len - 1;
         const uint8_t *data = payload + 1;
-        if (data_len < 4) return 0;
-        bsd_det_t bsd; memset(&bsd, 0, sizeof(bsd));
+        if (data_len < 4)
+            return 0;
+        bsd_det_t bsd;
+        memset(&bsd, 0, sizeof(bsd));
         bsd.obj_num = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-        int oc = bsd.obj_num; if (oc > MAX_RADAR_OBJECTS) oc = MAX_RADAR_OBJECTS;
+        int oc = bsd.obj_num;
+        if (oc > MAX_RADAR_OBJECTS)
+            oc = MAX_RADAR_OBJECTS;
         int expected = 4 + oc * (int)sizeof(bsd_obj_t);
-        if (data_len < expected) oc = (data_len - 4) / (int)sizeof(bsd_obj_t);
-        if (oc < 0) oc = 0;
+        if (data_len < expected)
+            oc = (data_len - 4) / (int)sizeof(bsd_obj_t);
+        if (oc < 0)
+            oc = 0;
         bsd.obj_num = (uint16_t)oc;
         for (int i = 0; i < oc; i++) {
             int off = 4 + i * (int)sizeof(bsd_obj_t);
@@ -685,20 +756,25 @@ static int process_radar_frame(const uint8_t *frame, int frame_len, radar_result
 /* ======================== 雷达实验数据与 Dashboard 状态 ======================== */
 
 static int mkdir_recursive(const char *path) {
-    if (path == NULL || path[0] == '\0') return -1;
+    if (path == NULL || path[0] == '\0')
+        return -1;
     char tmp[PATH_MAX];
     if (snprintf(tmp, sizeof(tmp), "%s", path) >= (int)sizeof(tmp))
         return -1;
 
     size_t len = strlen(tmp);
-    if (len > 1 && tmp[len - 1] == '/') tmp[len - 1] = '\0';
+    if (len > 1 && tmp[len - 1] == '/')
+        tmp[len - 1] = '\0';
     for (char *p = tmp + 1; *p != '\0'; p++) {
-        if (*p != '/') continue;
+        if (*p != '/')
+            continue;
         *p = '\0';
-        if (mkdir(tmp, 0775) != 0 && errno != EEXIST) return -1;
+        if (mkdir(tmp, 0775) != 0 && errno != EEXIST)
+            return -1;
         *p = '/';
     }
-    if (mkdir(tmp, 0775) != 0 && errno != EEXIST) return -1;
+    if (mkdir(tmp, 0775) != 0 && errno != EEXIST)
+        return -1;
     return 0;
 }
 
@@ -707,28 +783,28 @@ static int mkdir_recursive(const char *path) {
  * 当前文件加四份历史文件，总容量上限约为 100 MiB/日志类型。
  */
 static int rotate_numbered_file(const char *path, int backups) {
-    if (path == NULL || path[0] == '\0' || backups <= 0) return -1;
+    if (path == NULL || path[0] == '\0' || backups <= 0)
+        return -1;
 
     char source[PATH_MAX];
     char destination[PATH_MAX];
     for (int index = backups; index >= 1; index--) {
         if (index == 1) {
-            if (snprintf(source, sizeof(source), "%s", path) >=
-                (int)sizeof(source))
+            if (snprintf(source, sizeof(source), "%s", path) >= (int)sizeof(source))
                 return -1;
         } else {
-            if (snprintf(source, sizeof(source), "%s.%d", path, index - 1) >=
-                (int)sizeof(source))
+            if (snprintf(source, sizeof(source), "%s.%d", path, index - 1) >= (int)sizeof(source))
                 return -1;
         }
         if (snprintf(destination, sizeof(destination), "%s.%d", path, index) >=
             (int)sizeof(destination))
             return -1;
 
-        if (index == backups) unlink(destination);
+        if (index == backups)
+            unlink(destination);
         if (rename(source, destination) != 0 && errno != ENOENT) {
-            fprintf(stderr, "[LOG_ROTATE] rename %s -> %s failed: %s\n",
-                    source, destination, strerror(errno));
+            fprintf(stderr, "[LOG_ROTATE] rename %s -> %s failed: %s\n", source, destination,
+                    strerror(errno));
             return -1;
         }
     }
@@ -739,7 +815,8 @@ static FILE *open_csv_append(const char *path, const char *header) {
     struct stat st;
     int needs_header = (stat(path, &st) != 0 || st.st_size == 0);
     FILE *fp = fopen(path, "a");
-    if (fp == NULL) return NULL;
+    if (fp == NULL)
+        return NULL;
     setvbuf(fp, NULL, _IOLBF, BUFSIZ);
     if (needs_header) {
         /* UTF-8 BOM 让 Excel/WPS 不再把 CSV 中文误判为 GBK/ANSI。 */
@@ -751,13 +828,14 @@ static FILE *open_csv_append(const char *path, const char *header) {
 
 static int csv_needs_rotation(FILE *fp) {
     struct stat st;
-    if (fp == NULL) return 0;
-    if (fflush(fp) != 0 || fstat(fileno(fp), &st) != 0) return 0;
+    if (fp == NULL)
+        return 0;
+    if (fflush(fp) != 0 || fstat(fileno(fp), &st) != 0)
+        return 0;
     return st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES;
 }
 
-static void format_timestamp_iso(const struct timeval *tv,
-                                 char *out, size_t out_size) {
+static void format_timestamp_iso(const struct timeval *tv, char *out, size_t out_size) {
     struct tm tm_utc;
     time_t seconds = tv->tv_sec;
     gmtime_r(&seconds, &tm_utc);
@@ -768,64 +846,60 @@ static void format_timestamp_iso(const struct timeval *tv,
 }
 
 static void csv_sanitize(const char *input, char *output, size_t output_size) {
-    if (output_size == 0) return;
+    if (output_size == 0)
+        return;
     size_t used = 0;
     if (input != NULL) {
         for (const char *p = input; *p != '\0' && used + 1 < output_size; p++) {
             char ch = *p;
-            if (ch == ',' || ch == '\r' || ch == '\n' || ch == '"') ch = ' ';
+            if (ch == ',' || ch == '\r' || ch == '\n' || ch == '"')
+                ch = ' ';
             output[used++] = ch;
         }
     }
     output[used] = '\0';
 }
 
-static const char SENSOR_CSV_HEADER[] =
-    "timestamp,timestamp_ms,source,event_type,status,event_id,"
-    "label,score,count,seq,reason,details\n";
+static const char SENSOR_CSV_HEADER[] = "timestamp,timestamp_ms,source,event_type,status,event_id,"
+                                        "label,score,count,seq,reason,details\n";
 
-static const char RADAR_CSV_HEADER[] =
-    "timestamp,timestamp_ms,objId,distance_m,velocity_mps,"
-    "angle_deg,filtered_angle_deg,TTC_s,direction,"
-    "dangerous_objId,is_current_dangerous,radar_alert\n";
+static const char RADAR_CSV_HEADER[] = "timestamp,timestamp_ms,objId,distance_m,velocity_mps,"
+                                       "angle_deg,filtered_angle_deg,TTC_s,direction,"
+                                       "dangerous_objId,is_current_dangerous,radar_alert\n";
 
 static void sensor_csv_maybe_rotate_locked(void) {
     g_sensor_csv_write_count++;
-    if (g_sensor_csv == NULL ||
-        g_sensor_csv_write_count % TELEMETRY_SIZE_CHECK_WRITES != 0 ||
+    if (g_sensor_csv == NULL || g_sensor_csv_write_count % TELEMETRY_SIZE_CHECK_WRITES != 0 ||
         !csv_needs_rotation(g_sensor_csv))
         return;
 
     fclose(g_sensor_csv);
     g_sensor_csv = NULL;
-    if (rotate_numbered_file(g_sensor_csv_path,
-                             TELEMETRY_LOG_BACKUPS) != 0) {
-        fprintf(stderr, "[SENSOR_DATA] Rotation failed for %s\n",
-                g_sensor_csv_path);
+    if (rotate_numbered_file(g_sensor_csv_path, TELEMETRY_LOG_BACKUPS) != 0) {
+        fprintf(stderr, "[SENSOR_DATA] Rotation failed for %s\n", g_sensor_csv_path);
     }
     g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
     g_sensor_csv_write_count = 0;
     if (g_sensor_csv == NULL) {
-        fprintf(stderr, "[SENSOR_DATA] Reopen failed for %s: %s\n",
-                g_sensor_csv_path, strerror(errno));
+        fprintf(stderr, "[SENSOR_DATA] Reopen failed for %s: %s\n", g_sensor_csv_path,
+                strerror(errno));
     } else {
         printf("[系统] [SENSOR_DATA] Rotated at %u MiB (keep=%d)\n",
-               TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U),
-               TELEMETRY_LOG_BACKUPS);
+               TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U), TELEMETRY_LOG_BACKUPS);
     }
 }
 
 static int sensor_telemetry_init(void) {
-    if (g_sensor_csv != NULL) return 0;
-    if (mkdir_recursive(g_radar_log_dir) != 0) return -1;
-    if (snprintf(g_sensor_csv_path, sizeof(g_sensor_csv_path),
-                 "%s/sensor_events.csv", g_radar_log_dir) >=
-        (int)sizeof(g_sensor_csv_path))
+    if (g_sensor_csv != NULL)
+        return 0;
+    if (mkdir_recursive(g_radar_log_dir) != 0)
+        return -1;
+    if (snprintf(g_sensor_csv_path, sizeof(g_sensor_csv_path), "%s/sensor_events.csv",
+                 g_radar_log_dir) >= (int)sizeof(g_sensor_csv_path))
         return -1;
 
     struct stat st;
-    if (stat(g_sensor_csv_path, &st) == 0 &&
-        st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
+    if (stat(g_sensor_csv_path, &st) == 0 && st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
         rotate_numbered_file(g_sensor_csv_path, TELEMETRY_LOG_BACKUPS);
 
     pthread_mutex_lock(&g_sensor_csv_mutex);
@@ -835,23 +909,20 @@ static int sensor_telemetry_init(void) {
     }
     g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
     if (g_sensor_csv == NULL) {
-        fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n",
-                g_sensor_csv_path, strerror(errno));
+        fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n", g_sensor_csv_path, strerror(errno));
         pthread_mutex_unlock(&g_sensor_csv_mutex);
         return -1;
     }
     g_sensor_csv_write_count = 0;
     unsigned int buffered = g_sensor_pending_count;
     for (unsigned int i = 0; i < g_sensor_pending_count; i++) {
-        unsigned int index =
-            (g_sensor_pending_head + i) % SENSOR_PENDING_MAX;
+        unsigned int index = (g_sensor_pending_head + i) % SENSOR_PENDING_MAX;
         fputs(g_sensor_pending[index], g_sensor_csv);
     }
     g_sensor_pending_head = 0;
     g_sensor_pending_count = 0;
     pthread_mutex_unlock(&g_sensor_csv_mutex);
-    printf("[系统] [SENSOR_DATA] CSV: %s (20 MiB x current+4)\n",
-           g_sensor_csv_path);
+    printf("[系统] [SENSOR_DATA] CSV: %s (20 MiB x current+4)\n", g_sensor_csv_path);
     if (buffered > 0 || g_sensor_pending_dropped > 0) {
         printf("[系统] [SENSOR_DATA] Flushed %u boot events from RAM"
                " (dropped=%u)\n",
@@ -860,15 +931,12 @@ static int sensor_telemetry_init(void) {
     return 0;
 }
 
-static void sensor_event_log(const char *source, const char *event_type,
-                             const char *status, const char *event_id,
-                             const char *label, float score, int count,
-                             int seq, const char *reason,
-                             const char *details) {
+static void sensor_event_log(const char *source, const char *event_type, const char *status,
+                             const char *event_id, const char *label, float score, int count,
+                             int seq, const char *reason, const char *details) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    uint64_t timestamp_ms = (uint64_t)tv.tv_sec * 1000ULL +
-                            (uint64_t)tv.tv_usec / 1000ULL;
+    uint64_t timestamp_ms = (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
     char timestamp[40], safe_source[32], safe_type[48], safe_status[32];
     char safe_id[96], safe_label[96], safe_reason[96], safe_details[512];
     format_timestamp_iso(&tv, timestamp, sizeof(timestamp));
@@ -883,26 +951,26 @@ static void sensor_event_log(const char *source, const char *event_type,
     char score_text[32] = "";
     char count_text[32] = "";
     char seq_text[32] = "";
-    if (score >= 0.0f) snprintf(score_text, sizeof(score_text), "%.4f", score);
-    if (count >= 0) snprintf(count_text, sizeof(count_text), "%d", count);
-    if (seq >= 0) snprintf(seq_text, sizeof(seq_text), "%d", seq);
+    if (score >= 0.0f)
+        snprintf(score_text, sizeof(score_text), "%.4f", score);
+    if (count >= 0)
+        snprintf(count_text, sizeof(count_text), "%d", count);
+    if (seq >= 0)
+        snprintf(seq_text, sizeof(seq_text), "%d", seq);
 
     char line[SENSOR_PENDING_LINE_MAX];
-    snprintf(line, sizeof(line), "%s,%llu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-             timestamp, (unsigned long long)timestamp_ms, safe_source,
-             safe_type, safe_status, safe_id, safe_label, score_text,
-             count_text, seq_text, safe_reason, safe_details);
+    snprintf(line, sizeof(line), "%s,%llu,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n", timestamp,
+             (unsigned long long)timestamp_ms, safe_source, safe_type, safe_status, safe_id,
+             safe_label, score_text, count_text, seq_text, safe_reason, safe_details);
 
     pthread_mutex_lock(&g_sensor_csv_mutex);
     if (g_sensor_csv == NULL) {
         if (g_sensor_pending_count == SENSOR_PENDING_MAX) {
-            g_sensor_pending_head =
-                (g_sensor_pending_head + 1) % SENSOR_PENDING_MAX;
+            g_sensor_pending_head = (g_sensor_pending_head + 1) % SENSOR_PENDING_MAX;
             g_sensor_pending_count--;
             g_sensor_pending_dropped++;
         }
-        unsigned int index = (g_sensor_pending_head +
-                              g_sensor_pending_count) % SENSOR_PENDING_MAX;
+        unsigned int index = (g_sensor_pending_head + g_sensor_pending_count) % SENSOR_PENDING_MAX;
         snprintf(g_sensor_pending[index], SENSOR_PENDING_LINE_MAX, "%s", line);
         g_sensor_pending_count++;
         pthread_mutex_unlock(&g_sensor_csv_mutex);
@@ -924,37 +992,30 @@ static void sensor_telemetry_close(void) {
 
 static int radar_telemetry_init(void) {
     if (mkdir_recursive(g_radar_log_dir) != 0) {
-        fprintf(stderr, "[RADAR_DATA] Cannot create %s: %s\n",
-                g_radar_log_dir, strerror(errno));
+        fprintf(stderr, "[RADAR_DATA] Cannot create %s: %s\n", g_radar_log_dir, strerror(errno));
         return -1;
     }
 
-    if (snprintf(g_radar_csv_path, sizeof(g_radar_csv_path),
-                 "%s/radar_data.csv", g_radar_log_dir) >=
-            (int)sizeof(g_radar_csv_path) ||
-        snprintf(g_radar_state_path, sizeof(g_radar_state_path),
-                 "%s/radar_state.json", g_radar_log_dir) >=
-            (int)sizeof(g_radar_state_path)) {
+    if (snprintf(g_radar_csv_path, sizeof(g_radar_csv_path), "%s/radar_data.csv",
+                 g_radar_log_dir) >= (int)sizeof(g_radar_csv_path) ||
+        snprintf(g_radar_state_path, sizeof(g_radar_state_path), "%s/radar_state.json",
+                 g_radar_log_dir) >= (int)sizeof(g_radar_state_path)) {
         fprintf(stderr, "[RADAR_DATA] Log path is too long\n");
         return -1;
     }
 
     struct stat st;
-    if (stat(g_radar_csv_path, &st) == 0 &&
-        st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
+    if (stat(g_radar_csv_path, &st) == 0 && st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
         rotate_numbered_file(g_radar_csv_path, TELEMETRY_LOG_BACKUPS);
 
     g_radar_csv = open_csv_append(g_radar_csv_path, RADAR_CSV_HEADER);
     if (g_radar_csv == NULL) {
-        fprintf(stderr, "[RADAR_DATA] Cannot open %s: %s\n",
-                g_radar_csv_path, strerror(errno));
+        fprintf(stderr, "[RADAR_DATA] Cannot open %s: %s\n", g_radar_csv_path, strerror(errno));
         return -1;
     }
     g_radar_csv_write_count = 0;
-    printf("[系统] [RADAR_DATA] CSV: %s (20 MiB x current+4)\n",
-           g_radar_csv_path);
-    printf("[系统] [RADAR_DATA] Dashboard state: %s\n",
-           g_radar_state_path);
+    printf("[系统] [RADAR_DATA] CSV: %s (20 MiB x current+4)\n", g_radar_csv_path);
+    printf("[系统] [RADAR_DATA] Dashboard state: %s\n", g_radar_state_path);
     return 0;
 }
 
@@ -965,14 +1026,13 @@ static void json_write_float_or_null(FILE *fp, float value) {
         fputs("null", fp);
 }
 
-static void radar_telemetry_publish(const radar_result_t *radar,
-                                    int fusion_alert) {
-    if (radar == NULL) return;
+static void radar_telemetry_publish(const radar_result_t *radar, int fusion_alert) {
+    if (radar == NULL)
+        return;
 
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL +
-                            (uint64_t)tv_now.tv_usec / 1000ULL;
+    uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL + (uint64_t)tv_now.tv_usec / 1000ULL;
     g_radar_last_publish_ms = timestamp_ms;
     char timestamp[40];
     format_timestamp_iso(&tv_now, timestamp, sizeof(timestamp));
@@ -980,17 +1040,13 @@ static void radar_telemetry_publish(const radar_result_t *radar,
     if (g_radar_csv != NULL) {
         for (int i = 0; i < radar->obj_count; i++) {
             const radar_target_t *target = &radar->targets[i];
-            fprintf(g_radar_csv,
-                    "%s,%llu,%d,%.3f,%.3f,%.3f,%.3f,",
-                    timestamp, (unsigned long long)timestamp_ms,
-                    target->obj_id, target->distance, target->velocity,
-                    target->angle, target->filtered_angle);
+            fprintf(g_radar_csv, "%s,%llu,%d,%.3f,%.3f,%.3f,%.3f,", timestamp,
+                    (unsigned long long)timestamp_ms, target->obj_id, target->distance,
+                    target->velocity, target->angle, target->filtered_angle);
             if (target->ttc >= 0.0f)
                 fprintf(g_radar_csv, "%.3f", target->ttc);
-            fprintf(g_radar_csv, ",%s,%d,%d,%d\n",
-                    radar_direction_name(target->direction),
-                    radar->dangerous_obj_id,
-                    i == radar->dangerous_index ? 1 : 0,
+            fprintf(g_radar_csv, ",%s,%d,%d,%d\n", radar_direction_name(target->direction),
+                    radar->dangerous_obj_id, i == radar->dangerous_index ? 1 : 0,
                     radar->should_alert ? 1 : 0);
         }
         g_radar_csv_write_count += (unsigned int)radar->obj_count;
@@ -999,40 +1055,37 @@ static void radar_telemetry_publish(const radar_result_t *radar,
             csv_needs_rotation(g_radar_csv)) {
             fclose(g_radar_csv);
             g_radar_csv = NULL;
-            if (rotate_numbered_file(g_radar_csv_path,
-                                     TELEMETRY_LOG_BACKUPS) != 0) {
-                fprintf(stderr, "[RADAR_DATA] Rotation failed for %s\n",
-                        g_radar_csv_path);
+            if (rotate_numbered_file(g_radar_csv_path, TELEMETRY_LOG_BACKUPS) != 0) {
+                fprintf(stderr, "[RADAR_DATA] Rotation failed for %s\n", g_radar_csv_path);
             }
-            g_radar_csv =
-                open_csv_append(g_radar_csv_path, RADAR_CSV_HEADER);
+            g_radar_csv = open_csv_append(g_radar_csv_path, RADAR_CSV_HEADER);
             g_radar_csv_write_count = 0;
             if (g_radar_csv == NULL) {
-                fprintf(stderr, "[RADAR_DATA] Reopen failed for %s: %s\n",
-                        g_radar_csv_path, strerror(errno));
+                fprintf(stderr, "[RADAR_DATA] Reopen failed for %s: %s\n", g_radar_csv_path,
+                        strerror(errno));
             } else {
                 printf("[系统] [RADAR_DATA] Rotated at %u MiB (keep=%d)\n",
-                       TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U),
-                       TELEMETRY_LOG_BACKUPS);
+                       TELEMETRY_LOG_MAX_BYTES / (1024U * 1024U), TELEMETRY_LOG_BACKUPS);
             }
         }
     }
 
-    if (g_radar_state_path[0] == '\0') return;
+    if (g_radar_state_path[0] == '\0')
+        return;
     char tmp_path[PATH_MAX];
-    if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp",
-                 g_radar_state_path) >= (int)sizeof(tmp_path))
+    if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_radar_state_path) >= (int)sizeof(tmp_path))
         return;
 
     FILE *fp = fopen(tmp_path, "w");
-    if (fp == NULL) return;
+    if (fp == NULL)
+        return;
 
     fprintf(fp,
             "{\"timestamp\":\"%s\",\"timestamp_ms\":%llu,"
             "\"has_target\":%s,\"obj_count\":%d,"
             "\"dangerous_objId\":",
-            timestamp, (unsigned long long)timestamp_ms,
-            radar->has_target ? "true" : "false", radar->obj_count);
+            timestamp, (unsigned long long)timestamp_ms, radar->has_target ? "true" : "false",
+            radar->obj_count);
     if (radar->dangerous_index >= 0)
         fprintf(fp, "%d", radar->dangerous_obj_id);
     else
@@ -1040,32 +1093,27 @@ static void radar_telemetry_publish(const radar_result_t *radar,
 
     fputs(",\"distance_m\":", fp);
     if (radar->dangerous_index >= 0)
-        fprintf(fp, "%.3f",
-                radar->targets[radar->dangerous_index].distance);
+        fprintf(fp, "%.3f", radar->targets[radar->dangerous_index].distance);
     else
         fputs("null", fp);
     fputs(",\"velocity_mps\":", fp);
     if (radar->dangerous_index >= 0)
-        fprintf(fp, "%.3f",
-                radar->targets[radar->dangerous_index].velocity);
+        fprintf(fp, "%.3f", radar->targets[radar->dangerous_index].velocity);
     else
         fputs("null", fp);
     fputs(",\"angle_deg\":", fp);
     if (radar->dangerous_index >= 0)
-        fprintf(fp, "%.3f",
-                radar->targets[radar->dangerous_index].angle);
+        fprintf(fp, "%.3f", radar->targets[radar->dangerous_index].angle);
     else
         fputs("null", fp);
     fputs(",\"filtered_angle_deg\":", fp);
     if (radar->dangerous_index >= 0)
-        fprintf(fp, "%.3f",
-                radar->targets[radar->dangerous_index].filtered_angle);
+        fprintf(fp, "%.3f", radar->targets[radar->dangerous_index].filtered_angle);
     else
         fputs("null", fp);
     fputs(",\"TTC_s\":", fp);
     if (radar->dangerous_index >= 0)
-        json_write_float_or_null(
-            fp, radar->targets[radar->dangerous_index].ttc);
+        json_write_float_or_null(fp, radar->targets[radar->dangerous_index].ttc);
     else
         fputs("null", fp);
 
@@ -1077,27 +1125,24 @@ static void radar_telemetry_publish(const radar_result_t *radar,
             "\"angle_sign\":%.0f},"
             "\"targets\":[",
             radar->dangerous_index >= 0
-                ? radar_direction_name(
-                      radar->targets[radar->dangerous_index].direction)
+                ? radar_direction_name(radar->targets[radar->dangerous_index].direction)
                 : "UNKNOWN",
-            radar->should_alert ? "true" : "false",
-            fusion_alert ? "true" : "false",
-            g_ttc_threshold, g_dist_threshold,
-            g_angle_left_threshold, g_angle_right_threshold,
+            radar->should_alert ? "true" : "false", fusion_alert ? "true" : "false",
+            g_ttc_threshold, g_dist_threshold, g_angle_left_threshold, g_angle_right_threshold,
             g_angle_direction_sign);
 
     for (int i = 0; i < radar->obj_count; i++) {
         const radar_target_t *target = &radar->targets[i];
-        if (i > 0) fputc(',', fp);
+        if (i > 0)
+            fputc(',', fp);
         fprintf(fp,
                 "{\"objId\":%d,\"distance_m\":%.3f,"
                 "\"velocity_mps\":%.3f,\"angle_deg\":%.3f,"
                 "\"filtered_angle_deg\":%.3f,\"TTC_s\":",
-                target->obj_id, target->distance, target->velocity,
-                target->angle, target->filtered_angle);
+                target->obj_id, target->distance, target->velocity, target->angle,
+                target->filtered_angle);
         json_write_float_or_null(fp, target->ttc);
-        fprintf(fp,
-                ",\"direction\":\"%s\",\"is_dangerous\":%s}",
+        fprintf(fp, ",\"direction\":\"%s\",\"is_dangerous\":%s}",
                 radar_direction_name(target->direction),
                 i == radar->dangerous_index ? "true" : "false");
     }
@@ -1126,10 +1171,10 @@ static void radar_telemetry_close(void) {
 
 /* ======================== 雷达初始化 ======================== */
 static int radar_init(int fd) {
-    printf("[RADAR] Initializing...\n"); fflush(stdout);
+    printf("[RADAR] Initializing...\n");
+    fflush(stdout);
     uint8_t rx_buf[512];
-    auto wait_reply = [&](const char *command, uint8_t expected_command,
-                          int timeout_ms) {
+    auto wait_reply = [&](const char *command, uint8_t expected_command, int timeout_ms) {
         uint8_t pending[1024];
         int pending_len = 0;
         int first_rx_ms = -1;
@@ -1138,16 +1183,19 @@ static int radar_init(int fd) {
         double start = boot_time_seconds();
         while (g_running) {
             int elapsed = (int)((boot_time_seconds() - start) * 1000.0);
-            if (elapsed >= timeout_ms) break;
+            if (elapsed >= timeout_ms)
+                break;
             int remain = timeout_ms - elapsed;
-            struct timeval tv = { remain / 1000, (remain % 1000) * 1000 };
-            fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
-            if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0) break;
+            struct timeval tv = {remain / 1000, (remain % 1000) * 1000};
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(fd, &rfds);
+            if (select(fd + 1, &rfds, NULL, NULL, &tv) <= 0)
+                break;
             ssize_t count = read(fd, rx_buf, sizeof(rx_buf));
             if (count > 0) {
                 if (first_rx_ms < 0)
-                    first_rx_ms =
-                        (int)((boot_time_seconds() - start) * 1000.0);
+                    first_rx_ms = (int)((boot_time_seconds() - start) * 1000.0);
                 total_rx += (int)count;
                 if (count > (ssize_t)(sizeof(pending) - pending_len))
                     pending_len = 0;
@@ -1163,55 +1211,64 @@ static int radar_init(int fd) {
                     uint8_t head = pending[offset];
                     int frame_total;
                     if (head == HEAD_REPLY) {
-                        if (available < 3) break;
+                        if (available < 3)
+                            break;
                         frame_total = 5 + pending[offset + 2];
                     } else if (head == HEAD_REPORT) {
-                        if (available < 2) break;
+                        if (available < 2)
+                            break;
                         frame_total = 2 + pending[offset + 1] + 1;
                     } else {
                         offset++;
                         continue;
                     }
-                    if (frame_total <= 0 ||
-                        frame_total > (int)sizeof(pending)) {
+                    if (frame_total <= 0 || frame_total > (int)sizeof(pending)) {
                         offset++;
                         continue;
                     }
-                    if (available < frame_total) break;
-                    if (head == HEAD_REPLY &&
-                        pending[offset + 1] == expected_command) {
-                        reply_ms =
-                            (int)((boot_time_seconds() - start) * 1000.0);
+                    if (available < frame_total)
+                        break;
+                    if (head == HEAD_REPLY && pending[offset + 1] == expected_command) {
+                        reply_ms = (int)((boot_time_seconds() - start) * 1000.0);
                         offset += frame_total;
                         break;
                     }
                     offset += frame_total;
                 }
                 if (offset > 0) {
-                    memmove(pending, pending + offset,
-                            (size_t)(pending_len - offset));
+                    memmove(pending, pending + offset, (size_t)(pending_len - offset));
                     pending_len -= offset;
                 }
-                if (reply_ms >= 0) break;
+                if (reply_ms >= 0)
+                    break;
             }
         }
-        printf("[启动] [RADAR_INIT] command=%s first_rx_ms=%d reply_ms=%d total_rx=%d\n",
-               command, first_rx_ms, reply_ms, total_rx);
+        printf("[启动] [RADAR_INIT] command=%s first_rx_ms=%d reply_ms=%d total_rx=%d\n", command,
+               first_rx_ms, reply_ms, total_rx);
     };
     flush_rx(fd);
     send_cmd(fd, 7, 0x1E, NULL, 0);
     wait_reply("group7_cmd1e", (uint8_t)((7 << 5) | 0x1E), 1000);
     usleep(200000);
     flush_rx(fd);
-    { uint8_t p = 0x01; send_cmd(fd, 6, 0x11, &p, 1); }
+    {
+        uint8_t p = 0x01;
+        send_cmd(fd, 6, 0x11, &p, 1);
+    }
     wait_reply("group6_cmd11", (uint8_t)((6 << 5) | 0x11), 1000);
     usleep(200000);
     flush_rx(fd);
-    { uint8_t p = 0x00; send_cmd(fd, 0, 0x02, &p, 1); }
+    {
+        uint8_t p = 0x00;
+        send_cmd(fd, 0, 0x02, &p, 1);
+    }
     wait_reply("group0_cmd02", 0x02, 1000);
     usleep(200000);
     flush_rx(fd);
-    { uint8_t p[2] = {0x88, 0x13}; send_cmd(fd, 6, 0x12, p, 2); }
+    {
+        uint8_t p[2] = {0x88, 0x13};
+        send_cmd(fd, 6, 0x12, p, 2);
+    }
     wait_reply("group6_cmd12", (uint8_t)((6 << 5) | 0x12), 1000);
     usleep(200000);
     printf("[RADAR] Initialized OK\n");
@@ -1248,8 +1305,7 @@ static int g_storage_ready = 0;
 static int dvr_storage_available(void) {
     struct stat mount_st;
     struct stat parent_st;
-    return stat(g_dvr_mount_dir, &mount_st) == 0 &&
-           stat(g_dvr_mount_parent, &parent_st) == 0 &&
+    return stat(g_dvr_mount_dir, &mount_st) == 0 && stat(g_dvr_mount_parent, &parent_st) == 0 &&
            S_ISDIR(mount_st.st_mode) && mount_st.st_dev != parent_st.st_dev;
 }
 
@@ -1268,19 +1324,17 @@ static int finalize_dvr_storage_paths(void) {
         g_dvr_base_dir[--base_len] = '\0';
 
     if (g_dvr_mount_dir[0] != '/' || g_dvr_base_dir[0] != '/' ||
-        strstr(g_dvr_mount_dir, "/../") != NULL ||
-        strstr(g_dvr_base_dir, "/../") != NULL ||
+        strstr(g_dvr_mount_dir, "/../") != NULL || strstr(g_dvr_base_dir, "/../") != NULL ||
         strncmp(g_dvr_base_dir, g_dvr_mount_dir, mount_len) != 0 ||
         g_dvr_base_dir[mount_len] != '/') {
-        fprintf(stderr,
-                "[DVR] dvr-dir must be an absolute child of dvr-mount-dir\n");
+        fprintf(stderr, "[DVR] dvr-dir must be an absolute child of dvr-mount-dir\n");
         return -1;
     }
 
-    snprintf(g_dvr_mount_parent, sizeof(g_dvr_mount_parent), "%s",
-             g_dvr_mount_dir);
+    snprintf(g_dvr_mount_parent, sizeof(g_dvr_mount_parent), "%s", g_dvr_mount_dir);
     char *slash = strrchr(g_dvr_mount_parent, '/');
-    if (slash == NULL) return -1;
+    if (slash == NULL)
+        return -1;
     if (slash == g_dvr_mount_parent)
         slash[1] = '\0';
     else
@@ -1307,8 +1361,7 @@ static void storage_try_initialize(void) {
             radar_telemetry_publish_empty();
     }
 
-    if (!g_storage_ready && dvr_storage_ok && g_sensor_csv != NULL &&
-        g_radar_csv != NULL) {
+    if (!g_storage_ready && dvr_storage_ok && g_sensor_csv != NULL && g_radar_csv != NULL) {
         g_storage_ready = 1;
         startup_mark("business_storage_initialized");
     }
@@ -1321,16 +1374,15 @@ static void dvr_make_filename(char *buf, size_t bufsz, const char *prefix) {
     time_t t = tv.tv_sec;
     struct tm tm_buf;
     localtime_r(&t, &tm_buf);
-    snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d_%03ld.mp4",
-             g_dvr_base_dir, prefix,
-             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
-             tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec,
-             (long)(tv.tv_usec / 1000));
+    snprintf(buf, bufsz, "%s/%s_%04d%02d%02d_%02d%02d%02d_%03ld.mp4", g_dvr_base_dir, prefix,
+             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday, tm_buf.tm_hour,
+             tm_buf.tm_min, tm_buf.tm_sec, (long)(tv.tv_usec / 1000));
 }
 
 /* 启动 DVR 录制 */
 static int dvr_start(void) {
-    if (dvr_recording) return 0;
+    if (dvr_recording)
+        return 0;
     /* DVR状态只由主循环操作；每次启动都重新验证真实挂载，防止空闲期热拔后
      * 把同名目录误建到根文件系统。 */
     if (!dvr_storage_available()) {
@@ -1340,21 +1392,20 @@ static int dvr_start(void) {
     }
     dvr_storage_ok = mkdir_recursive(g_dvr_base_dir) == 0;
     if (!dvr_storage_ok) {
-        fprintf(stderr, "[DVR] Cannot prepare TF recording directory: %s\n",
-                strerror(errno));
+        fprintf(stderr, "[DVR] Cannot prepare TF recording directory: %s\n", strerror(errno));
         return -1;
     }
 
     /* 创建目录 */
     snprintf(dvr_buffer_dir, sizeof(dvr_buffer_dir), "%s/.buffer", g_dvr_base_dir);
     if (mkdir(g_dvr_base_dir, 0777) != 0 && errno != EEXIST) {
-        fprintf(stderr, "[DVR] Cannot create base directory %s: %s\n",
-                g_dvr_base_dir, strerror(errno));
+        fprintf(stderr, "[DVR] Cannot create base directory %s: %s\n", g_dvr_base_dir,
+                strerror(errno));
         return -1;
     }
     if (mkdir(dvr_buffer_dir, 0777) != 0 && errno != EEXIST) {
-        fprintf(stderr, "[DVR] Cannot create buffer directory %s: %s\n",
-                dvr_buffer_dir, strerror(errno));
+        fprintf(stderr, "[DVR] Cannot create buffer directory %s: %s\n", dvr_buffer_dir,
+                strerror(errno));
         return -1;
     }
 
@@ -1384,34 +1435,31 @@ static int dvr_start(void) {
  * 碰撞和摔倒事件使用 force=1 立即再试，避免 dvr_recording=0 时静默丢失视频。
  */
 static int dvr_ensure_started(uint64_t now_us, const char *reason, int force) {
-    if (dvr_recording) return 0;
-    if (dvr_encoding) return -1;
+    if (dvr_recording)
+        return 0;
+    if (dvr_encoding)
+        return -1;
     uint64_t retry_us = force ? 500000ULL : DVR_START_RETRY_US;
-    uint64_t last_attempt_us =
-        force ? dvr_last_forced_start_attempt_us : dvr_last_start_attempt_us;
-    if (last_attempt_us != 0 &&
-        now_us >= last_attempt_us &&
-        now_us - last_attempt_us < retry_us)
+    uint64_t last_attempt_us = force ? dvr_last_forced_start_attempt_us : dvr_last_start_attempt_us;
+    if (last_attempt_us != 0 && now_us >= last_attempt_us && now_us - last_attempt_us < retry_us)
         return -1;
 
     dvr_last_start_attempt_us = now_us;
-    if (force) dvr_last_forced_start_attempt_us = now_us;
+    if (force)
+        dvr_last_forced_start_attempt_us = now_us;
     int rc = dvr_start();
     char details[192];
-    snprintf(details, sizeof(details),
-             "reason=%s recording=%d encoding=%d storage_ok=%d rc=%d",
-             reason != NULL ? reason : "unknown", dvr_recording,
-             dvr_encoding, dvr_storage_ok, rc);
-    sensor_event_log("a35_dvr", "buffer",
-                     rc == 0 ? "started" : "failed",
-                     NULL, NULL, -1.0f, -1, -1,
+    snprintf(details, sizeof(details), "reason=%s recording=%d encoding=%d storage_ok=%d rc=%d",
+             reason != NULL ? reason : "unknown", dvr_recording, dvr_encoding, dvr_storage_ok, rc);
+    sensor_event_log("a35_dvr", "buffer", rc == 0 ? "started" : "failed", NULL, NULL, -1.0f, -1, -1,
                      reason, details);
     return rc;
 }
 
 /* 保存一帧到 DVR 缓冲 */
 static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_t timestamp_us) {
-    if (!dvr_recording || dvr_encoding || !dvr_raw_file) return;
+    if (!dvr_recording || dvr_encoding || !dvr_raw_file)
+        return;
 
     /* 只支持 MJPEG 格式; 其他格式需要转码, 这里跳过避免写入错误数据 */
     if (dvr_camera_pixelformat != V4L2_PIX_FMT_MJPEG) {
@@ -1438,10 +1486,11 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
     if (!has_eoi) {
         static int warned = 0;
         if (!warned) {
-            printf("[调试] [DVR] Invalid JPEG frame skipped (size=%u, head=%02X%02X tail=%02X%02X)\n",
-                   jpeg_size,
-                   jpeg_size > 0 ? jpeg_data[0] : 0, jpeg_size > 1 ? jpeg_data[1] : 0,
-                   jpeg_size > 2 ? jpeg_data[jpeg_size - 2] : 0, jpeg_size > 1 ? jpeg_data[jpeg_size - 1] : 0);
+            printf(
+                "[调试] [DVR] Invalid JPEG frame skipped (size=%u, head=%02X%02X tail=%02X%02X)\n",
+                jpeg_size, jpeg_size > 0 ? jpeg_data[0] : 0, jpeg_size > 1 ? jpeg_data[1] : 0,
+                jpeg_size > 2 ? jpeg_data[jpeg_size - 2] : 0,
+                jpeg_size > 1 ? jpeg_data[jpeg_size - 1] : 0);
             warned = 1;
         }
         return;
@@ -1464,14 +1513,12 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
 
     /* 写入帧: [4B size][8B timestamp][JPEG data] */
     uint32_t frame_size = jpeg_size + 12;
-    int write_ok =
-        fwrite(&frame_size, 4, 1, dvr_raw_file) == 1 &&
-        fwrite(&timestamp_us, 8, 1, dvr_raw_file) == 1 &&
-        fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file) == jpeg_size;
+    int write_ok = fwrite(&frame_size, 4, 1, dvr_raw_file) == 1 &&
+                   fwrite(&timestamp_us, 8, 1, dvr_raw_file) == 1 &&
+                   fwrite(jpeg_data, 1, jpeg_size, dvr_raw_file) == jpeg_size;
     if (!write_ok) {
         fprintf(stderr, "[DVR] storage write failed: %s\n", strerror(errno));
-        sensor_event_log("a35_dvr", "buffer", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        sensor_event_log("a35_dvr", "buffer", "failed", NULL, NULL, -1.0f, -1, -1,
                          "storage_write_failed", strerror(errno));
         dvr_storage_ok = 0;
         dvr_recording = 0;
@@ -1489,8 +1536,7 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
         if (flush_rc != 0 || sync_rc != 0 || !dvr_storage_available()) {
             fprintf(stderr, "[DVR] storage flush/sync failed or filesystem detached: %s\n",
                     strerror(errno));
-            sensor_event_log("a35_dvr", "buffer", "failed",
-                             NULL, NULL, -1.0f, -1, -1,
+            sensor_event_log("a35_dvr", "buffer", "failed", NULL, NULL, -1.0f, -1, -1,
                              "storage_sync_failed",
                              "TF写入同步失败或文件系统已脱离；告警链继续运行");
             dvr_storage_ok = 0;
@@ -1510,13 +1556,13 @@ static void dvr_save_frame(const uint8_t *jpeg_data, uint32_t jpeg_size, uint64_
  * 返回 1 表示新录像首次触发，0 表示延长/忽略。
  */
 static int dvr_trigger_save(uint64_t trigger_time_us, const char *reason) {
-    if (!dvr_recording || dvr_encoding) return 0;
+    if (!dvr_recording || dvr_encoding)
+        return 0;
 
     if (dvr_save_triggered) {
-        uint64_t max_last = dvr_first_trigger_time_us +
-                            (uint64_t)DVR_MAX_EVENT_SPAN_SEC * 1000000ULL;
-        if (trigger_time_us > dvr_trigger_time_us &&
-            trigger_time_us <= max_last) {
+        uint64_t max_last =
+            dvr_first_trigger_time_us + (uint64_t)DVR_MAX_EVENT_SPAN_SEC * 1000000ULL;
+        if (trigger_time_us > dvr_trigger_time_us && trigger_time_us <= max_last) {
             dvr_trigger_time_us = trigger_time_us;
             dvr_trigger_count++;
             if (dvr_last_extension_log_us == 0 ||
@@ -1535,31 +1581,27 @@ static int dvr_trigger_save(uint64_t trigger_time_us, const char *reason) {
     dvr_last_extension_log_us = trigger_time_us;
     dvr_trigger_count = 1;
     dvr_save_triggered = 1;
-    printf("[保存] [DVR] Save triggered! (pre=%ds, post=%ds, max_span=%ds)\n",
-           DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC, DVR_MAX_EVENT_SPAN_SEC);
+    printf("[保存] [DVR] Save triggered! (pre=%ds, post=%ds, max_span=%ds)\n", DVR_SAVE_BEFORE_SEC,
+           DVR_SAVE_AFTER_SEC, DVR_MAX_EVENT_SPAN_SEC);
     char details[160];
-    snprintf(details, sizeof(details),
-             "reason=%s frames=%d pre_s=%d post_s=%d max_span_s=%d",
-             reason != NULL ? reason : "unknown", dvr_frame_count,
-             DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC,
-             DVR_MAX_EVENT_SPAN_SEC);
-    sensor_event_log("a35_dvr", "recording", "triggered",
-                     NULL, NULL, -1.0f, -1, -1,
-                     reason, details);
+    snprintf(details, sizeof(details), "reason=%s frames=%d pre_s=%d post_s=%d max_span_s=%d",
+             reason != NULL ? reason : "unknown", dvr_frame_count, DVR_SAVE_BEFORE_SEC,
+             DVR_SAVE_AFTER_SEC, DVR_MAX_EVENT_SPAN_SEC);
+    sensor_event_log("a35_dvr", "recording", "triggered", NULL, NULL, -1.0f, -1, -1, reason,
+                     details);
     return 1;
 }
 
 /* 停止 DVR 录制 */
 static void dvr_stop(void) {
-    if (!dvr_recording) return;
+    if (!dvr_recording)
+        return;
     dvr_recording = 0;
 
     if (dvr_raw_file) {
-        if (fflush(dvr_raw_file) != 0 ||
-            fdatasync(fileno(dvr_raw_file)) != 0) {
+        if (fflush(dvr_raw_file) != 0 || fdatasync(fileno(dvr_raw_file)) != 0) {
             fprintf(stderr, "[DVR] Final storage sync failed: %s\n", strerror(errno));
-            sensor_event_log("a35_dvr", "buffer", "failed",
-                             NULL, NULL, -1.0f, -1, -1,
+            sensor_event_log("a35_dvr", "buffer", "failed", NULL, NULL, -1.0f, -1, -1,
                              "final_sync_failed", strerror(errno));
             dvr_storage_ok = 0;
         }
@@ -1575,7 +1617,6 @@ static void dvr_stop(void) {
         rmdir(dvr_buffer_dir);
     }
 }
-
 
 /* 录制完成提示音 */
 static void play_recording_complete_sound(void) {
@@ -1595,17 +1636,16 @@ static void play_recording_complete_sound(void) {
 
 /* 子进程: 将缓冲帧编码为 MP4 (异步, 不阻塞主循环) */
 static int dvr_encode_mp4(void) {
-    if (dvr_encoding) return -1;
+    if (dvr_encoding)
+        return -1;
     if (dvr_frame_count == 0) {
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
-                         "no_frames", "录像没有可编码帧；告警链继续运行");
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1, "no_frames",
+                         "录像没有可编码帧；告警链继续运行");
         return -1;
     }
     if (!dvr_has_encoder) {
         printf("[系统] [DVR] No video encoder available; raw buffer retained\n");
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1,
                          "encoder_unavailable",
                          "ffmpeg/ffprobe不可用；原始缓存保留，告警链继续运行");
         return -1;
@@ -1621,9 +1661,8 @@ static int dvr_encode_mp4(void) {
     if (dvr_save_triggered && dvr_first_trigger_time_us > 0 &&
         dvr_trigger_time_us >= dvr_first_trigger_time_us) {
         uint64_t before_delta = (uint64_t)DVR_SAVE_BEFORE_SEC * 1000000ULL;
-        uint64_t before_us = dvr_first_trigger_time_us > before_delta
-                                 ? dvr_first_trigger_time_us - before_delta
-                                 : 0;
+        uint64_t before_us =
+            dvr_first_trigger_time_us > before_delta ? dvr_first_trigger_time_us - before_delta : 0;
         for (int i = 0; i < active_frames; i++) {
             if (dvr_frames[i].timestamp_us >= before_us) {
                 start_idx = i;
@@ -1643,26 +1682,28 @@ static int dvr_encode_mp4(void) {
     if (total < 2) {
         printf("[保存] [DVR] Too few frames (%d), skipping encode\n", total);
         char details[128];
-        snprintf(details, sizeof(details),
-                 "frames=%d；帧数不足，告警链继续运行", total);
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        snprintf(details, sizeof(details), "frames=%d；帧数不足，告警链继续运行", total);
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1,
                          "too_few_frames", details);
         dvr_encoding = 0;
         return -1;
     }
 
-    printf("[保存] [DVR] Encoding %d frames (%d→%d) to MP4 (async)...\n", total, start_idx, end_idx);
+    printf("[保存] [DVR] Encoding %d frames (%d→%d) to MP4 (async)...\n", total, start_idx,
+           end_idx);
 
     /* 计算帧率 */
     float fps = (float)DVR_CAPTURE_FPS;
     if (total >= 2) {
-        uint64_t duration_us = dvr_frames[end_idx].timestamp_us - dvr_frames[start_idx].timestamp_us;
+        uint64_t duration_us =
+            dvr_frames[end_idx].timestamp_us - dvr_frames[start_idx].timestamp_us;
         if (duration_us > 0)
             fps = (float)(total - 1) * 1000000.0f / (float)duration_us;
     }
-    if (fps < 1) fps = 1;
-    if (fps > 30) fps = 30;
+    if (fps < 1)
+        fps = 1;
+    if (fps > 30)
+        fps = 30;
 
     printf("[保存] [DVR] FPS: %.1f, Frames: %d\n", fps, total);
 
@@ -1678,41 +1719,32 @@ static int dvr_encode_mp4(void) {
     FILE *job = fopen(job_path, "w");
     if (!job) {
         fprintf(stderr, "[DVR] Cannot create encoder job: %s\n", strerror(errno));
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1,
                          "job_create_failed", strerror(errno));
         dvr_encoding = 0;
         return -1;
     }
-    fprintf(job, "DVRJOB1\nraw\t%s\noutput\t%s\nfps\t%.6f\nentries\n",
-            dvr_raw_path, dvr_output_path, fps);
+    fprintf(job, "DVRJOB1\nraw\t%s\noutput\t%s\nfps\t%.6f\nentries\n", dvr_raw_path,
+            dvr_output_path, fps);
     for (int i = start_idx; i <= end_idx; i++) {
-        fprintf(job, "%lld\t%u\n", (long long)dvr_frames[i].file_offset,
-                dvr_frames[i].jpeg_size);
+        fprintf(job, "%lld\t%u\n", (long long)dvr_frames[i].file_offset, dvr_frames[i].jpeg_size);
     }
-    int job_ok = fflush(job) == 0 && fdatasync(fileno(job)) == 0 &&
-                 fclose(job) == 0;
+    int job_ok = fflush(job) == 0 && fdatasync(fileno(job)) == 0 && fclose(job) == 0;
     if (!job_ok) {
         fprintf(stderr, "[DVR] Encoder job sync failed: %s\n", strerror(errno));
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1,
                          "job_sync_failed", strerror(errno));
         dvr_encoding = 0;
         return -1;
     }
 
-    char *worker_argv[] = {
-        (char *)"python3", (char *)DVR_ENCODER_WORKER,
-        (char *)"--job", job_path, NULL
-    };
+    char *worker_argv[] = {(char *)"python3", (char *)DVR_ENCODER_WORKER, (char *)"--job", job_path,
+                           NULL};
     pid_t worker_pid = 0;
-    int spawn_rc = posix_spawnp(&worker_pid, "python3", NULL, NULL,
-                                worker_argv, environ);
+    int spawn_rc = posix_spawnp(&worker_pid, "python3", NULL, NULL, worker_argv, environ);
     if (spawn_rc != 0) {
-        fprintf(stderr, "[DVR] Encoder worker spawn failed: %s\n",
-                strerror(spawn_rc));
-        sensor_event_log("a35_dvr", "encoding", "failed",
-                         NULL, NULL, -1.0f, -1, -1,
+        fprintf(stderr, "[DVR] Encoder worker spawn failed: %s\n", strerror(spawn_rc));
+        sensor_event_log("a35_dvr", "encoding", "failed", NULL, NULL, -1.0f, -1, -1,
                          "worker_spawn_failed", strerror(spawn_rc));
         dvr_encoding = 0;
         return -1;
@@ -1720,22 +1752,22 @@ static int dvr_encode_mp4(void) {
     dvr_encoder_pid = worker_pid;
     printf("[保存] [DVR] Safe encoder worker started (pid=%d)\n", worker_pid);
     char details[512];
-    snprintf(details, sizeof(details),
-             "path=%.400s frames=%d fps=%.1f pid=%d",
-             dvr_output_path, total, fps, worker_pid);
-    sensor_event_log("a35_dvr", "encoding", "started",
-                     NULL, NULL, -1.0f, -1, -1,
-                     "async_worker", details);
+    snprintf(details, sizeof(details), "path=%.400s frames=%d fps=%.1f pid=%d", dvr_output_path,
+             total, fps, worker_pid);
+    sensor_event_log("a35_dvr", "encoding", "started", NULL, NULL, -1.0f, -1, -1, "async_worker",
+                     details);
     return 0;
-
 }
 
 /* ======================== 音频提示 ======================== */
 static void play_alert_sound(const char *type) {
     const char *file = NULL;
-    if (strcmp(type, "fall") == 0)       file = AUDIO_FALL;
-    else if (strcmp(type, "collision") == 0) file = AUDIO_COLLISION;
-    else                                 return;
+    if (strcmp(type, "fall") == 0)
+        file = AUDIO_FALL;
+    else if (strcmp(type, "collision") == 0)
+        file = AUDIO_COLLISION;
+    else
+        return;
 
     if (access(file, F_OK) != 0) {
         printf("[AUDIO] Sound file not found: %s\n", file);
@@ -1753,12 +1785,18 @@ static void play_alert_sound(const char *type) {
 
 static void play_v2x_alert(const char *direction) {
     const char *file = NULL;
-    if (strcmp(direction, "nearby") == 0)       file = AUDIO_V2X_NEARBY;
-    else if (strcmp(direction, "left_front") == 0)  file = AUDIO_V2X_LEFT_FRONT;
-    else if (strcmp(direction, "right_front") == 0) file = AUDIO_V2X_RIGHT_FRONT;
-    else if (strcmp(direction, "left") == 0)      file = AUDIO_V2X_LEFT;
-    else if (strcmp(direction, "right") == 0)     file = AUDIO_V2X_RIGHT;
-    else                                          file = AUDIO_V2X_NEARBY;
+    if (strcmp(direction, "nearby") == 0)
+        file = AUDIO_V2X_NEARBY;
+    else if (strcmp(direction, "left_front") == 0)
+        file = AUDIO_V2X_LEFT_FRONT;
+    else if (strcmp(direction, "right_front") == 0)
+        file = AUDIO_V2X_RIGHT_FRONT;
+    else if (strcmp(direction, "left") == 0)
+        file = AUDIO_V2X_LEFT;
+    else if (strcmp(direction, "right") == 0)
+        file = AUDIO_V2X_RIGHT;
+    else
+        file = AUDIO_V2X_NEARBY;
 
     if (access(file, F_OK) != 0) {
         printf("[AUDIO] V2X sound file not found: %s\n", file);
@@ -1767,8 +1805,8 @@ static void play_v2x_alert(const char *direction) {
 
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    uint64_t now_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
-                      (uint64_t)tv_now.tv_usec;
+    uint64_t now_us =
+        (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec;
     if (g_last_v2x_audio_us != 0 && (now_us - g_last_v2x_audio_us) < V2X_AUDIO_COOLDOWN_US) {
         printf("[V2X] Audio cooldown, skip playing (%s)\n", direction);
         return;
@@ -1785,7 +1823,8 @@ static void play_v2x_alert(const char *direction) {
 }
 
 static void handle_v2x_alert(const char *direction) {
-    if (!direction) direction = "nearby";
+    if (!direction)
+        direction = "nearby";
     printf("[告警] [V2X] V2X_ALERT direction=%s\n", direction);
     g_v2x_alert = 1;
     /* V2X 只走音频提示，不驱动 LED；LED 留给雷达碰撞/IMU 摔倒 */
@@ -1794,7 +1833,8 @@ static void handle_v2x_alert(const char *direction) {
 
 /* ======================== IMU 摔倒触发处理 ======================== */
 static void handle_fall_trigger(uint64_t trigger_time_us) {
-    if (g_imu_fall_alert) return;  /* 已触发, 忽略重复 */
+    if (g_imu_fall_alert)
+        return; /* 已触发, 忽略重复 */
     g_imu_fall_alert = 1;
     g_imu_fall_time_us = trigger_time_us;
 
@@ -1813,7 +1853,8 @@ static void handle_fall_trigger(uint64_t trigger_time_us) {
  * 与 v2x_alert_link.sh 行为一致：UDP 127.0.0.1:8890 -> HUD -> App
  */
 static int udp_send_to_hud(const char *json) {
-    if (json == NULL || json[0] == '\0') return -1;
+    if (json == NULL || json[0] == '\0')
+        return -1;
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -1831,13 +1872,12 @@ static int udp_send_to_hud(const char *json) {
         return -1;
     }
 
-    ssize_t sent = sendto(sock, json, strlen(json), 0,
-                          (struct sockaddr *)&addr, sizeof(addr));
+    ssize_t sent = sendto(sock, json, strlen(json), 0, (struct sockaddr *)&addr, sizeof(addr));
     if (sent < 0) {
         fprintf(stderr, "[IMU_FWD] sendto failed: %s\n", strerror(errno));
     } else {
-        printf("[系统] [IMU_FWD] Forwarded %zd bytes to %s:%d\n",
-               sent, HUD_INPUT_IP, HUD_INPUT_PORT);
+        printf("[系统] [IMU_FWD] Forwarded %zd bytes to %s:%d\n", sent, HUD_INPUT_IP,
+               HUD_INPUT_PORT);
     }
     close(sock);
     return sent >= 0 ? (int)sent : -1;
@@ -1847,15 +1887,18 @@ static int udp_send_to_hud(const char *json) {
  * @brief 从 IMU_ALERT 行中提取 key=value 形式的整数值
  */
 static int parse_kv_int(const char *line, const char *key) {
-    if (line == NULL || key == NULL) return 0;
+    if (line == NULL || key == NULL)
+        return 0;
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "%s=", key);
     const char *start = strstr(line, pattern);
-    if (start == NULL) return 0;
+    if (start == NULL)
+        return 0;
     start += strlen(pattern);
     char *end = NULL;
     long val = strtol(start, &end, 10);
-    if (end == start) return 0;
+    if (end == start)
+        return 0;
     return (int)val;
 }
 
@@ -1867,10 +1910,12 @@ static int parse_kv_int(const char *line, const char *key) {
  * 同时保留原有的摔倒触发逻辑（音频 + DVR）。
  */
 static void forward_imu_alert(const char *line) {
-    if (line == NULL || strstr(line, "IMU_ALERT") == NULL) return;
+    if (line == NULL || strstr(line, "IMU_ALERT") == NULL)
+        return;
 
     const char *type_start = strstr(line, "type=");
-    if (type_start == NULL) return;
+    if (type_start == NULL)
+        return;
     type_start += strlen("type=");
 
     const char *app_type = NULL;
@@ -1893,30 +1938,29 @@ static void forward_imu_alert(const char *line) {
         return;
     }
 
-    int seq           = parse_kv_int(line, "seq");
-    int gps_valid     = parse_kv_int(line, "gps_valid");
-    int lat_1e7       = parse_kv_int(line, "lat_1e7");
-    int lon_1e7       = parse_kv_int(line, "lon_1e7");
-    int speed_cms     = parse_kv_int(line, "speed_cms");
-    int heading_cdeg  = parse_kv_int(line, "heading_cdeg");
-    int tick           = parse_kv_int(line, "tick");
-    int acc_norm       = parse_kv_int(line, "acc_norm");
-    int horiz_acc      = parse_kv_int(line, "horiz_acc");
-    int z_delta        = parse_kv_int(line, "z_delta");
-    int brake_y_delta  = parse_kv_int(line, "brake_y_delta");
-    int ax             = parse_kv_int(line, "ax");
-    int ay             = parse_kv_int(line, "ay");
-    int az             = parse_kv_int(line, "az");
-    int gx             = parse_kv_int(line, "gx");
-    int gy             = parse_kv_int(line, "gy");
-    int gz             = parse_kv_int(line, "gz");
-    int roll           = parse_kv_int(line, "roll");
-    int pitch          = parse_kv_int(line, "pitch");
-    int yaw            = parse_kv_int(line, "yaw");
+    int seq = parse_kv_int(line, "seq");
+    int gps_valid = parse_kv_int(line, "gps_valid");
+    int lat_1e7 = parse_kv_int(line, "lat_1e7");
+    int lon_1e7 = parse_kv_int(line, "lon_1e7");
+    int speed_cms = parse_kv_int(line, "speed_cms");
+    int heading_cdeg = parse_kv_int(line, "heading_cdeg");
+    int tick = parse_kv_int(line, "tick");
+    int acc_norm = parse_kv_int(line, "acc_norm");
+    int horiz_acc = parse_kv_int(line, "horiz_acc");
+    int z_delta = parse_kv_int(line, "z_delta");
+    int brake_y_delta = parse_kv_int(line, "brake_y_delta");
+    int ax = parse_kv_int(line, "ax");
+    int ay = parse_kv_int(line, "ay");
+    int az = parse_kv_int(line, "az");
+    int gx = parse_kv_int(line, "gx");
+    int gy = parse_kv_int(line, "gy");
+    int gz = parse_kv_int(line, "gz");
+    int roll = parse_kv_int(line, "roll");
+    int pitch = parse_kv_int(line, "pitch");
+    int yaw = parse_kv_int(line, "yaw");
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL +
-                            (uint64_t)tv_now.tv_usec / 1000ULL;
+    uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL + (uint64_t)tv_now.tv_usec / 1000ULL;
 
     const char *reason = strstr(line, "reason=");
     char reason_buf[64] = "unknown";
@@ -1931,16 +1975,15 @@ static void forward_imu_alert(const char *line) {
     }
 
     char event_id[96];
-    snprintf(event_id, sizeof(event_id), "m33-%d-%llu", seq,
-             (unsigned long long)timestamp_ms);
+    snprintf(event_id, sizeof(event_id), "m33-%d-%llu", seq, (unsigned long long)timestamp_ms);
     char details[512];
     snprintf(details, sizeof(details),
              "tick=%d acc_norm=%d horiz_acc=%d z_delta=%d brake_y_delta=%d "
              "ax=%d ay=%d az=%d gx=%d gy=%d gz=%d roll=%d pitch=%d yaw=%d",
-             tick, acc_norm, horiz_acc, z_delta, brake_y_delta,
-             ax, ay, az, gx, gy, gz, roll, pitch, yaw);
-    sensor_event_log("imu_m33", m33_type, "received", event_id, NULL,
-                     -1.0f, -1, seq, reason_buf, details);
+             tick, acc_norm, horiz_acc, z_delta, brake_y_delta, ax, ay, az, gx, gy, gz, roll, pitch,
+             yaw);
+    sensor_event_log("imu_m33", m33_type, "received", event_id, NULL, -1.0f, -1, seq, reason_buf,
+                     details);
 
     char json[1536];
     snprintf(json, sizeof(json),
@@ -1953,52 +1996,49 @@ static void forward_imu_alert(const char *line) {
              "\"gz\":%d,\"roll\":%d,\"pitch\":%d,\"yaw\":%d,"
              "\"gps_valid\":%d,\"lat_1e7\":%d,\"lon_1e7\":%d,"
              "\"speed_cms\":%d,\"heading_cdeg\":%d}",
-             app_type, message, m33_type, reason_buf, seq,
-             event_id, (unsigned long long)timestamp_ms,
-             strcmp(m33_type, "fall") == 0 ? "true" : "false",
-             tick, acc_norm, horiz_acc, z_delta, brake_y_delta,
-             ax, ay, az, gx, gy, gz, roll, pitch, yaw,
-             gps_valid, lat_1e7, lon_1e7, speed_cms, heading_cdeg);
+             app_type, message, m33_type, reason_buf, seq, event_id,
+             (unsigned long long)timestamp_ms, strcmp(m33_type, "fall") == 0 ? "true" : "false",
+             tick, acc_norm, horiz_acc, z_delta, brake_y_delta, ax, ay, az, gx, gy, gz, roll, pitch,
+             yaw, gps_valid, lat_1e7, lon_1e7, speed_cms, heading_cdeg);
 
     printf("[系统] [IMU_FWD] Forwarding IMU event: type=%s\n", app_type);
     int bytes = udp_send_to_hud(json);
     char send_details[96];
-    snprintf(send_details, sizeof(send_details), "udp_bytes=%d hud_port=%d",
-             bytes, HUD_INPUT_PORT);
-    sensor_event_log("a35_hud", app_type,
-                     bytes >= 0 ? "sent" : "failed", event_id, NULL,
-                     -1.0f, -1, seq, reason_buf, send_details);
+    snprintf(send_details, sizeof(send_details), "udp_bytes=%d hud_port=%d", bytes, HUD_INPUT_PORT);
+    sensor_event_log("a35_hud", app_type, bytes >= 0 ? "sent" : "failed", event_id, NULL, -1.0f, -1,
+                     seq, reason_buf, send_details);
 }
 
 /* ======================== 测试模式: 模拟 IMU 摔倒触发 ======================== */
 static int g_test_fall_delay_sec = 0;
 static int g_test_fall_count = 1;
 static int g_test_fall_interval_sec = 45;
+
 static void *test_fall_thread(void *arg) {
     (void)arg;
-    if (g_test_fall_delay_sec <= 0) return NULL;
+    if (g_test_fall_delay_sec <= 0)
+        return NULL;
     printf("[TEST] Simulating IMU fall after %d seconds...\n", g_test_fall_delay_sec);
-    for (int i = 0; i < g_test_fall_delay_sec && g_running; i++) sleep(1);
-    if (!g_running) return NULL;
+    for (int i = 0; i < g_test_fall_delay_sec && g_running; i++)
+        sleep(1);
+    if (!g_running)
+        return NULL;
 
-    for (int event_index = 0; event_index < g_test_fall_count && g_running;
-         event_index++) {
+    for (int event_index = 0; event_index < g_test_fall_count && g_running; event_index++) {
         if (event_index > 0) {
             printf("[TEST] Waiting %d seconds before repeated FALL %d/%d\n",
-                   g_test_fall_interval_sec, event_index + 1,
-                   g_test_fall_count);
+                   g_test_fall_interval_sec, event_index + 1, g_test_fall_count);
             for (int i = 0; i < g_test_fall_interval_sec && g_running; i++)
                 sleep(1);
         }
-        if (!g_running) break;
+        if (!g_running)
+            break;
 
         struct timeval tv_now;
         gettimeofday(&tv_now, NULL);
-        uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) *
-                             1000000ULL +
-                         (uint64_t)tv_now.tv_usec;
-        printf("[TEST] Injecting simulated FALL event %d/%d\n",
-               event_index + 1, g_test_fall_count);
+        uint64_t ts_us =
+            (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL + (uint64_t)tv_now.tv_usec;
+        printf("[TEST] Injecting simulated FALL event %d/%d\n", event_index + 1, g_test_fall_count);
         handle_fall_trigger(ts_us);
 
         /* 模拟摔倒事件也触发 UDP 转发到 HUD/App，用于测试 */
@@ -2015,13 +2055,17 @@ static void *test_fall_thread(void *arg) {
 /* ======================== 测试模式: 模拟 V2X 告警 ======================== */
 static int g_test_v2x_delay_sec = 0;
 static char g_test_v2x_direction[32] = "left_front";
+
 static void *test_v2x_thread(void *arg) {
     (void)arg;
-    if (g_test_v2x_delay_sec <= 0) return NULL;
-    printf("[TEST] Simulating V2X alert (%s) after %d seconds...\n",
-           g_test_v2x_direction, g_test_v2x_delay_sec);
-    for (int i = 0; i < g_test_v2x_delay_sec && g_running; i++) sleep(1);
-    if (!g_running) return NULL;
+    if (g_test_v2x_delay_sec <= 0)
+        return NULL;
+    printf("[TEST] Simulating V2X alert (%s) after %d seconds...\n", g_test_v2x_direction,
+           g_test_v2x_delay_sec);
+    for (int i = 0; i < g_test_v2x_delay_sec && g_running; i++)
+        sleep(1);
+    if (!g_running)
+        return NULL;
 
     printf("[TEST] Injecting simulated V2X event\n");
     handle_v2x_alert(g_test_v2x_direction);
@@ -2045,7 +2089,8 @@ static void *rpmsg_thread(void *arg) {
     cfsetispeed(&tty, RPMSG_BAUD);
     tty.c_cflag &= ~(PARENB | CSTOPB | CSIZE | CRTSCTS);
     tty.c_cflag |= CS8 | CREAD | CLOCAL;
-    tty.c_iflag &= ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
+    tty.c_iflag &=
+        ~(IXON | IXOFF | IXANY | IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
     tty.c_oflag &= ~OPOST & ~ONLCR;
     tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     tty.c_cc[VMIN] = 0;
@@ -2089,7 +2134,7 @@ static void *rpmsg_thread(void *arg) {
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
-        struct timeval tv = { 0, 50000 };  /* 50ms timeout */
+        struct timeval tv = {0, 50000}; /* 50ms timeout */
         int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
 
         if (ret > 0 && FD_ISSET(fd, &rfds)) {
@@ -2104,8 +2149,9 @@ static void *rpmsg_thread(void *arg) {
                         if (strstr(line, "IMU_ALERT") != NULL) {
                             struct timeval tv_now;
                             gettimeofday(&tv_now, NULL);
-                            uint64_t ts_us = (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
-                                             (uint64_t)tv_now.tv_usec;
+                            uint64_t ts_us =
+                                (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
+                                (uint64_t)tv_now.tv_usec;
 
                             /* 摔倒事件额外触发音频 + DVR 保存 */
                             if (strstr(line, "type=fall") != NULL) {
@@ -2122,7 +2168,8 @@ static void *rpmsg_thread(void *arg) {
                             if (dir_start != NULL) {
                                 dir_start += strlen("direction=");
                                 const char *dir_end = strchr(dir_start, ' ');
-                                int len = (dir_end != NULL) ? (int)(dir_end - dir_start) : (int)strlen(dir_start);
+                                int len = (dir_end != NULL) ? (int)(dir_end - dir_start)
+                                                            : (int)strlen(dir_start);
                                 if (len > 0 && len < (int)sizeof(direction)) {
                                     memcpy(direction, dir_start, len);
                                     direction[len] = '\0';
@@ -2185,14 +2232,12 @@ static void *camera_runtime_thread(void *arg) {
         runtime->cam.fd = -1;
 
         if (camera_open(&runtime->cam, runtime->device, 1280, 720) != 0) {
-            fprintf(stderr, "[FUSION] Camera open attempt %d failed; retrying\n",
-                    attempt);
+            fprintf(stderr, "[FUSION] Camera open attempt %d failed; retrying\n", attempt);
             usleep(1000000);
             continue;
         }
         if (camera_start(&runtime->cam) != 0) {
-            fprintf(stderr, "[FUSION] Camera stream attempt %d failed; retrying\n",
-                    attempt);
+            fprintf(stderr, "[FUSION] Camera stream attempt %d failed; retrying\n", attempt);
             camera_close(&runtime->cam);
             usleep(1000000);
             continue;
@@ -2201,9 +2246,8 @@ static void *camera_runtime_thread(void *arg) {
 
         startup_mark("npu_model_load_begin");
         try {
-            runtime->detector = new NpuDetector(
-                runtime->model_path, runtime->labels_path,
-                runtime->confidence, 0.45f);
+            runtime->detector = new NpuDetector(runtime->model_path, runtime->labels_path,
+                                                runtime->confidence, 0.45f);
         } catch (...) {
             runtime->detector = NULL;
         }
@@ -2218,10 +2262,9 @@ static void *camera_runtime_thread(void *arg) {
 
         runtime->nn_w = runtime->detector->get_input_width();
         runtime->nn_h = runtime->detector->get_input_height();
-        runtime->rgb_full = static_cast<uint8_t *>(
-            malloc(runtime->cam.width * runtime->cam.height * 3));
-        runtime->rgb_nn = static_cast<uint8_t *>(
-            malloc(runtime->nn_w * runtime->nn_h * 3));
+        runtime->rgb_full =
+            static_cast<uint8_t *>(malloc(runtime->cam.width * runtime->cam.height * 3));
+        runtime->rgb_nn = static_cast<uint8_t *>(malloc(runtime->nn_w * runtime->nn_h * 3));
         if (runtime->rgb_full == NULL || runtime->rgb_nn == NULL) {
             fprintf(stderr, "[FUSION] NPU buffer allocation failed; retrying\n");
             free(runtime->rgb_full);
@@ -2246,29 +2289,37 @@ static void *camera_runtime_thread(void *arg) {
 
 /* ======================== 主函数 ======================== */
 int main(int argc, char *argv[]) {
-    const char *camera_dev  = "/dev/video7";
-    const char *uart_dev    = UART_DEVICE;
-    const char *model_path  = "models/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb";
+    const char *camera_dev = "/dev/video7";
+    const char *uart_dev = UART_DEVICE;
+    const char *model_path = "models/ssd_mobilenet_v2_fpnlite_10_256_int8_per_tensor.nb";
     const char *labels_path = "models/labels_coco_dataset_80.txt";
     float confidence = 0.60f;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-d") == 0 && i + 1 < argc) camera_dev = argv[++i];
-        else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc) uart_dev = argv[++i];
-        else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) confidence = atof(argv[++i]);
-        else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) model_path = argv[++i];
-        else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc) labels_path = argv[++i];
-        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) g_test_fall_delay_sec = atoi(argv[++i]);
+        if (strcmp(argv[i], "-d") == 0 && i + 1 < argc)
+            camera_dev = argv[++i];
+        else if (strcmp(argv[i], "-u") == 0 && i + 1 < argc)
+            uart_dev = argv[++i];
+        else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc)
+            confidence = atof(argv[++i]);
+        else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc)
+            model_path = argv[++i];
+        else if (strcmp(argv[i], "-l") == 0 && i + 1 < argc)
+            labels_path = argv[++i];
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc)
+            g_test_fall_delay_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "--test-fall-count") == 0 && i + 1 < argc)
             g_test_fall_count = atoi(argv[++i]);
         else if (strcmp(argv[i], "--test-fall-interval") == 0 && i + 1 < argc)
             g_test_fall_interval_sec = atoi(argv[++i]);
-        else if (strcmp(argv[i], "-V") == 0 && i + 1 < argc) g_test_v2x_delay_sec = atoi(argv[++i]);
+        else if (strcmp(argv[i], "-V") == 0 && i + 1 < argc)
+            g_test_v2x_delay_sec = atoi(argv[++i]);
         else if (strcmp(argv[i], "-x") == 0 && i + 1 < argc) {
             snprintf(g_test_v2x_direction, sizeof(g_test_v2x_direction), "%s", argv[++i]);
-        }
-        else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) g_ttc_threshold = atof(argv[++i]);
-        else if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) g_dist_threshold = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc)
+            g_ttc_threshold = atof(argv[++i]);
+        else if (strcmp(argv[i], "-D") == 0 && i + 1 < argc)
+            g_dist_threshold = atof(argv[++i]);
         else if (strcmp(argv[i], "--left-angle") == 0 && i + 1 < argc)
             g_angle_left_threshold = atof(argv[++i]);
         else if (strcmp(argv[i], "--right-angle") == 0 && i + 1 < argc)
@@ -2288,16 +2339,14 @@ int main(int argc, char *argv[]) {
                 return 2;
             }
             strcpy(g_dvr_base_dir, value);
-        }
-        else if (strcmp(argv[i], "--dvr-mount-dir") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "--dvr-mount-dir") == 0 && i + 1 < argc) {
             const char *value = argv[++i];
             if (strlen(value) >= sizeof(g_dvr_mount_dir)) {
                 fprintf(stderr, "[DVR] dvr-mount-dir is too long\n");
                 return 2;
             }
             strcpy(g_dvr_mount_dir, value);
-        }
-        else if (strcmp(argv[i], "--ble-led-uart") == 0 && i + 1 < argc)
+        } else if (strcmp(argv[i], "--ble-led-uart") == 0 && i + 1 < argc)
             snprintf(g_ble_led_uart, sizeof(g_ble_led_uart), "%s", argv[++i]);
         else if (strcmp(argv[i], "--no-ble-led") == 0)
             g_ble_led_enabled = false;
@@ -2317,8 +2366,8 @@ int main(int argc, char *argv[]) {
             printf("  Direction uses rider_angle = sensor_angle * angle_sign\n");
             printf("  rider_angle <= left is LEFT; rider_angle >= right is RIGHT\n");
             printf("  Defaults: TTC=%.1fs distance=%.1fm left=%.1fdeg right=%.1fdeg\n",
-                   TTC_THRESHOLD_DEFAULT, (float)DIST_THRESHOLD_DEFAULT,
-                   ANGLE_LEFT_DEFAULT, ANGLE_RIGHT_DEFAULT);
+                   TTC_THRESHOLD_DEFAULT, (float)DIST_THRESHOLD_DEFAULT, ANGLE_LEFT_DEFAULT,
+                   ANGLE_RIGHT_DEFAULT);
             return 0;
         }
     }
@@ -2327,14 +2376,12 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[RADAR] TTC and distance thresholds must be positive\n");
         return 2;
     }
-    if (g_test_fall_count < 1 || g_test_fall_count > 20 ||
-        g_test_fall_interval_sec < 1) {
+    if (g_test_fall_count < 1 || g_test_fall_count > 20 || g_test_fall_interval_sec < 1) {
         fprintf(stderr, "[TEST] fall count must be 1..20 and interval positive\n");
         return 2;
     }
     if (g_angle_left_threshold >= g_angle_right_threshold) {
-        fprintf(stderr,
-                "[RADAR] left-angle must be smaller than right-angle\n");
+        fprintf(stderr, "[RADAR] left-angle must be smaller than right-angle\n");
         return 2;
     }
     if (fabsf(fabsf(g_angle_direction_sign) - 1.0f) > 0.001f) {
@@ -2345,8 +2392,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[RADAR] angle-alpha must be in (0, 1]\n");
         return 2;
     }
-    if (g_direction_stable_samples < 1 ||
-        g_direction_stable_samples > 20) {
+    if (g_direction_stable_samples < 1 || g_direction_stable_samples > 20) {
         fprintf(stderr, "[RADAR] direction-samples must be between 1 and 20\n");
         return 2;
     }
@@ -2372,26 +2418,23 @@ int main(int argc, char *argv[]) {
     printf("Conf:     %.2f\n", confidence);
     printf("TTC thr:  %.1f s\n", g_ttc_threshold);
     printf("Dist thr: %.1f m\n", g_dist_threshold);
-    printf("Angles:   LEFT <= %.1f deg, RIGHT >= %.1f deg\n",
-           g_angle_left_threshold, g_angle_right_threshold);
+    printf("Angles:   LEFT <= %.1f deg, RIGHT >= %.1f deg\n", g_angle_left_threshold,
+           g_angle_right_threshold);
     printf("Angle map:rider = sensor * %.0f\n", g_angle_direction_sign);
-    printf("Dir filt: alpha=%.2f, stable samples=%d\n",
-           g_angle_filter_alpha, g_direction_stable_samples);
+    printf("Dir filt: alpha=%.2f, stable samples=%d\n", g_angle_filter_alpha,
+           g_direction_stable_samples);
     printf("Radar log:%s\n", g_radar_log_dir);
-    printf("BLE LEDs: %s%s\n",
-           g_ble_led_enabled ? g_ble_led_uart : "disabled",
+    printf("BLE LEDs: %s%s\n", g_ble_led_enabled ? g_ble_led_uart : "disabled",
            g_ble_led_enabled ? " @ 115200" : "");
     printf("LED:      PD11 via %s\n", GPIO_CHIP_DEV);
-    printf("DVR:      %s on TF mount %s (pre=%ds post=%ds)\n",
-           g_dvr_base_dir, g_dvr_mount_dir,
+    printf("DVR:      %s on TF mount %s (pre=%ds post=%ds)\n", g_dvr_base_dir, g_dvr_mount_dir,
            DVR_SAVE_BEFORE_SEC, DVR_SAVE_AFTER_SEC);
     printf("========================================\n\n");
 
     /* 0. ffmpeg/ffprobe 是强制依赖：不仅编码，还要完整解码验证后才能提交。 */
     printf("[系统] [DVR] Checking dependencies...\n");
     dvr_has_encoder =
-        system("which ffmpeg >/dev/null 2>&1") == 0 &&
-        system("which ffprobe >/dev/null 2>&1") == 0;
+        system("which ffmpeg >/dev/null 2>&1") == 0 && system("which ffprobe >/dev/null 2>&1") == 0;
     if (!dvr_has_encoder) {
         printf("[系统] [DVR] WARNING: No video encoder found! Video encoding will be disabled.\n");
         printf("[系统] [DVR] Install: apt-get install gstreamer1.0-tools ffmpeg\n");
@@ -2418,11 +2461,16 @@ int main(int argc, char *argv[]) {
     int radar_fd = open(uart_dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (radar_fd < 0) {
         fprintf(stderr, "[系统] Cannot open radar %s: %s\n", uart_dev, strerror(errno));
-        g_running = 0; pthread_join(led_tid, NULL); gpio_deinit();
+        g_running = 0;
+        pthread_join(led_tid, NULL);
+        gpio_deinit();
         return 1;
     }
     if (set_uart(radar_fd, BAUDRATE) != 0) {
-        close(radar_fd); g_running = 0; pthread_join(led_tid, NULL); gpio_deinit();
+        close(radar_fd);
+        g_running = 0;
+        pthread_join(led_tid, NULL);
+        gpio_deinit();
         return 1;
     }
     radar_init(radar_fd);
@@ -2436,8 +2484,7 @@ int main(int argc, char *argv[]) {
     camera_runtime.confidence = confidence;
     pthread_t camera_tid;
     int camera_tid_started =
-        pthread_create(&camera_tid, NULL, camera_runtime_thread,
-                       &camera_runtime) == 0;
+        pthread_create(&camera_tid, NULL, camera_runtime_thread, &camera_runtime) == 0;
     if (!camera_tid_started)
         fprintf(stderr, "[系统] [CAMERA] Cannot create deferred init thread\n");
 
@@ -2468,7 +2515,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\n[系统] [FUSION] Risk core initialized, entering main loop\n");
-    printf("[系统] [FUSION] Initial mode: radar + RPMsg; camera/NPU and storage attach asynchronously\n");
+    printf("[系统] [FUSION] Initial mode: radar + RPMsg; camera/NPU and storage attach "
+           "asynchronously\n");
     printf("[系统] [FUSION] Running... Press Ctrl+C to stop.\n\n");
     startup_mark("fusion_risk_core_ready");
 
@@ -2488,12 +2536,12 @@ int main(int argc, char *argv[]) {
     int poll_cnt = 0;
     int npu_frame_count = 0;
 
-    int target_active   = 0;   /* 雷达当前是否有有效目标 */
-    int npu_has_target  = 0;   /* NPU 当前是否看到道路用户 (控制 DVR 缓冲) */
-    int npu_confirm_cnt = 0;   /* NPU 连续确认帧计数 */
-    int npu_deny_cnt    = 0;   /* NPU 连续否认帧计数 */
-    int npu_confirmed   = 0;   /* NPU 已确认真实道路使用者 */
-    int npu_denied      = 0;   /* NPU 已判断为雷达虚警 */
+    int target_active = 0;   /* 雷达当前是否有有效目标 */
+    int npu_has_target = 0;  /* NPU 当前是否看到道路用户 (控制 DVR 缓冲) */
+    int npu_confirm_cnt = 0; /* NPU 连续确认帧计数 */
+    int npu_deny_cnt = 0;    /* NPU 连续否认帧计数 */
+    int npu_confirmed = 0;   /* NPU 已确认真实道路使用者 */
+    int npu_denied = 0;      /* NPU 已判断为雷达虚警 */
 
     struct timeval t_last_bsd, t_last_capture;
     t_last_bsd = g_t_start;
@@ -2505,12 +2553,10 @@ int main(int argc, char *argv[]) {
         if (!g_storage_ready && storage_poll_count++ % 20U == 0U)
             storage_try_initialize();
 
-        bool camera_ok =
-            camera_runtime.ready.load(std::memory_order_acquire);
+        bool camera_ok = camera_runtime.ready.load(std::memory_order_acquire);
         NpuDetector *detector = camera_ok ? camera_runtime.detector : NULL;
 
-        uint64_t fall_dvr_us =
-            g_pending_fall_dvr_us.exchange(0, std::memory_order_acq_rel);
+        uint64_t fall_dvr_us = g_pending_fall_dvr_us.exchange(0, std::memory_order_acq_rel);
         if (fall_dvr_us != 0) {
             if (camera_ok && !dvr_recording && !dvr_encoding) {
                 if (dvr_ensure_started(fall_dvr_us, "fall", 1) == 0) {
@@ -2529,25 +2575,22 @@ int main(int argc, char *argv[]) {
             int enc_status;
             pid_t reaped = waitpid(dvr_encoder_pid, &enc_status, WNOHANG);
             if (reaped == dvr_encoder_pid) {
-                int encode_ok = WIFEXITED(enc_status) &&
-                                WEXITSTATUS(enc_status) == 0;
+                int encode_ok = WIFEXITED(enc_status) && WEXITSTATUS(enc_status) == 0;
                 if (WIFEXITED(enc_status)) {
                     printf("[保存] [DVR] Encoder finished (exit=%d)\n", WEXITSTATUS(enc_status));
                     if (encode_ok)
                         play_recording_complete_sound();
                     else
-                        fprintf(stderr, "[DVR] Recording was NOT committed; recovery buffer retained\n");
+                        fprintf(stderr,
+                                "[DVR] Recording was NOT committed; recovery buffer retained\n");
                 }
                 char details[1200];
-                snprintf(details, sizeof(details),
-                         "path=%s result=%s exit=%d",
+                snprintf(details, sizeof(details), "path=%s result=%s exit=%d",
                          dvr_output_path[0] != '\0' ? dvr_output_path : "unknown",
                          encode_ok ? "validated_fsynced" : "not_committed",
                          WIFEXITED(enc_status) ? WEXITSTATUS(enc_status) : -1);
-                sensor_event_log("a35_dvr", "recording",
-                                 encode_ok ? "saved" : "failed",
-                                 NULL, NULL, -1.0f, -1, -1,
-                                 encode_ok ? "validated" : "encoder_failed",
+                sensor_event_log("a35_dvr", "recording", encode_ok ? "saved" : "failed", NULL, NULL,
+                                 -1.0f, -1, -1, encode_ok ? "validated" : "encoder_failed",
                                  details);
                 dvr_encoder_pid = 0;
                 dvr_encoding = 0;
@@ -2567,8 +2610,7 @@ int main(int argc, char *argv[]) {
                 npu_denied = 0;
                 printf("[保存] [DVR] State reset, ready for next trigger\n");
             } else if (reaped < 0) {
-                sensor_event_log("a35_dvr", "recording", "failed",
-                                 NULL, NULL, -1.0f, -1, -1,
+                sensor_event_log("a35_dvr", "recording", "failed", NULL, NULL, -1.0f, -1, -1,
                                  "worker_wait_failed", strerror(errno));
                 dvr_encoder_pid = 0;
                 dvr_encoding = 0;
@@ -2581,10 +2623,12 @@ int main(int argc, char *argv[]) {
         long elapsed_us = (tv_now.tv_sec - t_last_capture.tv_sec) * 1000000L +
                           (tv_now.tv_usec - t_last_capture.tv_usec);
         long wait_us = DVR_CAPTURE_INTERVAL_US - elapsed_us;
-        if (wait_us < 0) wait_us = 0;
-        if (wait_us > 500000) wait_us = 500000; /* 最多等 500ms */
+        if (wait_us < 0)
+            wait_us = 0;
+        if (wait_us > 500000)
+            wait_us = 500000; /* 最多等 500ms */
 
-        struct timeval tv = { wait_us / 1000000, wait_us % 1000000 };
+        struct timeval tv = {wait_us / 1000000, wait_us % 1000000};
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(radar_fd, &rfds);
@@ -2615,9 +2659,8 @@ int main(int argc, char *argv[]) {
                 /* DVR: 触发后继续录制 post 秒数 */
                 if (dvr_save_triggered && dvr_recording && !dvr_encoding) {
                     /* 触发可能发生在当前帧时间戳计算之后，避免无符号下溢 */
-                    uint64_t elapsed = (ts_us >= dvr_trigger_time_us)
-                                           ? (ts_us - dvr_trigger_time_us)
-                                           : 0;
+                    uint64_t elapsed =
+                        (ts_us >= dvr_trigger_time_us) ? (ts_us - dvr_trigger_time_us) : 0;
                     if (elapsed > (uint64_t)DVR_SAVE_AFTER_SEC * 1000000ULL) {
                         printf("[保存] [DVR] Post-trigger recording complete (%llu ms)\n",
                                (unsigned long long)(elapsed / 1000));
@@ -2633,15 +2676,11 @@ int main(int argc, char *argv[]) {
                     struct timeval tv_npu_start, tv_npu_end;
                     gettimeofday(&tv_npu_start, NULL);
                     int dec_w, dec_h;
-                    if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len,
-                                               camera_runtime.rgb_full,
-                                               &dec_w, &dec_h) == 0) {
-                        resize_rgb(camera_runtime.rgb_full, dec_w, dec_h,
-                                   camera_runtime.rgb_nn,
-                                   camera_runtime.nn_w,
-                                   camera_runtime.nn_h);
-                        frame_results_t results =
-                            detector->detect(camera_runtime.rgb_nn);
+                    if (jpeg_decode_rgb_silent(jpeg_buf, jpeg_len, camera_runtime.rgb_full, &dec_w,
+                                               &dec_h) == 0) {
+                        resize_rgb(camera_runtime.rgb_full, dec_w, dec_h, camera_runtime.rgb_nn,
+                                   camera_runtime.nn_w, camera_runtime.nn_h);
+                        frame_results_t results = detector->detect(camera_runtime.rgb_nn);
 
                         int has_road = 0;
                         int road_count = 0;
@@ -2653,13 +2692,15 @@ int main(int argc, char *argv[]) {
                                 road_count++;
                                 if (results.objects[i].score > best_score) {
                                     best_score = results.objects[i].score;
-                                    best_label = detector->get_label(results.objects[i].class_index).c_str();
+                                    best_label =
+                                        detector->get_label(results.objects[i].class_index).c_str();
                                 }
                             }
                         }
 
                         if (has_road && best_label[0]) {
-                            snprintf(g_last_road_user_label, sizeof(g_last_road_user_label), "%s", best_label);
+                            snprintf(g_last_road_user_label, sizeof(g_last_road_user_label), "%s",
+                                     best_label);
                             g_last_road_user_score = best_score;
                         }
 
@@ -2675,7 +2716,8 @@ int main(int argc, char *argv[]) {
                                 npu_confirmed = 0;
                                 npu_confirm_cnt = 0;
                                 npu_deny_cnt = 0;
-                                printf("[目标] [%6.1fs] NPU: ROAD USER DETECTED (%s %.2f)\n", t, best_label, best_score);
+                                printf("[目标] [%6.1fs] NPU: ROAD USER DETECTED (%s %.2f)\n", t,
+                                       best_label, best_score);
                             }
                             npu_confirm_cnt++;
                             npu_deny_cnt = 0;
@@ -2686,7 +2728,8 @@ int main(int argc, char *argv[]) {
                             if (camera_ok && !dvr_recording && !dvr_encoding) {
                                 dvr_ensure_started(ts_us, "npu_target", 0);
                             }
-                            if (npu_confirm_cnt >= NPU_CONFIRM_FRAMES && !npu_confirmed && !npu_denied) {
+                            if (npu_confirm_cnt >= NPU_CONFIRM_FRAMES && !npu_confirmed &&
+                                !npu_denied) {
                                 npu_confirmed = 1;
                                 printf("[目标] [%6.1fs] NPU CONFIRMED: Real road user!\n", t);
                             }
@@ -2713,18 +2756,17 @@ int main(int argc, char *argv[]) {
                         char npu_details[192];
                         snprintf(npu_details, sizeof(npu_details),
                                  "objects=%zu inference_ms=%.1f confirmed=%d active=%d",
-                                 results.objects.size(), results.inference_time_ms,
-                                 npu_confirmed, npu_has_target);
-                        sensor_event_log("camera_npu", "npu_inference",
-                                         has_road ? "target" : "clear", NULL,
-                                         has_road ? best_label : NULL,
-                                         has_road ? best_score : -1.0f,
-                                         road_count, -1, NULL, npu_details);
+                                 results.objects.size(), results.inference_time_ms, npu_confirmed,
+                                 npu_has_target);
+                        sensor_event_log(
+                            "camera_npu", "npu_inference", has_road ? "target" : "clear", NULL,
+                            has_road ? best_label : NULL, has_road ? best_score : -1.0f, road_count,
+                            -1, NULL, npu_details);
 
                         /* === 显示 NPU 中间结果 (调试级别，不进终端) === */
                         if (npu_has_target || target_active) {
-                            printf("[调试] [%6.1fs] NPU(%dms): %zu objects, road_user=%s",
-                                   t, (int)results.inference_time_ms, results.objects.size(),
+                            printf("[调试] [%6.1fs] NPU(%dms): %zu objects, road_user=%s", t,
+                                   (int)results.inference_time_ms, results.objects.size(),
                                    has_road ? "YES" : "no");
                             if (has_road) {
                                 printf(" (%s %.2f)", best_label, best_score);
@@ -2745,7 +2787,10 @@ int main(int argc, char *argv[]) {
 
         /* 雷达轮询 */
         poll_cnt++;
-        if (poll_cnt >= 60) { poll_cnt = 0; send_cmd(radar_fd, 1, 0x10, NULL, 0); }
+        if (poll_cnt >= 60) {
+            poll_cnt = 0;
+            send_cmd(radar_fd, 1, 0x10, NULL, 0);
+        }
 
         /* 目标消失检测 */
         if (target_active) {
@@ -2756,9 +2801,9 @@ int main(int argc, char *argv[]) {
                 double t = (tv_now.tv_sec - g_t_start.tv_sec) +
                            (tv_now.tv_usec - g_t_start.tv_usec) / 1000000.0;
                 printf("[目标] [%6.1fs] TARGET GONE (%.1fs timeout)\n", t, elapsed);
-                target_active   = 0;
+                target_active = 0;
                 g_radar_npu_alert = 0;
-                g_led_alert     = 0;
+                g_led_alert = 0;
                 radar_telemetry_publish_empty();
                 ble_risk_update(BLE_RISK_CLEAR);
 
@@ -2773,8 +2818,7 @@ int main(int argc, char *argv[]) {
             struct timeval tv_heartbeat;
             gettimeofday(&tv_heartbeat, NULL);
             uint64_t heartbeat_ms =
-                (uint64_t)tv_heartbeat.tv_sec * 1000ULL +
-                (uint64_t)tv_heartbeat.tv_usec / 1000ULL;
+                (uint64_t)tv_heartbeat.tv_sec * 1000ULL + (uint64_t)tv_heartbeat.tv_usec / 1000ULL;
             if (heartbeat_ms - g_radar_last_publish_ms >= 1000ULL)
                 radar_telemetry_publish_empty();
             ble_risk_update(BLE_RISK_CLEAR);
@@ -2783,26 +2827,31 @@ int main(int argc, char *argv[]) {
         /* 处理雷达数据 */
         if (ret > 0 && FD_ISSET(radar_fd, &rfds)) {
             int n = read(radar_fd, rx_buf + rx_len, sizeof(rx_buf) - rx_len);
-            if (n > 0) rx_len += n;
+            if (n > 0)
+                rx_len += n;
 
             while (rx_len >= 4) {
                 uint8_t head = rx_buf[0];
                 int frame_total = -1;
                 if (head == HEAD_REPORT) {
-                    if (rx_len < 3) break;
+                    if (rx_len < 3)
+                        break;
                     frame_total = 2 + rx_buf[1] + 1;
                 } else if (head == HEAD_REPLY) {
-                    if (rx_len < 3) break;
+                    if (rx_len < 3)
+                        break;
                     frame_total = 5 + rx_buf[2];
                 } else {
                     int i = 1;
                     for (; i < rx_len; i++)
-                        if (rx_buf[i] == HEAD_REPORT || rx_buf[i] == HEAD_REPLY) break;
+                        if (rx_buf[i] == HEAD_REPORT || rx_buf[i] == HEAD_REPLY)
+                            break;
                     memmove(rx_buf, rx_buf + i, rx_len - i);
                     rx_len -= i;
                     continue;
                 }
-                if (frame_total > (int)sizeof(rx_buf) || frame_total > rx_len) break;
+                if (frame_total > (int)sizeof(rx_buf) || frame_total > rx_len)
+                    break;
 
                 uint8_t frame[512];
                 memcpy(frame, rx_buf, frame_total);
@@ -2826,49 +2875,41 @@ int main(int argc, char *argv[]) {
                     }
 
                     const char *target_label = (npu_has_target && g_last_road_user_label[0])
-                                                   ? g_last_road_user_label : "unknown";
+                                                   ? g_last_road_user_label
+                                                   : "unknown";
                     const radar_target_t *dangerous =
-                        radar.dangerous_index >= 0
-                            ? &radar.targets[radar.dangerous_index]
-                            : NULL;
-                    float ttc_val =
-                        dangerous != NULL ? dangerous->ttc : -1.0f;
+                        radar.dangerous_index >= 0 ? &radar.targets[radar.dangerous_index] : NULL;
+                    float ttc_val = dangerous != NULL ? dangerous->ttc : -1.0f;
 
                     /* 只在危险目标/方向/距离/TTC/告警变化时打印，避免刷屏 */
                     static char s_last_label[32] = "";
-                    static int  s_last_obj_id = -2;
+                    static int s_last_obj_id = -2;
                     static float s_last_dist = -1.0f;
                     static float s_last_ttc = -2.0f;
                     static radar_direction_t s_last_direction = RADAR_DIR_UNKNOWN;
-                    static int  s_last_alert = -1;
-                    int changed = (strcmp(target_label, s_last_label) != 0) ||
-                                  (radar.dangerous_obj_id != s_last_obj_id) ||
-                                  (dangerous != NULL &&
-                                   fabsf(dangerous->distance - s_last_dist) > 0.05f) ||
-                                  (fabsf(ttc_val - s_last_ttc) > 0.05f) ||
-                                  (dangerous != NULL &&
-                                   dangerous->direction != s_last_direction) ||
-                                  ((int)radar.should_alert != s_last_alert);
+                    static int s_last_alert = -1;
+                    int changed =
+                        (strcmp(target_label, s_last_label) != 0) ||
+                        (radar.dangerous_obj_id != s_last_obj_id) ||
+                        (dangerous != NULL && fabsf(dangerous->distance - s_last_dist) > 0.05f) ||
+                        (fabsf(ttc_val - s_last_ttc) > 0.05f) ||
+                        (dangerous != NULL && dangerous->direction != s_last_direction) ||
+                        ((int)radar.should_alert != s_last_alert);
                     if (changed) {
                         snprintf(s_last_label, sizeof(s_last_label), "%s", target_label);
                         s_last_obj_id = radar.dangerous_obj_id;
-                        s_last_dist = dangerous != NULL
-                                          ? dangerous->distance
-                                          : -1.0f;
+                        s_last_dist = dangerous != NULL ? dangerous->distance : -1.0f;
                         s_last_ttc = ttc_val;
-                        s_last_direction = dangerous != NULL
-                                               ? dangerous->direction
-                                               : RADAR_DIR_UNKNOWN;
+                        s_last_direction =
+                            dangerous != NULL ? dangerous->direction : RADAR_DIR_UNKNOWN;
                         s_last_alert = radar.should_alert;
                         if (dangerous != NULL) {
                             printf("[目标] [%6.1fs] target=%s obj=%d dist=%.1fm "
                                    "speed=%.1fm/s angle=%.1fdeg dir=%s "
                                    "ttc=%.1fs alert=%s\n",
-                                   t, target_label, dangerous->obj_id,
-                                   dangerous->distance, dangerous->velocity,
-                                   dangerous->angle,
-                                   radar_direction_name(dangerous->direction),
-                                   ttc_val,
+                                   t, target_label, dangerous->obj_id, dangerous->distance,
+                                   dangerous->velocity, dangerous->angle,
+                                   radar_direction_name(dangerous->direction), ttc_val,
                                    radar.should_alert ? "YES" : "no");
                         }
                     }
@@ -2878,8 +2919,7 @@ int main(int argc, char *argv[]) {
                         if (radar.should_alert && npu_confirmed && !npu_denied) {
                             /* 雷达告警 + NPU 确认 → 真正碰撞风险 */
                             uint64_t collision_trigger_us =
-                                (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) *
-                                    1000000ULL +
+                                (uint64_t)(tv_now.tv_sec - g_t_start.tv_sec) * 1000000ULL +
                                 (uint64_t)tv_now.tv_usec;
                             g_radar_npu_alert = 1;
                             /*
@@ -2888,19 +2928,19 @@ int main(int argc, char *argv[]) {
                              * 避免“雷达/NPU 已告警但因为无缓存而静默不保存”。
                              */
                             if (!dvr_recording && !dvr_encoding) {
-                                if (dvr_ensure_started(
-                                        collision_trigger_us,
-                                        "radar_npu_collision", 1) == 0) {
+                                if (dvr_ensure_started(collision_trigger_us, "radar_npu_collision",
+                                                       1) == 0) {
                                     printf("[DVR] 碰撞告警时补启动录像，"
                                            "本次视频可能缺少告警前缓存\n");
                                 }
                             }
                             if (dvr_recording && !dvr_encoding) {
-                                int new_recording = dvr_trigger_save(
-                                    collision_trigger_us,
-                                    "radar_npu_collision");
+                                int new_recording =
+                                    dvr_trigger_save(collision_trigger_us, "radar_npu_collision");
                                 if (new_recording) {
-                                    printf("[告警] [%6.1fs] ALERT: COLLISION RISK - NPU CONFIRMED\n", t);
+                                    printf(
+                                        "[告警] [%6.1fs] ALERT: COLLISION RISK - NPU CONFIRMED\n",
+                                        t);
                                     play_alert_sound("collision");
                                 }
                             }
@@ -2936,7 +2976,8 @@ int main(int argc, char *argv[]) {
                 memmove(rx_buf, rx_buf + frame_total, rx_len - frame_total);
                 rx_len -= frame_total;
             }
-            if (rx_len >= (int)sizeof(rx_buf)) rx_len = 0;
+            if (rx_len >= (int)sizeof(rx_buf))
+                rx_len = 0;
         }
 
         /* 统一 LED 控制: 雷达+NPU 碰撞告警 / IMU 摔倒告警
@@ -2964,31 +3005,30 @@ int main(int argc, char *argv[]) {
         printf("[保存] [DVR] Waiting for encoder (pid=%d)...\n", dvr_encoder_pid);
         int enc_status;
         pid_t reaped = waitpid(dvr_encoder_pid, &enc_status, 0);
-        int encode_ok = reaped == dvr_encoder_pid && WIFEXITED(enc_status) &&
-                        WEXITSTATUS(enc_status) == 0;
+        int encode_ok =
+            reaped == dvr_encoder_pid && WIFEXITED(enc_status) && WEXITSTATUS(enc_status) == 0;
         char details[1200];
-        snprintf(details, sizeof(details),
-                 "path=%s result=%s exit=%d shutdown=1",
+        snprintf(details, sizeof(details), "path=%s result=%s exit=%d shutdown=1",
                  dvr_output_path[0] != '\0' ? dvr_output_path : "unknown",
                  encode_ok ? "validated_fsynced" : "not_committed",
-                 (reaped == dvr_encoder_pid && WIFEXITED(enc_status))
-                     ? WEXITSTATUS(enc_status) : -1);
-        sensor_event_log("a35_dvr", "recording",
-                         encode_ok ? "saved" : "failed",
-                         NULL, NULL, -1.0f, -1, -1,
-                         encode_ok ? "validated" : "encoder_failed",
-                         details);
+                 (reaped == dvr_encoder_pid && WIFEXITED(enc_status)) ? WEXITSTATUS(enc_status)
+                                                                      : -1);
+        sensor_event_log("a35_dvr", "recording", encode_ok ? "saved" : "failed", NULL, NULL, -1.0f,
+                         -1, -1, encode_ok ? "validated" : "encoder_failed", details);
         dvr_encoder_pid = 0;
         dvr_encoding = 0;
     }
 
     g_led_alert = 0;
-    if (camera_tid_started) pthread_join(camera_tid, NULL);
+    if (camera_tid_started)
+        pthread_join(camera_tid, NULL);
     pthread_join(led_tid, NULL);
     pthread_join(rpmsg_tid, NULL);
     nav_tts_stop();
-    if (g_test_fall_delay_sec > 0) pthread_join(test_fall_tid, NULL);
-    if (g_test_v2x_delay_sec > 0) pthread_join(test_v2x_tid, NULL);
+    if (g_test_fall_delay_sec > 0)
+        pthread_join(test_fall_tid, NULL);
+    if (g_test_v2x_delay_sec > 0)
+        pthread_join(test_v2x_tid, NULL);
     gpio_deinit();
 
     if (camera_runtime.ready.load(std::memory_order_acquire)) {

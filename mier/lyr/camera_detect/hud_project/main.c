@@ -37,8 +37,8 @@
 #define DELIVERY_LOG_MAX_BYTES (10U * 1024U * 1024U)
 #define DELIVERY_LOG_BACKUPS 4
 #define DELIVERY_LOG_SIZE_CHECK_WRITES 256U
-#define NAV_TTS_TEXT_MAX 1024          // 完整导航播报文案最大字节数（UTF-8）
-#define ENABLE_BONE_TTS_INTERFACE 1    // 1：调用骨传导播放接口；0：只打印完整导航文字
+#define NAV_TTS_TEXT_MAX 1024       // 完整导航播报文案最大字节数（UTF-8）
+#define ENABLE_BONE_TTS_INTERFACE 1 // 1：调用骨传导播放接口；0：只打印完整导航文字
 
 // ==================== 全局变量 ====================
 static volatile int keep_running = 1;
@@ -64,11 +64,10 @@ static int delivery_log_rotate(void) {
         if (index == 1)
             snprintf(source, sizeof(source), "%s", DELIVERY_LOG_PATH);
         else
-            snprintf(source, sizeof(source), "%s.%d",
-                     DELIVERY_LOG_PATH, index - 1);
-        snprintf(destination, sizeof(destination), "%s.%d",
-                 DELIVERY_LOG_PATH, index);
-        if (index == DELIVERY_LOG_BACKUPS) unlink(destination);
+            snprintf(source, sizeof(source), "%s.%d", DELIVERY_LOG_PATH, index - 1);
+        snprintf(destination, sizeof(destination), "%s.%d", DELIVERY_LOG_PATH, index);
+        if (index == DELIVERY_LOG_BACKUPS)
+            unlink(destination);
         if (rename(source, destination) != 0 && errno != ENOENT) {
             fprintf(stderr, "[IMU] log rotate failed: %s\n", strerror(errno));
             return -1;
@@ -80,8 +79,7 @@ static int delivery_log_rotate(void) {
 static void delivery_log_open(void) {
     mkdir(DELIVERY_LOG_DIR, 0775);
     struct stat st;
-    if (stat(DELIVERY_LOG_PATH, &st) == 0 &&
-        st.st_size >= (off_t)DELIVERY_LOG_MAX_BYTES)
+    if (stat(DELIVERY_LOG_PATH, &st) == 0 && st.st_size >= (off_t)DELIVERY_LOG_MAX_BYTES)
         delivery_log_rotate();
 
     int needs_header = stat(DELIVERY_LOG_PATH, &st) != 0 || st.st_size == 0;
@@ -97,26 +95,22 @@ static void delivery_log_open(void) {
         fputs(DELIVERY_LOG_HEADER, delivery_log);
     }
     delivery_log_write_count = 0;
-    printf("[IMU] delivery log: %s (10 MiB x current+4)\n",
-           DELIVERY_LOG_PATH);
+    printf("[IMU] delivery log: %s (10 MiB x current+4)\n", DELIVERY_LOG_PATH);
 }
 
-static void delivery_log_write(const char *event_id, const char *m33_type,
-                               const char *app_type, int seq,
-                               const char *reason, const char *stage,
-                               const char *status, long bytes) {
-    if (delivery_log == NULL) return;
-    fprintf(delivery_log, "%lld,%s,%s,%s,%d,%s,%s,%s,%ld\n",
-            wall_clock_ms(), event_id ? event_id : "",
-            m33_type ? m33_type : "", app_type ? app_type : "", seq,
-            reason ? reason : "", stage ? stage : "",
-            status ? status : "", bytes);
+static void delivery_log_write(const char *event_id, const char *m33_type, const char *app_type,
+                               int seq, const char *reason, const char *stage, const char *status,
+                               long bytes) {
+    if (delivery_log == NULL)
+        return;
+    fprintf(delivery_log, "%lld,%s,%s,%s,%d,%s,%s,%s,%ld\n", wall_clock_ms(),
+            event_id ? event_id : "", m33_type ? m33_type : "", app_type ? app_type : "", seq,
+            reason ? reason : "", stage ? stage : "", status ? status : "", bytes);
 
     delivery_log_write_count++;
     if (delivery_log_write_count % DELIVERY_LOG_SIZE_CHECK_WRITES == 0) {
         struct stat st;
-        if (fflush(delivery_log) == 0 &&
-            fstat(fileno(delivery_log), &st) == 0 &&
+        if (fflush(delivery_log) == 0 && fstat(fileno(delivery_log), &st) == 0 &&
             st.st_size >= (off_t)DELIVERY_LOG_MAX_BYTES) {
             fclose(delivery_log);
             delivery_log = NULL;
@@ -127,16 +121,16 @@ static void delivery_log_write(const char *event_id, const char *m33_type,
 }
 
 static int alert_slot(const char *type) {
-    if (type != NULL && strcmp(type, "fall_down") == 0) return 0;
-    if (type != NULL && strcmp(type, "emergency_brake") == 0) return 1;
+    if (type != NULL && strcmp(type, "fall_down") == 0)
+        return 0;
+    if (type != NULL && strcmp(type, "emergency_brake") == 0)
+        return 1;
     return 2;
 }
 
-static const char *json_string(cJSON *root, const char *name,
-                               const char *fallback) {
+static const char *json_string(cJSON *root, const char *name, const char *fallback) {
     cJSON *item = cJSON_GetObjectItem(root, name);
-    return cJSON_IsString(item) && item->valuestring != NULL
-               ? item->valuestring : fallback;
+    return cJSON_IsString(item) && item->valuestring != NULL ? item->valuestring : fallback;
 }
 
 static int json_int(cJSON *root, const char *name) {
@@ -170,31 +164,50 @@ void sig_handler(int sig) {
 // ==================== 转向指令转文本 ====================
 static const char *turn_to_text(int turn) {
     switch (turn) {
-        case TURN_UNKNOWN: return "Unknown";
-        case TURN_SELF_CAR: return "Self";
-        case TURN_LEFT: return "Left";
-        case TURN_RIGHT: return "Right";
-        case TURN_SLIGHT_LEFT: return "SlightL";
-        case TURN_SLIGHT_RIGHT: return "SlightR";
-        case TURN_BACK_LEFT: return "BackL";
-        case TURN_BACK_RIGHT: return "BackR";
-        case TURN_UTURN_LEFT: return "U-turnL";
-        case TURN_STRAIGHT: return "Straight";
-        case TURN_VIA_POINT: return "Waypoint";
-        case TURN_ROUNDABOUT: return "Roundabout";
-        case TURN_EXIT_ROUNDABOUT: return "ExitRnd";
-        case TURN_SERVICE: return "Service";
-        case TURN_TOLL: return "Toll";
-        case TURN_DESTINATION: return "Dest";
-        case TURN_UTURN_RIGHT: return "U-turnR";
-        default: return "?";
+    case TURN_UNKNOWN:
+        return "Unknown";
+    case TURN_SELF_CAR:
+        return "Self";
+    case TURN_LEFT:
+        return "Left";
+    case TURN_RIGHT:
+        return "Right";
+    case TURN_SLIGHT_LEFT:
+        return "SlightL";
+    case TURN_SLIGHT_RIGHT:
+        return "SlightR";
+    case TURN_BACK_LEFT:
+        return "BackL";
+    case TURN_BACK_RIGHT:
+        return "BackR";
+    case TURN_UTURN_LEFT:
+        return "U-turnL";
+    case TURN_STRAIGHT:
+        return "Straight";
+    case TURN_VIA_POINT:
+        return "Waypoint";
+    case TURN_ROUNDABOUT:
+        return "Roundabout";
+    case TURN_EXIT_ROUNDABOUT:
+        return "ExitRnd";
+    case TURN_SERVICE:
+        return "Service";
+    case TURN_TOLL:
+        return "Toll";
+    case TURN_DESTINATION:
+        return "Dest";
+    case TURN_UTURN_RIGHT:
+        return "U-turnR";
+    default:
+        return "?";
     }
 }
 
 // ==================== 解析导航 JSON ====================
 int parse_navi_json(const char *json_str, NavData *nav) {
     cJSON *root = cJSON_Parse(json_str);
-    if (!root) return -1;
+    if (!root)
+        return -1;
 
     cJSON *type_obj = cJSON_GetObjectItem(root, "type");
     if (cJSON_IsString(type_obj) && strcmp(type_obj->valuestring, "navi") != 0) {
@@ -257,12 +270,9 @@ static int parse_navi_tts_json(const char *json_str, NaviTtsData *tts_data) {
     cJSON *type_obj = cJSON_GetObjectItem(root, "type");
     cJSON *text_obj = cJSON_GetObjectItem(root, "text");
 
-    if (!cJSON_IsString(type_obj) ||
-        type_obj->valuestring == NULL ||
-        strcmp(type_obj->valuestring, "navi_tts") != 0 ||
-        !cJSON_IsString(text_obj) ||
-        text_obj->valuestring == NULL ||
-        text_obj->valuestring[0] == '\0') {
+    if (!cJSON_IsString(type_obj) || type_obj->valuestring == NULL ||
+        strcmp(type_obj->valuestring, "navi_tts") != 0 || !cJSON_IsString(text_obj) ||
+        text_obj->valuestring == NULL || text_obj->valuestring[0] == '\0') {
         cJSON_Delete(root);
         return -1;
     }
@@ -337,8 +347,9 @@ static void broadcast_imu_json(const char *json_str) {
 
     // 去除末尾的 \r \n
     int len = strlen(clean_json);
-    while (len > 0 && (clean_json[len-1] == '\n' || clean_json[len-1] == '\r' || clean_json[len-1] == ' ')) {
-        clean_json[len-1] = '\0';
+    while (len > 0 && (clean_json[len - 1] == '\n' || clean_json[len - 1] == '\r' ||
+                       clean_json[len - 1] == ' ')) {
+        clean_json[len - 1] = '\0';
         len--;
     }
 
@@ -363,15 +374,14 @@ static void broadcast_imu_json(const char *json_str) {
     const char *m33_type = json_string(root, "m33_type", "unknown");
     const char *reason = json_string(root, "reason", "unknown");
     int seq = json_int(root, "seq");
-    delivery_log_write(event_id, m33_type, type, seq, reason,
-                       "hud_received", "ok", len);
+    delivery_log_write(event_id, m33_type, type, seq, reason, "hud_received", "ok", len);
 
     time_t now = time(NULL);
     int slot = alert_slot(type);
     if (now - last_alert_ts[slot] < ALERT_COOLDOWN) {
         printf("[IMU] same-type cooldown, skip type=%s\n", type);
-        delivery_log_write(event_id, m33_type, type, seq, reason,
-                           "app_broadcast", "suppressed_cooldown", 0);
+        delivery_log_write(event_id, m33_type, type, seq, reason, "app_broadcast",
+                           "suppressed_cooldown", 0);
         cJSON_Delete(root);
         return;
     }
@@ -387,22 +397,19 @@ static void broadcast_imu_json(const char *json_str) {
              "\"gz\":%d,\"roll\":%d,\"pitch\":%d,\"yaw\":%d}",
              type, message, event_id, m33_type, reason, seq,
              json_long_long(root, "a35_timestamp_ms"), wall_clock_ms(),
-             strcmp(type, "fall_down") == 0 ? "true" : "false",
-             json_int(root, "tick"), json_int(root, "acc_norm"),
-             json_int(root, "horiz_acc"), json_int(root, "z_delta"),
-             json_int(root, "brake_y_delta"), json_int(root, "ax"),
-             json_int(root, "ay"), json_int(root, "az"),
-             json_int(root, "gx"), json_int(root, "gy"),
-             json_int(root, "gz"), json_int(root, "roll"),
-             json_int(root, "pitch"), json_int(root, "yaw"));
+             strcmp(type, "fall_down") == 0 ? "true" : "false", json_int(root, "tick"),
+             json_int(root, "acc_norm"), json_int(root, "horiz_acc"), json_int(root, "z_delta"),
+             json_int(root, "brake_y_delta"), json_int(root, "ax"), json_int(root, "ay"),
+             json_int(root, "az"), json_int(root, "gx"), json_int(root, "gy"), json_int(root, "gz"),
+             json_int(root, "roll"), json_int(root, "pitch"), json_int(root, "yaw"));
 
     printf("[IMU] → APP: %s\n", out);
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("[IMU] socket fail");
-        delivery_log_write(event_id, m33_type, type, seq, reason,
-                           "app_broadcast", "socket_failed", -1);
+        delivery_log_write(event_id, m33_type, type, seq, reason, "app_broadcast", "socket_failed",
+                           -1);
         cJSON_Delete(root);
         return;
     }
@@ -416,18 +423,17 @@ static void broadcast_imu_json(const char *json_str) {
     dest.sin_port = htons(APP_BROADCAST_PORT);
     inet_aton(BROADCAST_IP, &dest.sin_addr);
 
-    ssize_t sent = sendto(sock, out, strlen(out), 0,
-                          (struct sockaddr*)&dest, sizeof(dest));
+    ssize_t sent = sendto(sock, out, strlen(out), 0, (struct sockaddr *)&dest, sizeof(dest));
 
     if (sent > 0) {
         printf("[IMU] ✅ UDP broadcast OK (%ld bytes)\n", (long)sent);
         last_alert_ts[slot] = now;
-        delivery_log_write(event_id, m33_type, type, seq, reason,
-                           "app_broadcast", "sent", (long)sent);
+        delivery_log_write(event_id, m33_type, type, seq, reason, "app_broadcast", "sent",
+                           (long)sent);
     } else {
         perror("[IMU] ❌ UDP broadcast fail");
-        delivery_log_write(event_id, m33_type, type, seq, reason,
-                           "app_broadcast", "send_failed", (long)sent);
+        delivery_log_write(event_id, m33_type, type, seq, reason, "app_broadcast", "send_failed",
+                           (long)sent);
     }
 
     close(sock);
@@ -466,7 +472,8 @@ int main() {
     int nav_sock = udp_init(NAV_UDP_PORT);
     if (nav_sock < 0) {
         fprintf(stderr, "[UDP] udp_init failed, port=%d\n", NAV_UDP_PORT);
-        if (oled_initialized) oled_close();
+        if (oled_initialized)
+            oled_close();
         return -1;
     }
     printf("[UDP] 导航监听端口: %d\n", NAV_UDP_PORT);
@@ -475,7 +482,8 @@ int main() {
     int imu_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (imu_sock < 0) {
         perror("[IMU] socket 创建失败");
-        if (oled_initialized) oled_close();
+        if (oled_initialized)
+            oled_close();
         return -1;
     }
 
@@ -488,10 +496,11 @@ int main() {
     imu_addr.sin_port = htons(IMU_LOCAL_PORT);
     imu_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(imu_sock, (struct sockaddr*)&imu_addr, sizeof(imu_addr)) < 0) {
+    if (bind(imu_sock, (struct sockaddr *)&imu_addr, sizeof(imu_addr)) < 0) {
         perror("[IMU] bind 失败");
         close(imu_sock);
-        if (oled_initialized) oled_close();
+        if (oled_initialized)
+            oled_close();
         return -1;
     }
     printf("[IMU] 本地接收端口: %d (等待脚本转发 JSON 数据)\n", IMU_LOCAL_PORT);
@@ -503,7 +512,7 @@ int main() {
     fds[1].fd = imu_sock;
     fds[1].events = POLLIN;
 
-    char buffer[2048];  // 同时容纳 OLED 简单指令和完整 UTF-8 导航文案
+    char buffer[2048]; // 同时容纳 OLED 简单指令和完整 UTF-8 导航文案
     char imu_buffer[2048];
     time_t last_recv_time = 0;
     int has_signal = 0;
@@ -512,7 +521,8 @@ int main() {
         int ret = poll(fds, 2, 100);
 
         if (ret < 0) {
-            if (keep_running) perror("[POLL] poll error");
+            if (keep_running)
+                perror("[POLL] poll error");
             continue;
         }
 
@@ -547,8 +557,7 @@ int main() {
 
         // ===== 处理 IMU 数据（来自脚本的 JSON） =====
         if (fds[1].revents & POLLIN) {
-            int n = recvfrom(imu_sock, imu_buffer, sizeof(imu_buffer) - 1, 0,
-                             NULL, NULL);
+            int n = recvfrom(imu_sock, imu_buffer, sizeof(imu_buffer) - 1, 0, NULL, NULL);
             if (n > 0) {
                 imu_buffer[n] = '\0';
                 // 检查是否为 JSON 格式
@@ -571,7 +580,9 @@ int main() {
     printf("[MAIN] exiting...\n");
     udp_close(nav_sock);
     close(imu_sock);
-    if (delivery_log != NULL) fclose(delivery_log);
-    if (oled_initialized) oled_close();
+    if (delivery_log != NULL)
+        fclose(delivery_log);
+    if (oled_initialized)
+        oled_close();
     return 0;
 }

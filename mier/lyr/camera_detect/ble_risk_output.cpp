@@ -21,44 +21,46 @@ static BleRiskState g_ble_sent = BLE_RISK_CLEAR;
 static char g_ble_uart[PATH_MAX] = BLE_UART_DEFAULT;
 static unsigned long long g_ble_next_retry_ms;
 
-static unsigned long long monotonic_ms(void)
-{
+static unsigned long long monotonic_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (unsigned long long)ts.tv_sec * 1000ULL +
-           (unsigned long long)ts.tv_nsec / 1000000ULL;
+    return (unsigned long long)ts.tv_sec * 1000ULL + (unsigned long long)ts.tv_nsec / 1000000ULL;
 }
 
-const char *ble_risk_state_name(BleRiskState state)
-{
+const char *ble_risk_state_name(BleRiskState state) {
     switch (state) {
-    case BLE_RISK_LEFT:   return "LEFT";
-    case BLE_RISK_CENTER: return "CENTER";
-    case BLE_RISK_RIGHT:  return "RIGHT";
-    default:              return "CLEAR";
+    case BLE_RISK_LEFT:
+        return "LEFT";
+    case BLE_RISK_CENTER:
+        return "CENTER";
+    case BLE_RISK_RIGHT:
+        return "RIGHT";
+    default:
+        return "CLEAR";
     }
 }
 
-static const char *ble_risk_command(BleRiskState state)
-{
+static const char *ble_risk_command(BleRiskState state) {
     switch (state) {
-    case BLE_RISK_LEFT:   return "RISK LEFT\n";
-    case BLE_RISK_CENTER: return "RISK CENTER\n";
-    case BLE_RISK_RIGHT:  return "RISK RIGHT\n";
-    default:              return "RISK CLEAR\n";
+    case BLE_RISK_LEFT:
+        return "RISK LEFT\n";
+    case BLE_RISK_CENTER:
+        return "RISK CENTER\n";
+    case BLE_RISK_RIGHT:
+        return "RISK RIGHT\n";
+    default:
+        return "RISK CLEAR\n";
     }
 }
 
-static void ble_close(void)
-{
+static void ble_close(void) {
     if (g_ble_fd >= 0) {
         close(g_ble_fd);
         g_ble_fd = -1;
     }
 }
 
-static int ble_open(void)
-{
+static int ble_open(void) {
     struct termios tty;
     unsigned long long now = monotonic_ms();
 
@@ -69,15 +71,13 @@ static int ble_open(void)
 
     g_ble_fd = open(g_ble_uart, O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (g_ble_fd < 0) {
-        fprintf(stderr, "[BLE-LED] Cannot open %s: %s; retrying\n",
-                g_ble_uart, strerror(errno));
+        fprintf(stderr, "[BLE-LED] Cannot open %s: %s; retrying\n", g_ble_uart, strerror(errno));
         g_ble_next_retry_ms = now + BLE_RETRY_MS;
         return -1;
     }
 
     if (tcgetattr(g_ble_fd, &tty) != 0) {
-        fprintf(stderr, "[BLE-LED] tcgetattr(%s) failed: %s\n",
-                g_ble_uart, strerror(errno));
+        fprintf(stderr, "[BLE-LED] tcgetattr(%s) failed: %s\n", g_ble_uart, strerror(errno));
         ble_close();
         g_ble_next_retry_ms = now + BLE_RETRY_MS;
         return -1;
@@ -92,8 +92,7 @@ static int ble_open(void)
     tty.c_cc[VMIN] = 0;
     tty.c_cc[VTIME] = 0;
     if (tcsetattr(g_ble_fd, TCSANOW, &tty) != 0) {
-        fprintf(stderr, "[BLE-LED] tcsetattr(%s) failed: %s\n",
-                g_ble_uart, strerror(errno));
+        fprintf(stderr, "[BLE-LED] tcsetattr(%s) failed: %s\n", g_ble_uart, strerror(errno));
         ble_close();
         g_ble_next_retry_ms = now + BLE_RETRY_MS;
         return -1;
@@ -105,8 +104,7 @@ static int ble_open(void)
     return 0;
 }
 
-static void ble_drain_reply(void)
-{
+static void ble_drain_reply(void) {
     char reply[96];
     ssize_t total = 0;
 
@@ -114,15 +112,13 @@ static void ble_drain_reply(void)
         return;
 
     while (total < (ssize_t)(sizeof(reply) - 1)) {
-        ssize_t count = read(g_ble_fd, reply + total,
-                             sizeof(reply) - 1 - (size_t)total);
+        ssize_t count = read(g_ble_fd, reply + total, sizeof(reply) - 1 - (size_t)total);
         if (count > 0) {
             total += count;
             continue;
         }
         if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            fprintf(stderr, "[BLE-LED] UART read failed: %s\n",
-                    strerror(errno));
+            fprintf(stderr, "[BLE-LED] UART read failed: %s\n", strerror(errno));
             ble_close();
             g_ble_next_retry_ms = monotonic_ms() + BLE_RETRY_MS;
         }
@@ -137,8 +133,7 @@ static void ble_drain_reply(void)
     }
 }
 
-void ble_risk_configure(const char *uart_device, bool enabled)
-{
+void ble_risk_configure(const char *uart_device, bool enabled) {
     g_ble_enabled = enabled;
     if (uart_device != NULL && uart_device[0] != '\0')
         snprintf(g_ble_uart, sizeof(g_ble_uart), "%s", uart_device);
@@ -147,8 +142,7 @@ void ble_risk_configure(const char *uart_device, bool enabled)
         ble_close();
 }
 
-void ble_risk_update(BleRiskState state)
-{
+void ble_risk_update(BleRiskState state) {
     const char *command;
     size_t length;
     ssize_t written;
@@ -175,8 +169,7 @@ void ble_risk_update(BleRiskState state)
     written = write(g_ble_fd, command, length);
     if (written != (ssize_t)length) {
         if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
-            fprintf(stderr, "[BLE-LED] UART write failed: %s\n",
-                    strerror(errno));
+            fprintf(stderr, "[BLE-LED] UART write failed: %s\n", strerror(errno));
         ble_close();
         g_ble_next_retry_ms = monotonic_ms() + BLE_RETRY_MS;
         return;
@@ -185,16 +178,13 @@ void ble_risk_update(BleRiskState state)
     tcdrain(g_ble_fd);
     g_ble_sent = g_ble_desired;
     g_ble_pending = false;
-    printf("[BLE-LED] Collision indication -> %s\n",
-           ble_risk_state_name(g_ble_sent));
+    printf("[BLE-LED] Collision indication -> %s\n", ble_risk_state_name(g_ble_sent));
 }
 
-void ble_risk_shutdown(void)
-{
+void ble_risk_shutdown(void) {
     if (g_ble_enabled && g_ble_fd >= 0) {
         static const char clear_command[] = "RISK CLEAR\n";
-        ssize_t ignored = write(g_ble_fd, clear_command,
-                                sizeof(clear_command) - 1U);
+        ssize_t ignored = write(g_ble_fd, clear_command, sizeof(clear_command) - 1U);
         if (ignored > 0)
             (void)tcdrain(g_ble_fd);
     }

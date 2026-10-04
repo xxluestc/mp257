@@ -29,8 +29,7 @@
  * 流程：打开设备 -> 查询能力 -> 设置格式（优先 MJPEG，回退 YUYV）
  *       -> 设置帧率 -> 申请 mmap 缓冲 -> 查询并映射每个缓冲
  */
-int camera_open(camera_t *cam, const char *device, int width, int height)
-{
+int camera_open(camera_t *cam, const char *device, int width, int height) {
     memset(cam, 0, sizeof(*cam));
     cam->fd = -1;
 
@@ -89,15 +88,13 @@ int camera_open(camera_t *cam, const char *device, int width, int height)
     cam->buf_size = fmt.fmt.pix.sizeimage;
 
     uint32_t fourcc = cam->pixelformat;
-    const char *fmt_name = (cam->pixelformat == V4L2_PIX_FMT_MJPEG) ? "MJPEG" :
-                           (cam->pixelformat == V4L2_PIX_FMT_YUYV) ? "YUYV" : "unknown";
+    const char *fmt_name = (cam->pixelformat == V4L2_PIX_FMT_MJPEG)  ? "MJPEG"
+                           : (cam->pixelformat == V4L2_PIX_FMT_YUYV) ? "YUYV"
+                                                                     : "unknown";
     printf("Camera: %s, %dx%d, fmt=%s fourcc=%c%c%c%c, bytesperline=%u, sizeimage=%u, fps=%u/%u\n",
-           device, cam->width, cam->height, fmt_name,
-           (fourcc >> 0) & 0xFF, (fourcc >> 8) & 0xFF,
-           (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF,
-           fmt.fmt.pix.bytesperline, cam->buf_size,
-           parm.parm.capture.timeperframe.denominator,
-           parm.parm.capture.timeperframe.numerator);
+           device, cam->width, cam->height, fmt_name, (fourcc >> 0) & 0xFF, (fourcc >> 8) & 0xFF,
+           (fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF, fmt.fmt.pix.bytesperline, cam->buf_size,
+           parm.parm.capture.timeperframe.denominator, parm.parm.capture.timeperframe.numerator);
 
     /* request buffers */
     struct v4l2_requestbuffers req;
@@ -127,9 +124,8 @@ int camera_open(camera_t *cam, const char *device, int width, int height)
             goto fail;
         }
 
-        cam->buffers[i] = mmap(NULL, buf.length,
-                               PROT_READ | PROT_WRITE, MAP_SHARED,
-                               cam->fd, buf.m.offset);
+        cam->buffers[i] =
+            mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, cam->fd, buf.m.offset);
         if (cam->buffers[i] == MAP_FAILED) {
             perror("mmap");
             goto fail;
@@ -151,8 +147,7 @@ fail:
  *
  * 将申请到的所有缓冲入队（VIDIOC_QBUF），然后打开视频流（VIDIOC_STREAMON）。
  */
-int camera_start(camera_t *cam)
-{
+int camera_start(camera_t *cam) {
     for (int i = 0; i < cam->buf_count; i++) {
         struct v4l2_buffer buf;
         memset(&buf, 0, sizeof(buf));
@@ -186,8 +181,7 @@ int camera_start(camera_t *cam)
  * @note out_buf 指向的内存属于 mmap 缓冲，调用者无需释放；取出后应尽快处理，
  *       因为下一帧会覆盖同一缓冲。
  */
-int camera_capture(camera_t *cam, uint8_t **out_buf, unsigned int *out_len)
-{
+int camera_capture(camera_t *cam, uint8_t **out_buf, unsigned int *out_len) {
     struct v4l2_buffer buf;
     memset(&buf, 0, sizeof(buf));
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -217,8 +211,7 @@ int camera_capture(camera_t *cam, uint8_t **out_buf, unsigned int *out_len)
  * 调用 VIDIOC_STREAMOFF 停止采集，但保留 mmap 缓冲和设备描述符。
  * 如需彻底释放资源，需继续调用 camera_close()。
  */
-void camera_stop(camera_t *cam)
-{
+void camera_stop(camera_t *cam) {
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ioctl(cam->fd, VIDIOC_STREAMOFF, &type);
 }
@@ -230,8 +223,7 @@ void camera_stop(camera_t *cam)
  * 解除所有 mmap 映射、关闭设备文件描述符、释放缓冲指针数组。
  * 即使 cam->fd 无效也可安全调用。
  */
-void camera_close(camera_t *cam)
-{
+void camera_close(camera_t *cam) {
     if (cam->fd >= 0) {
         for (int i = 0; i < cam->buf_count; i++) {
             if (cam->buffers[i] && cam->buffers[i] != MAP_FAILED) {

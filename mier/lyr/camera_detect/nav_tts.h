@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-#define NAV_UDP_PORT        8888
-#define NAV_TTS_TEXT_MAX    1024
+#define NAV_UDP_PORT 8888
+#define NAV_TTS_TEXT_MAX 1024
 
 /**
  * @brief 启动导航 UDP 接收线程
@@ -46,9 +46,8 @@ void nav_tts_speak(const char *text);
  */
 void nav_tts_speak_danger(const char *text);
 
-
-#define DANGER_TTS_PHASE_PRELOAD  "preload"
-#define DANGER_TTS_PHASE_TRIGGER  "trigger"
+#define DANGER_TTS_PHASE_PRELOAD "preload"
+#define DANGER_TTS_PHASE_TRIGGER "trigger"
 
 /**
  * @brief 异常路况最终文本处理函数。

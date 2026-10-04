@@ -44,15 +44,15 @@
 #include <time.h>
 
 #include "nav_tts.h"
-#include "common.h"   /* hud_project: NavData */
-#include "oled.h"     /* hud_project: OLED 显示 */
+#include "common.h" /* hud_project: NavData */
+#include "oled.h"   /* hud_project: OLED 显示 */
 #include "cJSON.h"
 
-#define NAV_CACHE_DIR       "/xxl/camera_detect/nav_tts_cache"
-#define NAV_GEN_SCRIPT      "/xxl/camera_detect/scripts/gen_nav_tts.sh"
-#define NAV_TMP_DIR         "/tmp"
-#define NAV_APLAY_CMD       "aplay"
-#define NAV_SIGNAL_TIMEOUT  5   /* 导航信号超时时间(s) */
+#define NAV_CACHE_DIR "/xxl/camera_detect/nav_tts_cache"
+#define NAV_GEN_SCRIPT "/xxl/camera_detect/scripts/gen_nav_tts.sh"
+#define NAV_TMP_DIR "/tmp"
+#define NAV_APLAY_CMD "aplay"
+#define NAV_SIGNAL_TIMEOUT 5 /* 导航信号超时时间(s) */
 
 /*
  * 0 = 开发板无网络，禁用所有 edge-tts 在线生成尝试，避免失败日志刷屏
@@ -60,23 +60,22 @@
  */
 #define NAV_ONLINE_TTS_ENABLE 0
 
-static volatile int     g_nav_running = 0;
-static pthread_t        g_nav_tid;
-static pthread_t        g_nav_watchdog_tid;
-static pthread_mutex_t  g_nav_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile int g_nav_running = 0;
+static pthread_t g_nav_tid;
+static pthread_t g_nav_watchdog_tid;
+static pthread_mutex_t g_nav_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static NavData          g_last_nav = {0};
-static volatile int     g_has_nav = 0;
-static volatile time_t  g_last_nav_time = 0;
-static volatile int     g_oled_inited = 0;
-
+static NavData g_last_nav = {0};
+static volatile int g_has_nav = 0;
+static volatile time_t g_last_nav_time = 0;
+static volatile int g_oled_inited = 0;
 
 /*
  * danger_tts 最终文本接口。
  * 默认不播放；队友在主程序中注册骨传导处理函数后，
  * trigger 阶段才会把完整 text 交给该函数。
  */
-static pthread_mutex_t  g_danger_handler_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_danger_handler_mutex = PTHREAD_MUTEX_INITIALIZER;
 static DangerTextHandler g_danger_text_handler = NULL;
 
 /* ---------------- 工具函数 ---------------- */
@@ -86,8 +85,7 @@ static DangerTextHandler g_danger_text_handler = NULL;
  * @param str 输入字符串（UTF-8 导航文本）
  * @return 32 位无符号哈希值
  */
-static unsigned int djb_hash(const char *str)
-{
+static unsigned int djb_hash(const char *str) {
     unsigned int hash = 5381;
     int c;
     while ((c = (unsigned char)*str++) != 0) {
@@ -105,14 +103,13 @@ static unsigned int djb_hash(const char *str)
  * 路径格式：NAV_CACHE_DIR/nav_<hash>_<safe_text>.wav。
  * safe_text 会替换掉文件系统特殊字符并截断到 64 字节，避免文件名过长。
  */
-static void text_to_cache_path(const char *text, char *path, size_t path_size)
-{
+static void text_to_cache_path(const char *text, char *path, size_t path_size) {
     char safe[512];
     int j = 0;
     for (int i = 0; text[i] != '\0' && j < (int)sizeof(safe) - 1; i++) {
         unsigned char c = (unsigned char)text[i];
-        if (c == ' ' || c == '\'' || c == '"' || c == ';' || c == ':' ||
-            c == ',' || c == '.' || c == '!' || c == '?') {
+        if (c == ' ' || c == '\'' || c == '"' || c == ';' || c == ':' || c == ',' || c == '.' ||
+            c == '!' || c == '?') {
             safe[j++] = '_';
         } else if (isalnum(c) || c >= 0x80) {
             safe[j++] = c;
@@ -134,8 +131,7 @@ static void text_to_cache_path(const char *text, char *path, size_t path_size)
  * @brief 确保导航 TTS 缓存目录存在
  * @return 0 成功，-1 失败
  */
-static int ensure_cache_dir(void)
-{
+static int ensure_cache_dir(void) {
     struct stat st;
     if (stat(NAV_CACHE_DIR, &st) == 0 && S_ISDIR(st.st_mode)) {
         return 0;
@@ -149,12 +145,12 @@ static int ensure_cache_dir(void)
 
 /* ---------------- danger_tts 采样收集 ---------------- */
 
-#define DANGER_SAMPLE_LOG   "/xxl/camera_detect/danger_tts_samples.log"
-#define DANGER_SAMPLE_MAX   64
+#define DANGER_SAMPLE_LOG "/xxl/camera_detect/danger_tts_samples.log"
+#define DANGER_SAMPLE_MAX 64
 
 static pthread_mutex_t g_sample_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char g_sample_history[DANGER_SAMPLE_MAX][NAV_TTS_TEXT_MAX];
-static int  g_sample_count = 0;
+static int g_sample_count = 0;
 
 /**
  * @brief 记录手机端发送的 danger_tts 样本（去重），用于确认实际需要哪些 WAV
@@ -163,9 +159,8 @@ static int  g_sample_count = 0;
  * @param text        完整播报文案
  * @param distance    距离（米）
  */
-static void collect_danger_sample(const char *phase, const char *alert_type,
-                                  const char *text, int distance)
-{
+static void collect_danger_sample(const char *phase, const char *alert_type, const char *text,
+                                  int distance) {
     if (!text || !text[0]) {
         return;
     }
@@ -194,8 +189,7 @@ static void collect_danger_sample(const char *phase, const char *alert_type,
         struct tm *tm_info = localtime(&now);
         char ts[32];
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        fprintf(fp, "[%s] phase=%s alert_type=%s distance=%d text=%s\n",
-                ts, phase ? phase : "-",
+        fprintf(fp, "[%s] phase=%s alert_type=%s distance=%d text=%s\n", ts, phase ? phase : "-",
                 alert_type ? alert_type : "-", distance, text);
         fclose(fp);
     }
@@ -213,8 +207,7 @@ static pthread_mutex_t g_audio_mutex = PTHREAD_MUTEX_INITIALIZER;
  * @param err_size 错误缓冲区大小
  * @return aplay 退出码，0 表示成功
  */
-static int play_wav_sync(const char *wav_path, char *errbuf, size_t err_size)
-{
+static int play_wav_sync(const char *wav_path, char *errbuf, size_t err_size) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "%s -q %s 2>/tmp/nav_aplay_err.log", NAV_APLAY_CMD, wav_path);
     int rc = system(cmd);
@@ -236,8 +229,7 @@ static int play_wav_sync(const char *wav_path, char *errbuf, size_t err_size)
  *
  * 在独立线程中串行播放 WAV，避免阻塞 UDP 接收线程。
  */
-static void *aplay_thread(void *arg)
-{
+static void *aplay_thread(void *arg) {
     char *wav_path = (char *)arg;
 
     /* 与自身/其他导航语音串行播放，避免多个 aplay 抢设备 */
@@ -246,8 +238,8 @@ static void *aplay_thread(void *arg)
     char errbuf[512] = {0};
     int rc = play_wav_sync(wav_path, errbuf, sizeof(errbuf));
     if (rc != 0) {
-        fprintf(stderr, "[系统] [NAV] aplay 播放失败 (rc=%d): %s | %s\n",
-                rc, wav_path, errbuf[0] ? errbuf : "no error output");
+        fprintf(stderr, "[系统] [NAV] aplay 播放失败 (rc=%d): %s | %s\n", rc, wav_path,
+                errbuf[0] ? errbuf : "no error output");
     }
 
     pthread_mutex_unlock(&g_audio_mutex);
@@ -261,8 +253,7 @@ static void *aplay_thread(void *arg)
  *
  * 创建 detached 线程在后台播放，调用者立即返回继续处理 UDP 消息。
  */
-static void play_wav_async(const char *wav_path)
-{
+static void play_wav_async(const char *wav_path) {
     char *path_copy = strdup(wav_path);
     if (!path_copy) {
         fprintf(stderr, "[系统] [NAV] strdup failed\n");
@@ -281,8 +272,7 @@ static void play_wav_async(const char *wav_path)
     pthread_attr_destroy(&attr);
 }
 
-static int generate_tts_wav(const char *text, const char *output_path)
-{
+static int generate_tts_wav(const char *text, const char *output_path) {
     char cmd[2048];
 
     /* 开发板无网络时直接返回，不尝试在线生成 */
@@ -306,8 +296,8 @@ static int generate_tts_wav(const char *text, const char *output_path)
 
     /* 优先使用项目脚本 */
     if (access(NAV_GEN_SCRIPT, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd), "%s '%s' '%s' >/dev/null 2>&1",
-                 NAV_GEN_SCRIPT, text, output_path);
+        snprintf(cmd, sizeof(cmd), "%s '%s' '%s' >/dev/null 2>&1", NAV_GEN_SCRIPT, text,
+                 output_path);
         if (system(cmd) == 0) {
             return 0;
         }
@@ -317,11 +307,12 @@ static int generate_tts_wav(const char *text, const char *output_path)
     char tmp_mp3[256];
     snprintf(tmp_mp3, sizeof(tmp_mp3), "%s/nav_tts_%d.mp3", NAV_TMP_DIR, (int)getpid());
 
-    snprintf(cmd, sizeof(cmd),
-             "edge-tts --voice zh-CN-XiaoxiaoNeural --text '%s' --write-media %s >/dev/null 2>&1 && "
-             "ffmpeg -y -i %s -ar 48000 -ac 2 -sample_fmt s16 %s >/dev/null 2>&1 && "
-             "rm -f %s",
-             text, tmp_mp3, tmp_mp3, output_path, tmp_mp3);
+    snprintf(
+        cmd, sizeof(cmd),
+        "edge-tts --voice zh-CN-XiaoxiaoNeural --text '%s' --write-media %s >/dev/null 2>&1 && "
+        "ffmpeg -y -i %s -ar 48000 -ac 2 -sample_fmt s16 %s >/dev/null 2>&1 && "
+        "rm -f %s",
+        text, tmp_mp3, tmp_mp3, output_path, tmp_mp3);
 
     int rc = system(cmd);
     if (rc != 0) {
@@ -337,13 +328,13 @@ static const struct {
     const char *keyword;
     const char *wav;
 } g_base_hints[] = {
-    {"掉头",          "base_掉头.wav"},
-    {"左转",          "base_左转.wav"},
-    {"右转",          "base_右转.wav"},
-    {"直行",          "base_直行.wav"},
-    {"到达目的地",    "base_到达目的地.wav"},
-    {"到达",          "base_到达目的地.wav"},
-    {"测速",          "base_前方有测速.wav"},
+    {"掉头", "base_掉头.wav"},
+    {"左转", "base_左转.wav"},
+    {"右转", "base_右转.wav"},
+    {"直行", "base_直行.wav"},
+    {"到达目的地", "base_到达目的地.wav"},
+    {"到达", "base_到达目的地.wav"},
+    {"测速", "base_前方有测速.wav"},
 };
 
 /**
@@ -353,8 +344,7 @@ static const struct {
  * 根据文本中的关键词（左转/右转/掉头等）匹配预录 WAV；
  * 无匹配时播放默认提示 "请查看屏幕导航"。
  */
-static void play_base_hint(const char *text)
-{
+static void play_base_hint(const char *text) {
     if (!text || !text[0]) {
         return;
     }
@@ -387,10 +377,10 @@ static void play_base_hint(const char *text)
 static const struct {
     const char *keyword;
     const char *wav;
-    const char *display;   /* 仅用于日志打印 */
+    const char *display; /* 仅用于日志打印 */
 } g_danger_hints[] = {
-    {"障碍物",    "danger_障碍物.wav",    "前方路面有障碍物，请注意避让"},
-    {"施工",      "danger_施工.wav",      "前方施工路段，请减速慢行"},
+    {"障碍物", "danger_障碍物.wav", "前方路面有障碍物，请注意避让"},
+    {"施工", "danger_施工.wav", "前方施工路段，请减速慢行"},
 };
 
 #define DANGER_COOLDOWN 8
@@ -402,8 +392,7 @@ static time_t s_last_danger_time_by_hint[sizeof(g_danger_hints) / sizeof(g_dange
  * @brief 判断文本是否能匹配到本地异常路况固定提示音
  * @return 1 表示有对应本地文件，0 表示无
  */
-static int danger_hint_exists(const char *text)
-{
+static int danger_hint_exists(const char *text) {
     if (!text || !text[0]) {
         return 0;
     }
@@ -425,8 +414,7 @@ static int danger_hint_exists(const char *text)
  * @brief 按关键词匹配并播放本地异常路况固定提示音
  * @return 1 表示成功触发播放，0 表示未播放（冷却中或无匹配文件）
  */
-static int play_danger_hint(const char *text)
-{
+static int play_danger_hint(const char *text) {
     if (!text || !text[0]) {
         return 0;
     }
@@ -440,8 +428,8 @@ static int play_danger_hint(const char *text)
             snprintf(path, sizeof(path), "%s/%s", NAV_CACHE_DIR, g_danger_hints[i].wav);
             if (access(path, F_OK) == 0) {
                 if ((now - s_last_danger_time_by_hint[i]) < DANGER_COOLDOWN) {
-                    printf("[系统] [DANGER_TTS] 同类提示冷却中 (%ds)，跳过: %s\n",
-                           DANGER_COOLDOWN, g_danger_hints[i].keyword);
+                    printf("[系统] [DANGER_TTS] 同类提示冷却中 (%ds)，跳过: %s\n", DANGER_COOLDOWN,
+                           g_danger_hints[i].keyword);
                     return 0;
                 }
                 printf("[系统] [DANGER_TTS] 播放本地固定提示: %s -> %s\n",
@@ -461,18 +449,15 @@ static int play_danger_hint(const char *text)
 /* 导航语音播报冷却控制：避免同一转向在近距离重复播报 */
 #define NAV_SPEAK_COOLDOWN 15
 
-static int is_turn_action(int turn)
-{
-    return (turn == TURN_LEFT || turn == TURN_RIGHT ||
-            turn == TURN_SLIGHT_LEFT || turn == TURN_SLIGHT_RIGHT ||
-            turn == TURN_UTURN_LEFT || turn == TURN_UTURN_RIGHT ||
+static int is_turn_action(int turn) {
+    return (turn == TURN_LEFT || turn == TURN_RIGHT || turn == TURN_SLIGHT_LEFT ||
+            turn == TURN_SLIGHT_RIGHT || turn == TURN_UTURN_LEFT || turn == TURN_UTURN_RIGHT ||
             turn == TURN_DESTINATION);
 }
 
 /* 结构化导航数据本地播报：根据 turn + distance 直接播放预录模板，无需网络。
  * 为了和 OLED 显示对齐并避免乱播，只在距离 <= 50m 且需要转向/到达时播报一次。 */
-static void nav_tts_speak_navdata(const NavData *nav)
-{
+static void nav_tts_speak_navdata(const NavData *nav) {
     if (!nav) {
         return;
     }
@@ -490,35 +475,58 @@ static void nav_tts_speak_navdata(const NavData *nav)
     time_t now = time(NULL);
 
     /* 同一转向在冷却时间内不重复播报 */
-    if (nav->turn == s_last_speak_turn &&
-        (now - s_last_speak_time) < NAV_SPEAK_COOLDOWN) {
+    if (nav->turn == s_last_speak_turn && (now - s_last_speak_time) < NAV_SPEAK_COOLDOWN) {
         return;
     }
 
     const char *dir = "直行";
     switch (nav->turn) {
-        case TURN_LEFT:        dir = "左转"; break;
-        case TURN_RIGHT:       dir = "右转"; break;
-        case TURN_SLIGHT_LEFT: dir = "左转"; break;
-        case TURN_SLIGHT_RIGHT:dir = "右转"; break;
-        case TURN_UTURN_LEFT:
-        case TURN_UTURN_RIGHT: dir = "掉头"; break;
-        case TURN_DESTINATION: dir = "到达目的地"; break;
-        default:               dir = "直行"; break;
+    case TURN_LEFT:
+        dir = "左转";
+        break;
+    case TURN_RIGHT:
+        dir = "右转";
+        break;
+    case TURN_SLIGHT_LEFT:
+        dir = "左转";
+        break;
+    case TURN_SLIGHT_RIGHT:
+        dir = "右转";
+        break;
+    case TURN_UTURN_LEFT:
+    case TURN_UTURN_RIGHT:
+        dir = "掉头";
+        break;
+    case TURN_DESTINATION:
+        dir = "到达目的地";
+        break;
+    default:
+        dir = "直行";
+        break;
     }
 
     const char *dist_label;
     int d = nav->distance;
-    if (d < 75)       dist_label = "50米";
-    else if (d < 150) dist_label = "100米";
-    else if (d < 250) dist_label = "200米";
-    else if (d < 400) dist_label = "300米";
-    else if (d < 650) dist_label = "500米";
-    else if (d < 900) dist_label = "800米";
-    else if (d < 1500) dist_label = "1公里";
-    else if (d < 2500) dist_label = "2公里";
-    else if (d < 4000) dist_label = "3公里";
-    else              dist_label = "5公里";
+    if (d < 75)
+        dist_label = "50米";
+    else if (d < 150)
+        dist_label = "100米";
+    else if (d < 250)
+        dist_label = "200米";
+    else if (d < 400)
+        dist_label = "300米";
+    else if (d < 650)
+        dist_label = "500米";
+    else if (d < 900)
+        dist_label = "800米";
+    else if (d < 1500)
+        dist_label = "1公里";
+    else if (d < 2500)
+        dist_label = "2公里";
+    else if (d < 4000)
+        dist_label = "3公里";
+    else
+        dist_label = "5公里";
 
     char text[128];
     char path[1024];
@@ -530,8 +538,8 @@ static void nav_tts_speak_navdata(const NavData *nav)
     snprintf(path, sizeof(path), "%s/nav_%s.wav", NAV_CACHE_DIR, text);
 
     if (access(path, F_OK) == 0) {
-        printf("[系统] [NAV] 结构化播报: %s (turn=%d distance=%dm)\n",
-               text, nav->turn, nav->distance);
+        printf("[系统] [NAV] 结构化播报: %s (turn=%d distance=%dm)\n", text, nav->turn,
+               nav->distance);
         play_wav_async(path);
         s_last_speak_time = now;
         s_last_speak_turn = nav->turn;
@@ -546,11 +554,10 @@ static void nav_tts_speak_navdata(const NavData *nav)
 typedef struct {
     char text[NAV_TTS_TEXT_MAX];
     char cache_path[1024];
-    int is_danger;   /* 1=异常路况，生成失败时回退到本地固定提示 */
+    int is_danger; /* 1=异常路况，生成失败时回退到本地固定提示 */
 } nav_tts_task_t;
 
-static void *nav_tts_generate_thread(void *arg)
-{
+static void *nav_tts_generate_thread(void *arg) {
     nav_tts_task_t *task = (nav_tts_task_t *)arg;
 
     /* 在线生成已禁用，直接失败，不再打印无网络错误日志 */
@@ -559,8 +566,7 @@ static void *nav_tts_generate_thread(void *arg)
         return NULL;
     }
 
-    printf("[系统] [%s] 正在生成 TTS: %s\n",
-           task->is_danger ? "DANGER_TTS" : "NAV", task->text);
+    printf("[系统] [%s] 正在生成 TTS: %s\n", task->is_danger ? "DANGER_TTS" : "NAV", task->text);
 
     if (generate_tts_wav(task->text, task->cache_path) == 0) {
         play_wav_async(task->cache_path);
@@ -578,8 +584,7 @@ static void *nav_tts_generate_thread(void *arg)
 
 /* ---------------- 公共接口 ---------------- */
 
-void nav_tts_set_danger_text_handler(DangerTextHandler handler)
-{
+void nav_tts_set_danger_text_handler(DangerTextHandler handler) {
     pthread_mutex_lock(&g_danger_handler_mutex);
     g_danger_text_handler = handler;
     pthread_mutex_unlock(&g_danger_handler_mutex);
@@ -592,8 +597,7 @@ void nav_tts_set_danger_text_handler(DangerTextHandler handler)
  * 只在 trigger 阶段调用。
  * 复制函数指针后立即释放锁，避免上层处理阻塞注册操作。
  */
-static void dispatch_danger_text(const char *text)
-{
+static void dispatch_danger_text(const char *text) {
     DangerTextHandler handler = NULL;
 
     if (text == NULL || text[0] == '\0') {
@@ -608,13 +612,11 @@ static void dispatch_danger_text(const char *text)
         printf("[系统] [DANGER_TTS][接口] 提交最终文本: %s\n", text);
         handler(text);
     } else {
-        printf("[系统] [DANGER_TTS][接口] 文本已解析，等待队友接入骨传导: %s\n",
-               text);
+        printf("[系统] [DANGER_TTS][接口] 文本已解析，等待队友接入骨传导: %s\n", text);
     }
 }
 
-void nav_tts_speak(const char *text)
-{
+void nav_tts_speak(const char *text) {
     if (text == NULL || text[0] == '\0') {
         return;
     }
@@ -680,8 +682,7 @@ void nav_tts_speak(const char *text)
  * 开发板无网络，优先按关键词播放本地固定提示音；
  * 只有本地未命中（无关键词、无默认文件）时，才尝试完整 TTS 缓存或在线生成。
  */
-void nav_tts_speak_danger(const char *text)
-{
+void nav_tts_speak_danger(const char *text) {
     if (text == NULL || text[0] == '\0') {
         return;
     }
@@ -752,8 +753,7 @@ void nav_tts_speak_danger(const char *text)
 
 /* ---------------- OLED 导航显示 ---------------- */
 
-static void nav_update_oled(const NavData *nav)
-{
+static void nav_update_oled(const NavData *nav) {
     if (!g_oled_inited) {
         return;
     }
@@ -769,8 +769,7 @@ static void nav_update_oled(const NavData *nav)
     pthread_mutex_unlock(&g_nav_mutex);
 }
 
-static void *nav_watchdog_thread(void *arg)
-{
+static void *nav_watchdog_thread(void *arg) {
     (void)arg;
     while (g_nav_running) {
         sleep(1);
@@ -795,8 +794,7 @@ static void *nav_watchdog_thread(void *arg)
  * @param nav      输出解析后的转向/距离数据
  * @return 0 成功，-1 失败
  */
-static int parse_navi_json(const char *json_str, NavData *nav)
-{
+static int parse_navi_json(const char *json_str, NavData *nav) {
     cJSON *root = cJSON_Parse(json_str);
     if (root == NULL) {
         return -1;
@@ -807,8 +805,8 @@ static int parse_navi_json(const char *json_str, NavData *nav)
     cJSON *dist_obj = cJSON_GetObjectItem(root, "distance");
 
     if (!cJSON_IsString(type_obj) || type_obj->valuestring == NULL ||
-        strcmp(type_obj->valuestring, "navi") != 0 ||
-        !cJSON_IsNumber(turn_obj) || !cJSON_IsNumber(dist_obj)) {
+        strcmp(type_obj->valuestring, "navi") != 0 || !cJSON_IsNumber(turn_obj) ||
+        !cJSON_IsNumber(dist_obj)) {
         cJSON_Delete(root);
         return -1;
     }
@@ -826,8 +824,7 @@ static int parse_navi_json(const char *json_str, NavData *nav)
  * @param text_size 输出缓冲区大小
  * @return 0 成功，-1 失败
  */
-static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text_size)
-{
+static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text_size) {
     cJSON *root = cJSON_Parse(json_str);
     if (root == NULL) {
         return -1;
@@ -837,9 +834,8 @@ static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text
     cJSON *text_obj = cJSON_GetObjectItem(root, "text");
 
     if (!cJSON_IsString(type_obj) || type_obj->valuestring == NULL ||
-        strcmp(type_obj->valuestring, "navi_tts") != 0 ||
-        !cJSON_IsString(text_obj) || text_obj->valuestring == NULL ||
-        text_obj->valuestring[0] == '\0') {
+        strcmp(type_obj->valuestring, "navi_tts") != 0 || !cJSON_IsString(text_obj) ||
+        text_obj->valuestring == NULL || text_obj->valuestring[0] == '\0') {
         cJSON_Delete(root);
         return -1;
     }
@@ -863,27 +859,23 @@ static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text
  *
  * 兼容旧版数据：若缺少 phase 字段，则按 trigger 处理。
  */
-static int parse_danger_tts_json(const char *json_str,
-                                 char *phase_out, size_t phase_size,
-                                 char *alert_type_out, size_t alert_type_size,
-                                 char *text_out, size_t text_size,
-                                 int *distance_out)
-{
+static int parse_danger_tts_json(const char *json_str, char *phase_out, size_t phase_size,
+                                 char *alert_type_out, size_t alert_type_size, char *text_out,
+                                 size_t text_size, int *distance_out) {
     cJSON *root = cJSON_Parse(json_str);
     if (root == NULL) {
         return -1;
     }
 
-    cJSON *type_obj       = cJSON_GetObjectItem(root, "type");
-    cJSON *phase_obj      = cJSON_GetObjectItem(root, "phase");
+    cJSON *type_obj = cJSON_GetObjectItem(root, "type");
+    cJSON *phase_obj = cJSON_GetObjectItem(root, "phase");
     cJSON *alert_type_obj = cJSON_GetObjectItem(root, "alert_type");
-    cJSON *text_obj       = cJSON_GetObjectItem(root, "text");
-    cJSON *distance_obj   = cJSON_GetObjectItem(root, "distance");
+    cJSON *text_obj = cJSON_GetObjectItem(root, "text");
+    cJSON *distance_obj = cJSON_GetObjectItem(root, "distance");
 
     if (!cJSON_IsString(type_obj) || type_obj->valuestring == NULL ||
-        strcmp(type_obj->valuestring, "danger_tts") != 0 ||
-        !cJSON_IsString(text_obj) || text_obj->valuestring == NULL ||
-        text_obj->valuestring[0] == '\0') {
+        strcmp(type_obj->valuestring, "danger_tts") != 0 || !cJSON_IsString(text_obj) ||
+        text_obj->valuestring == NULL || text_obj->valuestring[0] == '\0') {
         cJSON_Delete(root);
         return -1;
     }
@@ -924,15 +916,14 @@ static int parse_danger_tts_json(const char *json_str,
  * @param type_size 输出缓冲区大小
  * @return 0 成功，-1 失败
  */
-static int parse_alert_json(const char *json_str, char *alert_type, size_t type_size)
-{
+static int parse_alert_json(const char *json_str, char *alert_type, size_t type_size) {
     cJSON *root = cJSON_Parse(json_str);
     if (root == NULL) {
         return -1;
     }
 
     cJSON *type_obj = cJSON_GetObjectItem(root, "type");
-    cJSON *msg_obj  = cJSON_GetObjectItem(root, "message");
+    cJSON *msg_obj = cJSON_GetObjectItem(root, "message");
 
     if (!cJSON_IsString(type_obj) || type_obj->valuestring == NULL) {
         cJSON_Delete(root);
@@ -940,8 +931,8 @@ static int parse_alert_json(const char *json_str, char *alert_type, size_t type_
     }
 
     const char *t = type_obj->valuestring;
-    if (strcmp(t, "alert") != 0 && strcmp(t, "warning") != 0 &&
-        strcmp(t, "front_alert") != 0 && strcmp(t, "collision") != 0) {
+    if (strcmp(t, "alert") != 0 && strcmp(t, "warning") != 0 && strcmp(t, "front_alert") != 0 &&
+        strcmp(t, "collision") != 0) {
         cJSON_Delete(root);
         return -1;
     }
@@ -957,8 +948,7 @@ static int parse_alert_json(const char *json_str, char *alert_type, size_t type_
 }
 
 /* 预警播报：固定音频，冷却 10s 避免连播 */
-static void nav_tts_alert(const char *alert_type)
-{
+static void nav_tts_alert(const char *alert_type) {
     (void)alert_type;
 
     static time_t s_last_alert_time = 0;
@@ -990,8 +980,7 @@ static void nav_tts_alert(const char *alert_type)
  * 绑定 UDP 8888 端口，循环接收 APP 下发的 JSON 消息，
  * 按 type 分发到 navi / navi_tts / danger_tts / alert 处理逻辑。
  */
-static void *nav_recv_thread(void *arg)
-{
+static void *nav_recv_thread(void *arg) {
     (void)arg;
 
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1018,7 +1007,7 @@ static void *nav_recv_thread(void *arg)
     printf("[系统] [NAV] UDP receiver ready on port %d\n", NAV_UDP_PORT);
 
     char buffer[2048];
-    struct pollfd fds = { .fd = sock, .events = POLLIN };
+    struct pollfd fds = {.fd = sock, .events = POLLIN};
 
     while (g_nav_running) {
         int ret = poll(&fds, 1, 100);
@@ -1043,21 +1032,15 @@ static void *nav_recv_thread(void *arg)
                 nav_tts_speak_navdata(&nav);
             } else if (parse_navi_tts_json(buffer, text, sizeof(text)) == 0) {
                 nav_tts_speak(text);
-            } else if (parse_danger_tts_json(buffer,
-                                             danger_phase, sizeof(danger_phase),
-                                             danger_alert_type, sizeof(danger_alert_type),
-                                             text, sizeof(text),
-                                             &danger_distance) == 0) {
+            } else if (parse_danger_tts_json(buffer, danger_phase, sizeof(danger_phase),
+                                             danger_alert_type, sizeof(danger_alert_type), text,
+                                             sizeof(text), &danger_distance) == 0) {
                 printf("[系统] [DANGER_TTS][解析成功] "
                        "phase=%s alert_type=%s distance=%d text=%s\n",
-                       danger_phase,
-                       danger_alert_type,
-                       danger_distance,
-                       text);
+                       danger_phase, danger_alert_type, danger_distance, text);
 
                 /* 记录手机实际发送的异常文案，用于确认需要哪些 WAV */
-                collect_danger_sample(danger_phase, danger_alert_type,
-                                      text, danger_distance);
+                collect_danger_sample(danger_phase, danger_alert_type, text, danger_distance);
 
                 if (strcmp(danger_phase, DANGER_TTS_PHASE_PRELOAD) == 0) {
                     /* 80米预加载阶段：确认收到即可，不交给骨传导。 */
@@ -1067,8 +1050,7 @@ static void *nav_recv_thread(void *arg)
                     printf("[系统] [DANGER_TTS][TRIGGER] 最终文本已就绪\n");
                     dispatch_danger_text(text);
                 } else {
-                    printf("[系统] [DANGER_TTS][忽略] 未知 phase=%s\n",
-                           danger_phase);
+                    printf("[系统] [DANGER_TTS][忽略] 未知 phase=%s\n", danger_phase);
                 }
             } else if (parse_alert_json(buffer, text, sizeof(text)) == 0) {
                 printf("[系统] [NAV] 收到预警: %s\n", text);
@@ -1090,8 +1072,7 @@ static void *nav_recv_thread(void *arg)
  *
  * 同时初始化 OLED、设置 stdout 无缓冲，确保日志实时可见。
  */
-int nav_tts_start(void)
-{
+int nav_tts_start(void) {
     if (g_nav_running) {
         return 0;
     }
@@ -1122,8 +1103,7 @@ int nav_tts_start(void)
 /**
  * @brief 停止导航接收线程并关闭 OLED
  */
-void nav_tts_stop(void)
-{
+void nav_tts_stop(void) {
     if (!g_nav_running) {
         return;
     }

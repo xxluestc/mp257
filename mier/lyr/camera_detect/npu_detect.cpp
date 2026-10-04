@@ -16,12 +16,10 @@
 #include <algorithm>
 #include <sys/time.h>
 
-NpuDetector::NpuDetector(const char *model_path, const char *labels_path,
-                         float confidence_thresh, float iou_thresh)
-    : confidence_thresh_(confidence_thresh), iou_thresh_(iou_thresh),
-      input_mean_(127.5f), input_std_(127.5f),
-      input_tensor_u8_(nullptr), input_tensor_f32_(nullptr)
-{
+NpuDetector::NpuDetector(const char *model_path, const char *labels_path, float confidence_thresh,
+                         float iou_thresh)
+    : confidence_thresh_(confidence_thresh), iou_thresh_(iou_thresh), input_mean_(127.5f),
+      input_std_(127.5f), input_tensor_u8_(nullptr), input_tensor_f32_(nullptr) {
     /* Load model */
     printf("[NPU] Loading model: %s\n", model_path);
     model_.reset(new stai_mpu_network(model_path, true));
@@ -31,15 +29,14 @@ NpuDetector::NpuDetector(const char *model_path, const char *labels_path,
 
     /* Get input shape */
     std::vector<int> shape = input_infos[0].get_shape();
-    input_width_  = shape[1];
+    input_width_ = shape[1];
     input_height_ = shape[2];
     input_channels_ = shape[3];
     input_size_bytes_ = input_width_ * input_height_ * input_channels_;
 
-    printf("[NPU] Input: %dx%dx%d (dtype=%d), size=%d bytes, %d outputs\n",
-           input_width_, input_height_, input_channels_,
-           (int)input_infos[0].get_dtype(),
-           input_size_bytes_, (int)output_infos.size());
+    printf("[NPU] Input: %dx%dx%d (dtype=%d), size=%d bytes, %d outputs\n", input_width_,
+           input_height_, input_channels_, (int)input_infos[0].get_dtype(), input_size_bytes_,
+           (int)output_infos.size());
 
     /* Allocate input buffers */
     input_tensor_u8_ = new uint8_t[input_size_bytes_];
@@ -55,8 +52,7 @@ NpuDetector::NpuDetector(const char *model_path, const char *labels_path,
 /**
  * @brief 释放输入张量内存
  */
-NpuDetector::~NpuDetector()
-{
+NpuDetector::~NpuDetector() {
     delete[] input_tensor_u8_;
     delete[] input_tensor_f32_;
 }
@@ -66,8 +62,7 @@ NpuDetector::~NpuDetector()
  * @param filename 标签文件路径，每行一个类别名
  * @return 0 成功，-1 失败
  */
-int NpuDetector::load_labels(const char *filename)
-{
+int NpuDetector::load_labels(const char *filename) {
     std::ifstream file(filename);
     if (!file) {
         fprintf(stderr, "[NPU] Cannot open labels file: %s\n", filename);
@@ -86,8 +81,7 @@ int NpuDetector::load_labels(const char *filename)
  * @param class_index 模型输出的类别索引
  * @return 对应标签名；索引越界时返回 "unknown"
  */
-const std::string& NpuDetector::get_label(int class_index) const
-{
+const std::string &NpuDetector::get_label(int class_index) const {
     static std::string unknown = "unknown";
     if (class_index >= 0 && (size_t)class_index < labels_.size())
         return labels_[class_index];
@@ -102,8 +96,7 @@ const std::string& NpuDetector::get_label(int class_index) const
  * 流程：复制图像 -> 根据模型输入类型做归一化/量化 -> NPU 推理 ->
  *       SSD MobileNet V2 后处理（分数过滤、框解码、NMS）。
  */
-frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
-{
+frame_results_t NpuDetector::detect(const uint8_t *rgb_data) {
     frame_results_t results;
     results.inference_time_ms = 0.0f;
 
@@ -117,9 +110,9 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
         for (int i = 0; i < input_size_bytes_; i++) {
             input_tensor_f32_[i] = (input_tensor_u8_[i] - input_mean_) / input_std_;
         }
-        model_->set_input(0, (const void*)input_tensor_f32_);
+        model_->set_input(0, (const void *)input_tensor_f32_);
     } else {
-        model_->set_input(0, (const void*)input_tensor_u8_);
+        model_->set_input(0, (const void *)input_tensor_u8_);
     }
 
     /* Run inference */
@@ -127,8 +120,8 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
     gettimeofday(&start, nullptr);
     model_->run();
     gettimeofday(&end, nullptr);
-    results.inference_time_ms = (end.tv_sec - start.tv_sec) * 1000.0f +
-                                (end.tv_usec - start.tv_usec) / 1000.0f;
+    results.inference_time_ms =
+        (end.tv_sec - start.tv_sec) * 1000.0f + (end.tv_usec - start.tv_usec) / 1000.0f;
 
     /* --- SSD MobileNet V2 post-processing --- */
     std::vector<stai_mpu_tensor> output_infos = model_->get_output_infos();
@@ -136,14 +129,15 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
     int nboxes = output_shape_0[1];
     int nclasses = output_shape_0[2];
 
-    float *class_pred = static_cast<float*>(model_->get_output(0));
-    float *box_encoded = static_cast<float*>(model_->get_output(1));
-    float *anchors = static_cast<float*>(model_->get_output(2));
+    float *class_pred = static_cast<float *>(model_->get_output(0));
+    float *box_encoded = static_cast<float *>(model_->get_output(1));
+    float *anchors = static_cast<float *>(model_->get_output(2));
 
     int ncoords = output_infos[1].get_shape()[2];
 
     /* Filter by score */
-    std::vector<int> filtered_idx = filter_by_score(class_pred, nboxes, nclasses, confidence_thresh_);
+    std::vector<int> filtered_idx =
+        filter_by_score(class_pred, nboxes, nclasses, confidence_thresh_);
 
     /* Build filtered vectors */
     std::vector<float> filtered_boxes(filtered_idx.size() * ncoords);
@@ -154,7 +148,8 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
         int row = filtered_idx[i];
         memcpy(&filtered_boxes[i * ncoords], &box_encoded[row * ncoords], ncoords * sizeof(float));
         memcpy(&filtered_anchors[i * ncoords], &anchors[row * ncoords], ncoords * sizeof(float));
-        memcpy(&filtered_scores[i * nclasses], &class_pred[row * nclasses], nclasses * sizeof(float));
+        memcpy(&filtered_scores[i * nclasses], &class_pred[row * nclasses],
+               nclasses * sizeof(float));
     }
 
     /* Decode */
@@ -190,8 +185,8 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data)
  *
  * 跳过背景类（索引 0），只要某个前景类分数超过阈值即保留该锚框。
  */
-std::vector<int> NpuDetector::filter_by_score(float *predictions, int rows, int cols, float threshold)
-{
+std::vector<int> NpuDetector::filter_by_score(float *predictions, int rows, int cols,
+                                              float threshold) {
     std::vector<int> filtered;
     for (int i = 0; i < rows; i++) {
         for (int j = 1; j < cols; j++) {
@@ -212,8 +207,8 @@ std::vector<int> NpuDetector::filter_by_score(float *predictions, int rows, int 
  *
  * 解码公式：decoded = encoded * anchor_size + anchor_min
  */
-std::vector<float> NpuDetector::bb_decoding(const std::vector<float> &encoded, const std::vector<float> &anchors)
-{
+std::vector<float> NpuDetector::bb_decoding(const std::vector<float> &encoded,
+                                            const std::vector<float> &anchors) {
     std::vector<float> decoded(encoded.size());
     int n = encoded.size() / 4;
     for (int i = 0; i < n; i++) {
@@ -223,7 +218,7 @@ std::vector<float> NpuDetector::bb_decoding(const std::vector<float> &encoded, c
         float bx2 = encoded[i * 4 + 2], by2 = encoded[i * 4 + 3];
 
         float w = ax2 - ax, h = ay2 - ay;
-        decoded[i * 4]     = bx * w + ax;
+        decoded[i * 4] = bx * w + ax;
         decoded[i * 4 + 1] = by * h + ay;
         decoded[i * 4 + 2] = bx2 * w + ax2;
         decoded[i * 4 + 3] = by2 * h + ay2;
@@ -237,11 +232,11 @@ std::vector<float> NpuDetector::bb_decoding(const std::vector<float> &encoded, c
  * @param b 检测框 B
  * @return IoU 值，范围 [0, 1]
  */
-float NpuDetector::iou(const detect_result_t &a, const detect_result_t &b)
-{
+float NpuDetector::iou(const detect_result_t &a, const detect_result_t &b) {
     float areaA = (a.x1 - a.x0) * (a.y1 - a.y0);
     float areaB = (b.x1 - b.x0) * (b.y1 - b.y0);
-    if (areaA <= 0 || areaB <= 0) return 0;
+    if (areaA <= 0 || areaB <= 0)
+        return 0;
 
     float ix = std::max(a.x0, b.x0);
     float iy = std::max(a.y0, b.y0);
@@ -260,10 +255,9 @@ float NpuDetector::iou(const detect_result_t &a, const detect_result_t &b)
  * @return 抑制后的检测框列表
  */
 std::vector<detect_result_t> NpuDetector::nms(const std::vector<float> &boxes,
-                                               const std::vector<int> &class_indices,
-                                               const std::vector<float> &scores,
-                                               float iou_threshold)
-{
+                                              const std::vector<int> &class_indices,
+                                              const std::vector<float> &scores,
+                                              float iou_threshold) {
     size_t n = boxes.size() / 4;
     std::vector<detect_result_t> enriched(n);
     for (size_t i = 0; i < n; i++) {
@@ -276,16 +270,17 @@ std::vector<detect_result_t> NpuDetector::nms(const std::vector<float> &boxes,
     }
 
     std::vector<int> indices(n);
-    for (size_t i = 0; i < n; i++) indices[i] = i;
-    std::sort(indices.begin(), indices.end(), [&](int a, int b) {
-        return enriched[a].score > enriched[b].score;
-    });
+    for (size_t i = 0; i < n; i++)
+        indices[i] = i;
+    std::sort(indices.begin(), indices.end(),
+              [&](int a, int b) { return enriched[a].score > enriched[b].score; });
 
     std::vector<bool> suppressed(n, false);
     std::vector<detect_result_t> result;
 
     for (size_t i = 0; i < n; i++) {
-        if (suppressed[indices[i]]) continue;
+        if (suppressed[indices[i]])
+            continue;
         int idx = indices[i];
         result.push_back(enriched[idx]);
         for (size_t j = i + 1; j < n; j++) {
@@ -309,12 +304,12 @@ std::vector<detect_result_t> NpuDetector::nms(const std::vector<float> &boxes,
  * 跳过背景类（索引 0），只考虑前景类。
  */
 void NpuDetector::recover_score_info(const std::vector<float> &scores, int nboxes, int nclasses,
-                                      std::vector<float> &hi_scores, std::vector<int> &class_indices)
-{
+                                     std::vector<float> &hi_scores,
+                                     std::vector<int> &class_indices) {
     for (int box = 0; box < nboxes; box++) {
         int start = box * nclasses;
-        auto max_it = std::max_element(scores.begin() + start + 1,
-                                       scores.begin() + start + nclasses);
+        auto max_it =
+            std::max_element(scores.begin() + start + 1, scores.begin() + start + nclasses);
         hi_scores.push_back(*max_it);
         class_indices.push_back(std::distance(scores.begin() + start, max_it));
     }

@@ -25,14 +25,14 @@ extern "C" {
  * @note buffers[i] 为 mmap 映射后的内核缓冲用户态地址
  */
 typedef struct {
-    int fd;                        /* 设备文件描述符 */
-    int width;                     /* 实际协商后的图像宽度 */
-    int height;                    /* 实际协商后的图像高度 */
-    int pixelformat;               /* V4L2_PIX_FMT_MJPEG / YUYV 等 */
-    unsigned int buf_size;         /* 每帧最大字节数 */
-    int buf_count;                 /* V4L2 缓冲数量 */
-    void **buffers;                /* mmap'd 缓冲指针数组 */
-    unsigned int *buf_lengths;     /* 每个 mmap 缓冲的字节长度 */
+    int fd;                    /* 设备文件描述符 */
+    int width;                 /* 实际协商后的图像宽度 */
+    int height;                /* 实际协商后的图像高度 */
+    int pixelformat;           /* V4L2_PIX_FMT_MJPEG / YUYV 等 */
+    unsigned int buf_size;     /* 每帧最大字节数 */
+    int buf_count;             /* V4L2 缓冲数量 */
+    void **buffers;            /* mmap'd 缓冲指针数组 */
+    unsigned int *buf_lengths; /* 每个 mmap 缓冲的字节长度 */
 } camera_t;
 
 /** 打开摄像头并设置采集参数 */
