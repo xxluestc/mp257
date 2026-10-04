@@ -1,0 +1,14 @@
+/*.[ch] text eol=lf
+/*.cpp text eol=lf
+/*.hpp text eol=lf
+/hud/main.c text eol=lf
+/hud/common.h text eol=lf
+/hud/oled.c text eol=lf
+/hud/oled.h text eol=lf
+/hud/udp.c text eol=lf
+/hud/udp.h text eol=lf
+/tools/*.py text eol=lf
+/include/** text eol=lf
+/src/** text eol=lf
+/tests/** text eol=lf
+/scripts/*.py text eol=lf

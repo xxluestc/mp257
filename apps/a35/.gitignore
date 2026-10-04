@@ -1,0 +1,43 @@
+# Large local SDKs and runtime data (never upload)
+/myir-st-linux/
+/v2x/
+/dvr_videos/
+
+# Build artifacts
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.pid
+/radar_fusion
+/hud/hud
+/dist/*
+!/dist/helmet-a35-1.0.8.tar.gz
+!/dist/helmet-a35-1.0.8.tar.gz.sha256
+
+# Runtime outputs
+**/.buffer/
+**/dvr_raw.bin
+**/dvr_index.bin
+**/filelist.txt
+*.log
+radar_config
+radar_data.csv
+radar_state.json
+labels.csv
+
+# Local captures / screenshots
+**/frame_*.png
+**/test_*.mp4
+
+# Editor and language caches
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+__pycache__/
+*.py[cod]
+
+/build/
