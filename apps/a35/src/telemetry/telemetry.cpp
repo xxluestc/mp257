@@ -1,3 +1,5 @@
+// 遥测输出：Main 独占雷达 CSV/JSON，多个工作线程经互斥锁写公共事件 CSV。
+// 日历时间用于日志展示；风险、超时和录像窗口仍使用各链路的单调时钟。
 #include "app/services.hpp"
 #include "runtime/video_config.hpp"
 #include "runtime/linux_resources.hpp"
@@ -95,7 +97,7 @@ static FILE *open_file(const char *path, const char *mode, int flags) {
         return nullptr;
     FILE *file = fdopen(descriptor.get(), mode);
     if (file)
-        descriptor.release(); // FILE owns the fd from here through fclose().
+        descriptor.release(); // fdopen 成功后转移所有权，后续 fclose 负责关闭 fd。
     return file;
 }
 
@@ -178,6 +180,7 @@ static void sensor_csv_maybe_rotate_locked(void) {
 }
 
 static int sensor_telemetry_init(void) {
+    // 初始化、轮转、写入和关闭使用同一把锁，避免异步事件写入已被关闭的 FILE。
     std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
     if (g_sensor_csv != NULL)
         return 0;
@@ -245,6 +248,7 @@ void sensor_event_log(const char *source, const char *event_type, const char *st
              (unsigned long long)timestamp_ms, safe_source, safe_type, safe_status, safe_id,
              safe_label, score_text, count_text, seq_text, safe_reason, safe_details);
 
+    // 完整 CSV 行在栈上准备好后再加锁；满载时淘汰最旧待写事件，保持内存有界。
     std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
     if (g_sensor_csv == NULL) {
         if (g_sensor_pending_count == SENSOR_PENDING_MAX) {
@@ -311,6 +315,7 @@ static void json_write_float_or_null(FILE *fp, float value) {
 }
 
 void radar_telemetry_publish(const radar_result_t *radar, int fusion_alert, bool available) {
+    // available 区分“本次无目标”和“设备无有效报告”，Dashboard 据此显示设备状态。
     if (radar == NULL)
         return;
 
@@ -430,6 +435,7 @@ void radar_telemetry_publish(const radar_result_t *radar, int fusion_alert, bool
                 i == radar->dangerous_index ? "true" : "false");
     }
     fputs("]}\n", fp);
+    // 同目录临时文件完整关闭后再 rename，让 Dashboard 读取完整旧版或完整新版 JSON。
     if (fclose(fp) == 0) {
         if (rename(tmp_path, g_radar_state_path) != 0)
             unlink(tmp_path);

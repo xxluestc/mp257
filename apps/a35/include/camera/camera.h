@@ -33,7 +33,7 @@ typedef struct {
     int buf_count;             /* V4L2 缓冲数量 */
     void **buffers;            /* mmap'd 缓冲指针数组 */
     unsigned int *buf_lengths; /* 每个 mmap 缓冲的字节长度 */
-    int acquired_index;        /* -1: no buffer leased to the caller */
+    int acquired_index; /* -1 表示未借出缓冲；非负值必须在下一次采集前 QBUF。 */
     int streaming;
 } camera_t;
 
@@ -43,10 +43,10 @@ int camera_open(camera_t *cam, const char *device, int width, int height);
 /** 启动视频流：入队缓冲 + STREAMON */
 int camera_start(camera_t *cam);
 
-/** Lease one buffer: 0 frame, 1 timeout/EAGAIN, -1 error. */
+/** 借出一帧 MMAP 缓冲：0 成功，1 超时/EAGAIN，-1 失败；只由 Camera 线程调用。 */
 int camera_capture(camera_t *cam, uint8_t **out_buf, unsigned int *out_len);
 
-/** Return the leased buffer after copying it. No pointer survives this call. */
+/** 复制后归还缓冲；QBUF 后驱动可以覆盖此地址，不能再通过借用指针访问。 */
 int camera_release(camera_t *cam);
 
 /** 停止视频流 (STREAMOFF) */

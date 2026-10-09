@@ -1,3 +1,4 @@
+// Encoder 线程：会话 JPEG -> 有界管道 -> Python 编码/校验进程 -> 保存结果事件。
 #include "video_pipeline_internal.hpp"
 #include "runtime/linux_resources.hpp"
 #include <cerrno>
@@ -12,6 +13,7 @@ extern char **environ;
 
 namespace helmet {
 namespace {
+// 独占工作进程及其进程组；异常离开作用域时终止整组，并 waitpid 回收直接子进程。
 class ChildProcess {
     pid_t pid_ = -1;
 
@@ -30,13 +32,14 @@ class ChildProcess {
     }
 
     int finish(const std::atomic<bool> &stopping) {
+        // 正常编码最长等待 120 秒；收到停机通知后给当前工作进程最多 2 秒收尾。
         uint64_t deadline = monotonic_us() + 120000000;
         uint64_t stop_deadline = 0;
         while (monotonic_us() < deadline) {
             int status = 0;
             pid_t result = waitpid(pid_, &status, WNOHANG);
             if (result == pid_) {
-                kill(-pid_, SIGKILL); // Reap any descendant left by a failed worker.
+                kill(-pid_, SIGKILL); // 清除工作进程结束后仍留在组内的编码子进程。
                 pid_ = -1;
                 return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
             }
@@ -92,6 +95,7 @@ class SpawnAttributes {
 };
 
 bool write_bytes(int fd, const uint8_t *data, size_t size, const std::atomic<bool> &stopping) {
+    // 管道允许短写；推进字节游标，并以 poll + 截止时间处理背压，避免无限阻塞。
     const uint64_t deadline = monotonic_us() + 3000000;
     while (size && !stopping && monotonic_us() < deadline) {
         ssize_t written = write(fd, data, size);
@@ -134,6 +138,7 @@ void VideoPipeline::encoder_loop() {
                 (reader.get() != STDIN_FILENO &&
                  posix_spawn_file_actions_addclose(&actions.value, reader.get())))
                 throw std::runtime_error("encoder spawn actions");
+            // 使用参数数组启动，不经 shell 解释路径；工作进程通过 stdin 接收图像流。
             std::vector<std::string> arguments{
                 "python3", config_.encoder_worker, "--stream", "--output", session->output,
                 "--mount", config_.mount_directory};
@@ -148,6 +153,7 @@ void VideoPipeline::encoder_loop() {
                 throw std::runtime_error("encoder spawn: " + std::string(strerror(result)));
             ChildProcess child(pid);
             report("encoding_started", session->output);
+            // 父进程仅保留写端；关闭写端才能让工作进程收到 EOF。
             reader.reset();
             if (fcntl(writer.get(), F_SETFL, O_NONBLOCK) < 0)
                 throw std::runtime_error("encoder nonblocking pipe");
@@ -159,8 +165,8 @@ void VideoPipeline::encoder_loop() {
                         break;
                     continue;
                 }
-                // DVRSTREAM1 records are explicitly little endian, independent
-                // of native struct padding and the target machine ABI.
+                // 与 Python read_exact/records 对应：8 字节采集时间 + 4 字节 JPEG 长度，
+                // 显式使用小端，避免直接传 C++ struct 的填充或目标机 ABI 差异。
                 uint8_t header[12];
                 for (int i = 0; i < 8; ++i)
                     header[i] = frame->timestamp_us >> (i * 8);
@@ -173,8 +179,7 @@ void VideoPipeline::encoder_loop() {
                 if (!transferred)
                     break;
             }
-            // A zero-size end record is emitted only for a complete event.
-            // EOF alone (crash, overflow, shutdown) must never commit a partial clip.
+            // 只有完整事件才发送零长度结束记录；单独 EOF 表示中断，不能提交半段视频。
             if (transferred && !session->abort && !stopping_) {
                 uint8_t end[12]{};
                 transferred = write_bytes(writer.get(), end, sizeof(end), stopping_);
@@ -190,6 +195,7 @@ void VideoPipeline::encoder_loop() {
         session->frames.close();
         report(ok ? "recording_saved" : "recording_failed", session->output);
         session.reset();
+        // 处理结果报告后才允许下一段录像；录像结果不改变 Fusion 当前风险状态。
         encoder_busy_ = false;
     }
 }

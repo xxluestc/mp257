@@ -1,3 +1,5 @@
+// 跨模块共享状态定义：运行标志/事件邮箱采用原子变量，配置在启动阶段写入。
+// 原子变量只保证单项访问安全；关联的融合状态仍由 Main/Fusion 统一维护。
 #include "app/services.hpp"
 std::atomic<int> g_running = 1;
 std::atomic<int> g_led_alert = 0;
@@ -6,6 +8,7 @@ std::atomic<int> g_imu_fall_alert = 0;  /* IMU 摔倒告警 */
 std::atomic<int> g_v2x_alert = 0;       /* V2X 告警 */
 std::atomic<uint64_t> g_imu_fall_time_us = 0;
 std::atomic<uint64_t> g_last_v2x_audio_us = 0;
+// RPMsg/模拟线程写入，Main 用 exchange(0) 取走；这是单槽邮箱，多个待处理事件合并。
 std::atomic<uint64_t> g_pending_fall_dvr_us{0};
 
 /* 可在命令行调整的雷达阈值 */

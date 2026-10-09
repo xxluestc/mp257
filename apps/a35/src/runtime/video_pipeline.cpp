@@ -1,3 +1,4 @@
+// 管线生命周期与对外入口；各工作线程的业务分别见 *_worker.cpp。
 #include "runtime/video_pipeline.hpp"
 #include <cstdio>
 
@@ -10,6 +11,7 @@ VideoConfig checked_config(VideoConfig config) {
 } // namespace
 
 VideoPipeline::VideoPipeline(VideoConfig config, VideoEvent event)
+    // 成员按声明顺序构造：先校验 config_，随后才按已校验的预算分配 pool_。
     : config_(checked_config(std::move(config))), event_(std::move(event)),
       pool_(config_.pool_slots, config_.max_jpeg_bytes) {}
 
@@ -18,6 +20,7 @@ VideoPipeline::~VideoPipeline() {
 }
 
 void VideoPipeline::report(const char *event, const std::string &details) noexcept {
+    // 日志/展示回调异常不能穿过线程入口，避免使整个进程 terminate。
     try {
         if (event_)
             event_(event, details);
@@ -31,17 +34,21 @@ void VideoPipeline::start() {
         throw std::logic_error("video pipeline is single-use");
     started_ = true;
     try {
+        // 先启动消费者，最后启动 Camera 生产者；队列连接彼此，不共享设备句柄。
         encoder_thread_ = std::thread(&VideoPipeline::encoder_loop, this);
         dvr_thread_ = std::thread(&VideoPipeline::dvr_loop, this);
         npu_thread_ = std::thread(&VideoPipeline::inference_loop, this);
         camera_thread_ = std::thread(&VideoPipeline::capture_loop, this);
     } catch (...) {
+        // 部分创建成功同样需要 join，不能让已启动线程访问构造后被销毁的对象。
         stop();
         throw;
     }
 }
 
 void VideoPipeline::stop() {
+    // 先拒绝输入并唤醒等待者，再 join。看到 stopping_ 不代表资源清理已完成，
+    // 只有本函数返回后，拥有者才能安全销毁队列、帧池和事件回调依赖。
     stopping_ = true;
     npu_frames_.cancel();
     dvr_frames_.cancel();
@@ -52,6 +59,7 @@ void VideoPipeline::stop() {
         npu_thread_.join();
     if (dvr_thread_.joinable())
         dvr_thread_.join();
+    // DVR 已停止创建/续写会话，再取消待编码会话并等待当前编码工作退出。
     sessions_.cancel();
     if (encoder_thread_.joinable())
         encoder_thread_.join();

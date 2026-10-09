@@ -1,3 +1,4 @@
+// 原位更新 JSON 元数据；对象与返回字符串有独立生命周期，见 imu_message.h 的约定。
 #include "imu_message.h"
 
 char *imu_message_to_json(cJSON *message, double hud_timestamp_ms) {

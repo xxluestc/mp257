@@ -20,8 +20,7 @@
 #include <chrono>
 #include <stdexcept>
 
-// The vendor base has a non-virtual destructor. Own the exact final type so
-// deleting the network never relies on polymorphic destruction.
+// 厂商基类析构非虚函数：unique_ptr 持有确切的 final 类型，不通过基类指针删除派生对象。
 class NpuNetwork final : public stai_mpu_network {
   public:
     using stai_mpu_network::stai_mpu_network;
@@ -66,7 +65,7 @@ NpuDetector::NpuDetector(const char *model_path, const char *labels_path, float 
 }
 
 /**
- * @brief 释放输入张量内存
+ * @brief 由 unique_ptr/vector 自动释放模型与输入张量缓冲
  */
 NpuDetector::~NpuDetector() = default;
 
@@ -153,6 +152,8 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data) {
     int nboxes = output_shape_0[1];
     int nclasses = output_shape_0[2];
 
+    // OVX NPU 输出由调用者 free；其他后端沿用网络持有的缓冲。
+    // 自定义删除器把两种所有权放到相同作用域，后处理异常时也按后端正确清理。
     const bool owns_output =
         model_->get_backend_engine() == stai_mpu_backend_engine::STAI_MPU_OVX_NPU_ENGINE;
     auto release = [owns_output](float *output) {

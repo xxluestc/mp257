@@ -7,7 +7,7 @@
  *        +-- type=navi      -> nav_update_oled() + nav_tts_speak_navdata()
  *        |                     (<=50m 转向/到达时播放预录模板)
  *        +-- type=navi_tts  -> nav_tts_speak()
- *        |                     (缓存命中直接播；未命中尝试 edge-tts 在线生成)
+ *        |                     (缓存/预录音优先，仅启用在线策略时尝试生成)
  *        +-- type=danger_tts-> parse_danger_tts_json()
  *        |                     preload 只记录
  *        |                     trigger -> dispatch_danger_text() -> nav_tts_speak_danger()
@@ -15,11 +15,14 @@
  *        +-- type=alert     -> nav_tts_alert() 播放固定预警音
  *
  * 公共接口：
- *   nav_tts_start()                 启动 UDP 接收线程 + OLED 看门狗
+ *   nav_tts_start()                 启动 UDP 接收、OLED 看门狗和串行音频工作线程
  *   nav_tts_stop()                  停止线程并关闭 OLED
  *   nav_tts_speak(text)             直接播报任意文本
  *   nav_tts_speak_danger(text)      异常路况播报（含本地兜底）
  *   nav_tts_set_danger_text_handler 注册 danger_tts trigger 的处理函数
+ *
+ * 线程边界：本模块独占 UDP 8888/OLED；独立 hud 程序只处理 IMU 转发。
+ * *_thread 命名的音频任务函数由 audio_worker 调用，不会为每段语音创建新线程。
  *
  * APP 发送格式：
  *   {"type":"navi","turn":2,"distance":100}
@@ -97,8 +100,8 @@ static pthread_t g_audio_tid;
 static pthread_mutex_t g_audio_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_audio_ready = PTHREAD_COND_INITIALIZER;
 
-/* Ownership of argument transfers on success. Priority alerts displace the
- * oldest queued navigation item; active playback is never duplicated. */
+/* 成功入队才转移 argument 所有权，失败时由调用者释放；执行任务负责释放自己的参数。
+ * 告警插入队首，满载时释放队尾任务，当前播放不抢占。所有入队参数须支持 free。 */
 static int audio_submit(void *(*function)(void *), void *argument, int priority) {
     pthread_mutex_lock(&g_audio_queue_mutex);
     if (g_audio_closed || (g_audio_count == AUDIO_QUEUE_CAPACITY && !priority)) {
@@ -136,6 +139,7 @@ static void *audio_worker(void *unused) {
         --g_audio_count;
         memmove(g_audio_jobs, g_audio_jobs + 1, g_audio_count * sizeof(audio_job_t));
         pthread_mutex_unlock(&g_audio_queue_mutex);
+        // 取出任务后释放队列锁，播放/生成耗时不会阻塞其他线程提交新任务。
         job.function(job.argument);
     }
     return NULL;
@@ -865,6 +869,7 @@ static void nav_update_oled(const NavData *nav) {
     if (!g_oled_inited) {
         return;
     }
+    // 与看门狗串行访问导航状态和 OLED，防止两份显示操作交错写同一 I2C 设备。
     pthread_mutex_lock(&g_nav_mutex);
     if (nav) {
         g_has_nav = 1;
@@ -1105,6 +1110,7 @@ static void *nav_recv_thread(void *arg) {
     addr.sin_port = htons(NAV_UDP_PORT);
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        // 8888 只允许本模块占用；绑定失败直接报告，不以端口复用掩盖职责冲突。
         perror("[系统] [NAV] bind");
         close(sock);
         return NULL;
@@ -1222,6 +1228,7 @@ void nav_tts_stop(void) {
         return;
     }
     g_nav_running = 0;
+    // 先回收所有可能访问 OLED/提交音频的线程，再关闭音频队列和显示设备。
     pthread_join(g_nav_tid, NULL);
     if (g_watchdog_started)
         pthread_join(g_nav_watchdog_tid, NULL);

@@ -35,6 +35,7 @@ def read_exact(stream: BinaryIO, size: int) -> bytes:
 
 
 def records(stream: BinaryIO) -> Iterator[tuple[int, bytes]]:
+    # 与 encoder_worker.cpp 的小端帧头对应；按记录长度读，管道 read 不保留写入边界。
     first = previous = count = 0
     while True:
         timestamp, size = HEADER.unpack(read_exact(stream, HEADER.size))
@@ -49,8 +50,7 @@ def records(stream: BinaryIO) -> Iterator[tuple[int, bytes]]:
         if timestamp - first > MAX_STREAM_US:
             raise ValueError("DVR event exceeds duration limit")
         jpeg = read_exact(stream, size)
-        # UVC MJPEG may contain padding after EOI. The encoder and full-video
-        # decode validate the payload; do not reject valid padded camera frames.
+        # UVC MJPEG 的 EOI 后可含填充；有效负载由编码及整段解码校验，不能只看末两字节。
         if not jpeg.startswith(b"\xff\xd8"):
             raise ValueError("invalid JPEG boundaries")
         previous = timestamp
@@ -73,7 +73,7 @@ def hardware_gst():
 
 
 def encode_gstreamer(stream: BinaryIO, part: Path, Gst) -> None:
-    # No path interpolation into a pipeline expression: filesink.location is a property.
+    # 路径作为 filesink 属性传入，避免把路径中的特殊字符解释为管线表达式。
     pipeline = Gst.parse_launch(
         "appsrc name=input format=time is-live=false block=true max-bytes=1048576 "
         "caps=image/jpeg,framerate=25/1 ! jpegdec ! videoconvert ! "
@@ -95,6 +95,7 @@ def encode_gstreamer(stream: BinaryIO, part: Path, Gst) -> None:
                 raise RuntimeError(str(error.parse_error()))
             buffer = Gst.Buffer.new_allocate(None, len(jpeg), None)
             buffer.fill(0, jpeg)
+            # A35 采集微秒转为相对首帧的纳秒 PTS，保留采样间隔和掉帧造成的时间空洞。
             buffer.pts = (timestamp - first) * 1000
             buffer.dts = Gst.CLOCK_TIME_NONE
             buffer.duration = 40 * Gst.MSECOND
@@ -111,8 +112,7 @@ def encode_gstreamer(stream: BinaryIO, part: Path, Gst) -> None:
 
 
 def encode_ffmpeg(stream: BinaryIO, part: Path, log: Path) -> None:
-    # The compatibility backend uses fixed 25fps. It cannot represent gaps with
-    # original PTS; report that choice explicitly instead of claiming H.264 hardware encoding.
+    # FFmpeg 兼容后端固定 25fps，不能保留原始 PTS 空洞；process 日志记录实际后端。
     command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
                "-f", "image2pipe", "-framerate", "25", "-vcodec", "mjpeg", "-i", "pipe:0",
                "-c:v", "mpeg4", "-q:v", "5", "-pix_fmt", "yuv420p",
@@ -149,8 +149,7 @@ def process(stream: BinaryIO, output: Path, mount: Path, backend: str) -> int:
         require_storage(mount, output)
         if output.exists() or output.is_symlink():
             raise RuntimeError("DVR output already exists")
-        # Reserve the temporary path exclusively. A rejected invocation must
-        # never unlink another encoder's existing .part file.
+        # 独占临时路径，owns_part 只在创建成功后置位，失败清理不能删除别人的工作文件。
         with part.open("xb"):
             pass
         owns_part = True
@@ -167,6 +166,7 @@ def process(stream: BinaryIO, output: Path, mount: Path, backend: str) -> int:
         if not validate(part, probe_log, decode_log):
             raise RuntimeError("MP4 validation failed")
         require_storage(mount, output)
+        # 文件验证和同步完成后原子改名，再同步目录；此时才进入正式视频集合。
         os.replace(part, output)
         owns_part = False
         directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -174,8 +174,7 @@ def process(stream: BinaryIO, output: Path, mount: Path, backend: str) -> int:
             os.fsync(directory)
         finally:
             os.close(directory)
-        # Retention maintenance cannot turn an already committed clip into an
-        # encoding failure; its errors have a separate diagnostic.
+        # 已提交视频的成功结果与保留策略维护分开，维护异常单独记录。
         try:
             prune_old_videos(output.parent, output)
             for log in (encoder_log, probe_log, decode_log):

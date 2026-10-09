@@ -51,6 +51,7 @@ def sync_file(path: Path) -> None:
 
 
 def validate(path: Path, probe_log: Path, decode_log: Path) -> bool:
+    # 提交前依次检查：文件同步、容器结构、流信息读取、整段解码；任一步失败即拒绝。
     try:
         sync_file(path)
     except OSError as exc:
@@ -84,7 +85,7 @@ def prune_old_videos(directory: Path, current: Path) -> None:
     )
     videos.append(current)
     total = sum(item.stat().st_size for item in videos)
-    # Never delete the clip whose successful commit is being reported.
+    # 只淘汰旧录像，正在报告保存成功的 current 始终保留。
     while len(videos) > 1 and (len(videos) > MAX_DVR_FILES or total > MAX_DVR_BYTES):
         oldest = videos.pop(0)
         total -= oldest.stat().st_size

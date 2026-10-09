@@ -1,3 +1,4 @@
+// 启动前解析并校验参数，生成视频配置与雷达配置；工作线程启动后只读取这些配置。
 #include "app/services.hpp"
 #include "runtime/video_pipeline.hpp"
 #include <cmath>
@@ -10,6 +11,7 @@
 
 namespace {
 int parse_integer(const char *value) {
+    // 拒绝溢出、空串及残留字符；用越界哨兵交给后续范围校验统一处理。
     errno = 0;
     char *end = nullptr;
     long parsed = strtol(value, &end, 10);
@@ -19,6 +21,7 @@ int parse_integer(const char *value) {
 }
 
 float parse_number(const char *value) {
+    // NaN/Inf 不能参与阈值判断，解析失败用 NaN 保留错误状态，最终校验会拒绝。
     errno = 0;
     char *end = nullptr;
     float parsed = strtof(value, &end);
@@ -174,6 +177,7 @@ int parse_arguments(int argc, char **argv, helmet::VideoConfig &video, std::stri
     video.confidence = confidence;
     video.output_directory = g_dvr_base_dir;
     video.mount_directory = g_dvr_mount_dir;
+    // RAM 预算转换为固定大小的 JPEG 槽位；每帧可用字节数由 max_jpeg_bytes 限制。
     video.max_jpeg_bytes = static_cast<size_t>(jpeg_kib) * 1024;
     video.pool_slots = static_cast<size_t>(pool_mib) * 1024 * 1024 / video.max_jpeg_bytes;
     try {

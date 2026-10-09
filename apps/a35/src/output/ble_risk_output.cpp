@@ -1,3 +1,5 @@
+// Main 独占的方向灯输出：Fusion 风险方向 -> UART 文本命令 -> CH9140/WBA54。
+// 期望状态与本地已发送状态分开维护，设备断开时保留期望值，重连后重新发送。
 #include "ble_risk_output.h"
 
 #include <errno.h>
@@ -160,6 +162,7 @@ void ble_risk_update(BleRiskState state) {
     if (ble_open() != 0)
         return;
 
+    // 接收区只读取一份有界回复；状态未变化且已发送成功时，本轮不重复写命令。
     ble_drain_reply();
     if (!g_ble_pending)
         return;
@@ -167,6 +170,7 @@ void ble_risk_update(BleRiskState state) {
     command = ble_risk_command(g_ble_desired);
     length = strlen(command);
     written = write(g_ble_fd, command, length);
+    // 文本命令必须整行写出；短写时断开重连并保留 pending，避免认为状态已更新。
     if (written != (ssize_t)length) {
         if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
             fprintf(stderr, "[BLE-LED] UART write failed: %s\n", strerror(errno));

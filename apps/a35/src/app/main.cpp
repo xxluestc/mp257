@@ -1,3 +1,5 @@
+// 应用入口与融合控制：消费 Radar/NPU 结果，统一决定告警、方向灯和录像触发。
+// 采集、推理和编码在独立工作线程执行；本文件负责把这些链路组织起来。
 #include "app/services.hpp"
 #include "ble_risk_output.h"
 #include "nav_tts.h"
@@ -16,6 +18,7 @@ namespace {
 volatile sig_atomic_t stop_requested = 0;
 
 void request_stop(int) {
+    // 信号处理函数只置标志；日志、设备清理和 join 交给正常执行流完成。
     stop_requested = 1;
 }
 
@@ -26,6 +29,7 @@ class ApplicationResources {
     ApplicationResources &operator=(const ApplicationResources &) = delete;
 
     ~ApplicationResources() {
+        // run() 中最先创建、最后析构，保证工作线程退出后再释放外围服务。
         ble_risk_shutdown();
         nav_tts_stop();
         gpio_deinit();
@@ -35,6 +39,8 @@ class ApplicationResources {
 };
 
 void on_video_event(const char *event, const std::string &details) {
+    // 此回调由各视频工作线程直接调用，可能并发；日志接口自行同步，音频只入队。
+    // 它负责事件呈现，不修改 Fusion 的视觉确认或雷达风险状态。
     printf("[VIDEO] %s %s\n", event, details.c_str());
     if (strcmp(event, "camera_first_frame") == 0)
         startup_mark("camera_first_frame");
@@ -79,6 +85,8 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
     if (nav_tts_start() != 0)
         fprintf(stderr, "[NAV] Receiver unavailable\n");
 
+    // 声明顺序决定异常展开时的析构顺序：workers 先回收，队列和 video 随后销毁。
+    // [&] 捕获的队列与设备路径因此始终活到 radar_receive_loop 退出之后。
     helmet::VideoPipeline video(std::move(config), on_video_event);
     helmet::BoundedQueue<RadarObservation> radar_results(8);
     helmet::WorkerGroup workers(g_running);
@@ -88,6 +96,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
     workers.start([] { test_fall_thread(nullptr); });
     workers.start([] { test_v2x_thread(nullptr); });
     video.start();
+    // 启动标记表示线程已创建；首帧、首份雷达报告和模型加载另有独立标记。
     startup_mark("fusion_risk_core_ready");
     startup_mark("radar_fusion_runtime_ready");
 
@@ -102,6 +111,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
             storage_try_initialize();
             next_storage_check = now + 2000000;
         }
+        // 按采集时间更新视觉确认。推理完成时间不能代替采集时间判断数据新鲜度。
         helmet::NpuObservation observation;
         while (video.observation(observation)) {
             vision.update(observation.timestamp_us, observation.has_road_user);
@@ -111,19 +121,23 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
                              static_cast<int>(npu.road_count), -1, nullptr,
                              vision.confirmed() ? "confirmed=1" : "confirmed=0");
         }
+        // 逐项取出已到达的报告，最终使用最新状态；无新报告时保留旧值供时效判断。
         RadarObservation report;
         bool updated = false;
         while (radar_results.pop(report, std::chrono::milliseconds(0))) {
             radar_state = report;
             updated = true;
         }
+        // 排空队列后重新取时间，避免刚到达的报告时间晚于本轮开始时的 now。
         now = helmet::monotonic_us();
         bool radar_fresh = radar_state.timestamp_us && now >= radar_state.timestamp_us &&
                            now - radar_state.timestamp_us <= 3000000;
         const auto &result = radar_state.result;
+        // 雷达必须先满足风险条件；视觉有效时再确认道路使用者，视觉失效时退回雷达。
         bool alert =
             vision.alert(radar_fresh && result.should_alert, video.camera_available(now), now);
         g_radar_npu_alert = alert;
+        // 原子邮箱一次取走待处理摔倒事件；RPMsg 线程不直接操作 DVR 的会话状态。
         auto fall = g_pending_fall_dvr_us.exchange(0);
         if (fall && !video.trigger(fall))
             sensor_event_log("a35_dvr", "recording", "failed", nullptr, nullptr, -1, -1, -1,
@@ -132,6 +146,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
         if (fall_at && now >= fall_at && now - fall_at >= 5000000)
             g_imu_fall_alert = 0;
         g_led_alert = alert || g_imu_fall_alert;
+        // 风险上升沿播放提示；持续风险每秒投递一次触发，用于延长录像后段。
         if (alert && !previous_alert)
             play_alert_sound("collision");
         if (alert && (!previous_alert || now >= next_trigger)) {
@@ -140,6 +155,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
                                  "trigger_queue_full", "radar_npu_collision");
             next_trigger = now + 1000000;
         }
+        // 方向灯使用雷达选出的危险目标方向，视觉结果只参与风险确认。
         BleRiskState direction = BLE_RISK_CLEAR;
         if (alert && result.dangerous_index >= 0 && result.dangerous_index < result.obj_count) {
             auto side = result.targets[result.dangerous_index].direction;
@@ -148,6 +164,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
                                                   : BLE_RISK_CENTER;
         }
         ble_risk_update(direction);
+        // 心跳维持面板更新，但过期雷达必须发布 unavailable，不能伪装成正常无目标。
         if (updated || alert != previous_alert || now >= next_heartbeat) {
             if (radar_fresh)
                 radar_telemetry_publish(&result, alert);
@@ -158,6 +175,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
         previous_alert = alert;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+    // 先通知后台线程停止，再等待各链路退出；外围句柄由 resources 在最后释放。
     g_running = 0;
     video.stop();
     workers.stop();

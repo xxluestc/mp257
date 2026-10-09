@@ -1,3 +1,5 @@
+// Linux 外设适配：GPIO 指示灯、UART 参数设置与雷达命令封装。
+// 串口句柄由调用线程持有；本文件提供操作，不接管调用者的串口生命周期。
 #include "app/services.hpp"
 #include "runtime/frame_pipeline.hpp"
 #include <cstdio>
@@ -74,6 +76,7 @@ void gpio_deinit(void) {
 }
 
 void *led_thread(void *arg) {
+    // LED 线程只执行输出节奏，风险判断由 Main 设置 g_led_alert，避免重复融合逻辑。
     (void)arg;
     while (g_running) {
         if (g_led_alert) {

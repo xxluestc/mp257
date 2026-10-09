@@ -2,6 +2,7 @@
   ******************************************************************************
   * @file    main.c
   * @brief   HUD 事件转发：接收本机 IMU JSON 并转发手机
+  *          本进程只监听 loopback UDP 8890；导航端口和 OLED 由主应用管理。
   ******************************************************************************
   */
 
@@ -183,6 +184,7 @@ static void broadcast_imu_json(const char *json_str) {
     int seq = json_int(root, "seq");
     delivery_log_write(event_id, m33_type, type, seq, reason, "hud_received", "ok", len);
 
+    // 各类事件独立冷却：颠簸消息不能吞掉随后到来的摔倒；持续时间使用单调时钟。
     time_t now = monotonic_seconds();
     int slot = alert_slot(type);
     if (last_alert_ts[slot] && now - last_alert_ts[slot] < ALERT_COOLDOWN) {
@@ -193,8 +195,8 @@ static void broadcast_imu_json(const char *json_str) {
         return;
     }
 
-    // Update the parsed object and serialize it through cJSON: incoming text
-    // remains escaped and GPS/other fields survive forwarding unchanged.
+    // 在原对象上补来源/时间后序列化，保留 GPS/短信等字段；cJSON 负责文本转义。
+    // root 和 out 分别归本函数所有，所有退出路径分别 Delete/free，不能混用。
     char *out = imu_message_to_json(root, (double)wall_clock_ms());
     if (!out) {
         cJSON_Delete(root);

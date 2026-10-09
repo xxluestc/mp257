@@ -1,4 +1,5 @@
 #pragma once
+// 跨模块的协议类型、启动配置和公共服务声明；共享变量的定义位于 app_state.cpp。
 #include <atomic>
 #include <cstdint>
 #include <limits.h>
@@ -57,6 +58,7 @@
 #define HUD_INPUT_IP "127.0.0.1"
 #define HUD_INPUT_PORT 8890
 
+// 协议目标按紧凑字节布局定义；报文长度和多字节字段仍由 radar_protocol 显式校验/解析。
 #pragma pack(push, 1)
 
 typedef struct {
@@ -79,11 +81,11 @@ typedef enum {
 
 typedef struct {
     int obj_id;
-    float distance;
-    float velocity;
-    float angle;
+    float distance; // 米。
+    float velocity; // 米/秒，负值表示接近。
+    float angle; // 雷达坐标角度，单位度；方向分类时再转换到骑行者左右约定。
     float filtered_angle;
-    float ttc;
+    float ttc; // 秒，负值表示不适用。
     radar_direction_t direction;
 } radar_target_t;
 
@@ -91,12 +93,12 @@ typedef struct {
     int has_target;
     int obj_count;
     radar_target_t targets[MAX_RADAR_OBJECTS];
-    int dangerous_index;
+    int dangerous_index; // 指向同一个危险目标；方向、距离和 TTC 需从该 targets 项读取。
     int dangerous_obj_id;
-    float min_distance;
+    float min_distance; // 全体有效目标的最小距离，可能与 min_ttc 来自不同目标。
     int approaching;
     float min_ttc;
-    int should_alert;
+    int should_alert; // 雷达自身风险条件；最终融合告警由 Main/VisionGate 决定。
 } radar_result_t;
 
 typedef struct {
@@ -108,6 +110,7 @@ typedef struct {
     uint64_t last_seen_ms;
 } radar_direction_filter_t;
 
+// 跨线程运行/事件状态；*_us 使用 A35 单调时钟，不能直接与 M33 tick 相减。
 extern std::atomic<int> g_running;
 extern std::atomic<int> g_led_alert;
 extern std::atomic<int> g_radar_npu_alert;
@@ -116,6 +119,7 @@ extern std::atomic<int> g_v2x_alert;
 extern std::atomic<uint64_t> g_imu_fall_time_us;
 extern std::atomic<uint64_t> g_last_v2x_audio_us;
 extern std::atomic<uint64_t> g_pending_fall_dvr_us;
+// 命令行在启动线程前写入，下游线程只读取，运行过程中不做并发改参。
 extern float g_ttc_threshold;
 extern float g_dist_threshold;
 extern float g_angle_left_threshold;
@@ -151,6 +155,7 @@ void radar_telemetry_publish(const radar_result_t *radar, int fusion_alert, bool
 void radar_telemetry_publish_empty();
 void radar_telemetry_close();
 void sensor_telemetry_close();
+// 可从多个工作线程调用；内部串行写事件 CSV，存储未就绪时暂存到有界内存队列。
 void sensor_event_log(const char *source, const char *event_type, const char *status,
                       const char *event_id, const char *label, float score, int count, int seq,
                       const char *reason, const char *details);

@@ -1,3 +1,5 @@
+// M33 事件入口：RPMsg 文本 -> IMU/V2X 解析 -> 音频任务、摔倒邮箱及 HUD JSON 转发。
+// 本线程不持有摄像头或录像文件，录像触发由 Main 转交给 DVR 队列。
 #include "app/services.hpp"
 #include "runtime/frame_pipeline.hpp"
 #include "runtime/linux_resources.hpp"
@@ -165,6 +167,7 @@ static void forward_imu_alert(const char *line) {
     if (line == NULL || strstr(line, "IMU_ALERT") == NULL)
         return;
 
+    // 按完整 key=value 字段匹配，避免把 falling 或其他字段中的 fall 误识别为摔倒。
     const auto type = helmet::message_field(line, "type");
 
     const char *app_type = NULL;
@@ -230,6 +233,7 @@ static void forward_imu_alert(const char *line) {
                      details);
 
     char json[1536];
+    // reason 来自外部文本，必须转义引号、反斜杠和控制字符后才能嵌入 JSON。
     const auto escaped_reason = helmet::escape_json(reason_buf);
     snprintf(json, sizeof(json),
              "{\"type\":\"%s\",\"message\":\"%s\",\"source\":\"M33_A35\","
@@ -366,6 +370,7 @@ static void rpmsg_receive_once() {
         startup_mark("rpmsg_ready_sent");
     }
 
+    // 只处理完整行。超长/含 NUL 行整体丢弃，不能把截断消息当作新告警。
     helmet::MessageLine<512> lines;
     while (g_running) {
         fd_set rfds;
@@ -418,6 +423,7 @@ void *rpmsg_thread(void *arg) {
     (void)arg;
     try {
         while (g_running) {
+            // 一次连接结束即回收 fd；重连间隔拆成短等待，停机不必等满两秒。
             rpmsg_receive_once();
             for (int attempt = 0; attempt < 20 && g_running; ++attempt)
                 usleep(100000);

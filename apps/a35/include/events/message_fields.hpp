@@ -6,6 +6,7 @@
 #include <string_view>
 
 namespace helmet {
+// 返回原始行的视图，不分配/复制文本；调用者不能在行缓冲失效后保留此 string_view。
 inline std::string_view message_field(std::string_view line, std::string_view key) {
     size_t begin = 0;
     while (begin < line.size()) {
@@ -25,6 +26,7 @@ inline std::string_view message_field(std::string_view line, std::string_view ke
 }
 
 inline int message_integer(std::string_view line, std::string_view key) {
+    // from_chars 要求整个字段合法且落在 int 范围；不存在或无效时沿协议默认返回 0。
     auto value = message_field(line, key);
     if (value.empty())
         return 0;
@@ -57,8 +59,8 @@ template <size_t Capacity> class MessageLine {
     bool discarded_ = false;
 
   public:
-    // Returned storage is valid until the next append. CRLF is one message;
-    // oversized/binary lines are discarded entirely through their delimiter.
+    // 返回内部缓冲，仅在下一次 append 前有效，收到一行后应立即处理。
+    // CRLF 只产出一次非空消息；超长/含 NUL 行一直丢弃到下一个换行。
     const char *append(char byte) {
         if (byte == '\r' || byte == '\n') {
             const bool ready = !discarded_ && size_ > 0;

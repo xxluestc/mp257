@@ -1,3 +1,4 @@
+// 雷达协议与风险计算；仅 Radar 工作线程调用，方向滤波历史不与 Fusion 共享。
 #include "app/services.hpp"
 #include "runtime/frame_pipeline.hpp"
 #include <cstdio>
@@ -7,6 +8,7 @@
 #include <cmath>
 #include <cfloat>
 
+// 以协议中的 8 位 objId 保存目标历史；超时后清空，避免复用编号继承旧方向。
 static radar_direction_filter_t g_direction_filters[256];
 
 const char *radar_direction_name(radar_direction_t direction) {
@@ -124,6 +126,7 @@ static radar_result_t process_bsd_report(const bsd_det_t *bsd) {
         if (target->distance < result.min_distance)
             result.min_distance = target->distance;
 
+        // 协议负速度表示接近，TTC = 距离 / 接近速度；远离时以 -1 表示 TTC 不适用。
         if (target->velocity < 0.0f) {
             target->ttc = target->distance / -target->velocity;
             if (target->ttc < result.min_ttc)

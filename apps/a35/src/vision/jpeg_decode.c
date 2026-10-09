@@ -1,3 +1,4 @@
+// libjpeg 的错误跳转限制在 C 函数内，解码失败返回 -1；不能跨越 C++ RAII 对象。
 #include "jpeg_decode.h"
 #include <stdio.h>
 #include <jpeglib.h>
@@ -27,12 +28,14 @@ int jpeg_decode_rgb(const uint8_t *jpeg, size_t size, uint8_t *rgb, size_t capac
     info.err = jpeg_std_error(&error.base);
     error.base.error_exit = fail;
     error.base.emit_message = silence;
+    // 覆盖 libjpeg 默认的进程退出行为，让单帧坏图像不会终止整个感知服务。
     if (setjmp(error.jump)) {
         jpeg_destroy_decompress(&info);
         return -1;
     }
     jpeg_create_decompress(&info);
     jpeg_mem_src(&info, jpeg, size);
+    // 在写 RGB 之前检查尺寸和目标容量；用 capacity / 3 比较，避免字节数乘法溢出。
     if (jpeg_read_header(&info, TRUE) != JPEG_HEADER_OK || !info.image_width ||
         !info.image_height || info.image_width > 4096 || info.image_height > 2160 ||
         (size_t)info.image_width * info.image_height > capacity / 3) {

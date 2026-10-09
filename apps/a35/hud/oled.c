@@ -1,3 +1,4 @@
+// 共享 OLED 适配器，主应用导航线程和看门狗通过 g_nav_mutex 串行调用。
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -23,8 +24,7 @@ static int oled_write_byte(uint8_t control, uint8_t value) {
     } while (written < 0 && errno == EINTR);
     if (written == (ssize_t)sizeof(buf))
         return 0;
-    // Each I2C write is a complete control+data transaction. A short write
-    // cannot be repaired by sending its remainder as a separate transaction.
+    // I2C 每次 write 都是完整“控制字节 + 数据”事务；短写不能拆出剩余字节重发。
     if (written >= 0)
         errno = EIO;
     return -1;
@@ -35,6 +35,7 @@ static int oled_write_cmd(uint8_t cmd) {
 }
 
 static int oled_flush(void) {
+    // 先设置页和列地址，再送该页像素；任一事务失败就停止，错误逐层返回调用者。
     for (int page = 0; page < 8; page++) {
         if (oled_write_cmd(0xB0 + page) || oled_write_cmd(0x00) || oled_write_cmd(0x10))
             return -1;

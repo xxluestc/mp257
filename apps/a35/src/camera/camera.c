@@ -2,8 +2,8 @@
  * camera.c - V4L2 摄像头采集封装
  *
  * 数据流:
- *   camera_open()  -> 打开 /dev/videoX, 协商 MJPEG 格式, 25fps
- *   camera_start() -> 申请 mmap 缓冲, 启动视频流
+ *   camera_open()  -> 打开 /dev/videoX，协商 MJPEG/帧率，申请并映射驱动缓冲
+ *   camera_start() -> 将缓冲入队，启动视频流
  *   camera_capture() -> 从 V4L2 队列取出一帧 MJPEG, 供 DVR/NPU 使用
  *   camera_stop()/camera_close() -> 停止流并释放资源
  */
@@ -49,7 +49,7 @@ int camera_open(camera_t *cam, const char *device, int width, int height) {
         return -1;
     }
 
-    /* query capabilities */
+    /* 查询节点实际能力；带 DEVICE_CAPS 时使用节点能力，避免误用整个设备的能力集合。 */
     struct v4l2_capability cap;
     if (camera_ioctl(cam->fd, VIDIOC_QUERYCAP, &cap) < 0) {
         perror("VIDIOC_QUERYCAP");
@@ -66,7 +66,7 @@ int camera_open(camera_t *cam, const char *device, int width, int height) {
         goto fail;
     }
 
-    /* set format - try MJPEG first */
+    /* 下游按 JPEG 解码和录像，协商结果必须检查，不能静默接受原始 YUYV 像素。 */
     struct v4l2_format fmt;
     memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -236,6 +236,7 @@ int camera_capture(camera_t *cam, uint8_t **out_buf, unsigned int *out_len) {
 }
 
 int camera_release(camera_t *cam) {
+    /* DQBUF 借用结束后归还驱动；索引先复位，调用者负责在失败后关闭/重开设备。 */
     if (cam->acquired_index < 0)
         return 0;
     struct v4l2_buffer buf;

@@ -3,7 +3,7 @@
 #include <cstdint>
 
 namespace helmet {
-// Confirmation belongs to Fusion, never to the NPU, camera or encoder thread.
+// 由 Fusion 独占的视觉确认状态：连续两次阳性确认，连续三次阴性解除，抑制单帧抖动。
 class VisionGate {
     uint64_t timestamp_ = 0;
     unsigned positive_ = 0;
@@ -14,6 +14,7 @@ class VisionGate {
     static constexpr uint64_t freshness_us = 2000000;
 
     void update(uint64_t timestamp, bool road_user) {
+        // 忽略重复/乱序结果；采样间隔过大时重新累计，不能拼接两段不连续的观察。
         if (timestamp <= timestamp_)
             return;
         if (timestamp_ && timestamp - timestamp_ > freshness_us) {
@@ -43,6 +44,7 @@ class VisionGate {
     }
 
     bool alert(bool radar_danger, bool camera_available, uint64_t now) const {
+        // 摄像头或推理结果失效时采用雷达风险；视觉可用时要求道路使用者已确认。
         return radar_danger && (!camera_available || !fresh(now) || confirmed_);
     }
 };

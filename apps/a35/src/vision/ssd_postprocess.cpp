@@ -1,3 +1,4 @@
+// 纯检测后处理，不依赖 STAI 设备：校验候选框 -> 分数排序 -> 同类别 NMS。
 #include "vision/ssd_postprocess.hpp"
 #include <algorithm>
 #include <cmath>
@@ -38,6 +39,7 @@ std::vector<detect_result_t> suppress_ssd_boxes(const std::vector<float> &boxes,
                      [](const auto &a, const auto &b) { return a.score > b.score; });
     std::vector<detect_result_t> result;
     for (const auto &candidate : candidates) {
+        // 已保留的框分数不低于当前框；只在同类别间抑制，避免车辆框误删重叠的行人框。
         const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto &kept) {
             return kept.class_index == candidate.class_index &&
                    intersection_over_union(kept, candidate) > iou_threshold;

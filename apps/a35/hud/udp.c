@@ -32,6 +32,7 @@ int udp_init(int port) {
 }
 
 int udp_init_local(int port) {
+    // IMU 转发是本机进程接口，只绑定 loopback，不接受外部主机直接投递事件。
     return udp_init_address(port, INADDR_LOOPBACK);
 }
 
@@ -66,7 +67,7 @@ int udp_receive(int sock, char *buffer, int buf_size, int timeout_ms) {
         return -1;
     }
     if (n >= buf_size)
-        return -2; // Reject a whole oversized datagram rather than partial JSON.
+        return -2; // MSG_TRUNC 返回原始报文长度，超长报文整体丢弃，避免解析半份 JSON。
     buffer[n] = '\0';
     return n;
 }
