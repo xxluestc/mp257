@@ -872,7 +872,8 @@ static void nav_update_oled(const NavData *nav) {
     } else {
         g_has_nav = 0;
     }
-    oled_show_nav(nav, nav ? 1 : 0);
+    if (oled_show_nav(nav, nav ? 1 : 0) != 0)
+        fprintf(stderr, "[NAV] OLED update failed: %s\n", strerror(errno));
     pthread_mutex_unlock(&g_nav_mutex);
 }
 
@@ -885,7 +886,8 @@ static void *nav_watchdog_thread(void *arg) {
             printf("[系统] [NAV] 导航信号超时，OLED 显示 NO DATA\n");
             g_has_nav = 0;
             if (g_oled_inited) {
-                oled_show_nav(NULL, 0);
+                if (oled_show_nav(NULL, 0) != 0)
+                    fprintf(stderr, "[NAV] OLED timeout display failed: %s\n", strerror(errno));
             }
         }
         pthread_mutex_unlock(&g_nav_mutex);

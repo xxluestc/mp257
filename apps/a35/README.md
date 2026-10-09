@@ -39,7 +39,7 @@ Linux 主机需要 GNU AArch64 工具链、make、Python 3，可按 OpenSTLinux 
 ```bash
 cd apps/a35
 make CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
-make core-check runtime-check lifecycle-check json-check encoder-check dashboard-check script-check ota-check
+make core-check runtime-check lifecycle-check json-check oled-check encoder-check dashboard-check script-check ota-check
 make object-check CC=gcc CXX=g++
 python3 tools/check_format.py
 ```

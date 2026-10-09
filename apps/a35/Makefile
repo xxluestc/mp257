@@ -106,7 +106,7 @@ build/%.o: %.cpp
 
 -include $(OBJECTS:.o=.d)
 
-.PHONY: core-check runtime-check lifecycle-check json-check encoder-check object-check
+.PHONY: core-check runtime-check lifecycle-check json-check oled-check encoder-check object-check
 core-check:
 	@mkdir -p build/tests
 	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pthread -Iinclude \
@@ -139,6 +139,13 @@ json-check:
 
 # Compile all source objects without linking the architecture-specific STAI runtime.
 object-check: $(OBJECTS)
+
+oled-check:
+	@mkdir -p build/tests
+	$(HOST_CC) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Ihud \
+		tests/test_oled.c hud/oled.c -Wl,--wrap=open,--wrap=ioctl,--wrap=write,--wrap=close \
+		-o build/tests/test_oled
+	./build/tests/test_oled
 
 encoder-check:
 	python3 -m unittest discover -s tests -p 'test_*.py'
@@ -189,5 +196,5 @@ run-radar:
 clean:
 	rm -f $(TARGET) $(OBJECTS) $(OBJECTS:.o=.d) build/tests/test_frame_pipeline build/tests/test_runtime \
 		build/tests/test_json build/tests/cJSON.o build/tests/imu_message.o
-	rm -f build/tests/test_video_lifecycle
+	rm -f build/tests/test_video_lifecycle build/tests/test_oled
 	$(MAKE) -C $(HUD_DIR) clean

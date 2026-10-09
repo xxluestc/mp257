@@ -6,7 +6,7 @@
 
 | 检查 | 结果和范围 |
 |---|---|
-| C/C++ 格式 | clang-format 18.1.8，49 个自有源码文件通过；检查末尾换行。厂商 STAI 头文件和上游 cJSON 不参与统一格式。 |
+| C/C++ 格式 | clang-format 18.1.8，50 个自有源码文件通过；检查末尾换行。厂商 STAI 头文件和上游 cJSON 不参与统一格式。 |
 | AArch64 Linux 编译 | 使用 Zig 0.13.0 所带 Clang，20 个 `src` 源文件与 5 个 HUD 源文件编译为目标对象；C11/C++17，`-Wall -Wextra -Wpedantic -Werror`，SDK 头文件作为系统头文件。 |
 | HUD | `main.c`、`udp.c`、`imu_message.c`、`cJSON.c` 完成 AArch64 Linux 编译与链接。OLED 由主应用使用，其源码另行通过严格目标编译。 |
 | 帧与并发行为 | Windows 原生 C++ 检查通过：帧引用回收、池对象生命周期、队列满载策略、关闭与取消、并发传递、ring 时间范围快照、事件窗口上限、延迟触发和视觉状态新鲜度。 |
@@ -25,7 +25,7 @@
 
 ```bash
 python3 tools/check_format.py
-make core-check runtime-check lifecycle-check json-check encoder-check
+make core-check runtime-check lifecycle-check json-check oled-check encoder-check
 make dashboard-check script-check ota-check
 make object-check CC=gcc CXX=g++
 make -C hud CC=gcc

@@ -5,6 +5,7 @@
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
 #include <stdint.h>
+#include <errno.h>
 #include "oled.h"
 
 #define OLED_CMD 0x00
@@ -14,25 +15,35 @@ static int i2c_fd = -1;
 static uint8_t oled_buf[8][128];
 
 // ==================== I2C ====================
-static void oled_write_cmd(uint8_t cmd) {
-    uint8_t buf[2] = {OLED_CMD, cmd};
-    write(i2c_fd, buf, 2);
+static int oled_write_byte(uint8_t control, uint8_t value) {
+    const uint8_t buf[2] = {control, value};
+    ssize_t written;
+    do {
+        written = write(i2c_fd, buf, sizeof(buf));
+    } while (written < 0 && errno == EINTR);
+    if (written == (ssize_t)sizeof(buf))
+        return 0;
+    // Each I2C write is a complete control+data transaction. A short write
+    // cannot be repaired by sending its remainder as a separate transaction.
+    if (written >= 0)
+        errno = EIO;
+    return -1;
 }
 
-static void oled_write_data(uint8_t data) {
-    uint8_t buf[2] = {OLED_DAT, data};
-    write(i2c_fd, buf, 2);
+static int oled_write_cmd(uint8_t cmd) {
+    return oled_write_byte(OLED_CMD, cmd);
 }
 
-static void oled_flush(void) {
+static int oled_flush(void) {
     for (int page = 0; page < 8; page++) {
-        oled_write_cmd(0xB0 + page);
-        oled_write_cmd(0x00);
-        oled_write_cmd(0x10);
+        if (oled_write_cmd(0xB0 + page) || oled_write_cmd(0x00) || oled_write_cmd(0x10))
+            return -1;
         for (int col = 0; col < 128; col++) {
-            oled_write_data(oled_buf[page][col]);
+            if (oled_write_byte(OLED_DAT, oled_buf[page][col]))
+                return -1;
         }
     }
+    return 0;
 }
 
 static void oled_clear_buf(void) {
@@ -204,35 +215,19 @@ static void oled_draw_arrow_by_turn(int x, int y, int turn, int scale) {
 }
 
 // ==================== OLED 初始化 ====================
-static void oled_init_sequence(void) {
-    oled_write_cmd(0xAE);
-    oled_write_cmd(0xD5);
-    oled_write_cmd(0x80);
-    oled_write_cmd(0xA8);
-    oled_write_cmd(0x3F);
-    oled_write_cmd(0xD3);
-    oled_write_cmd(0x00);
-    oled_write_cmd(0x40);
-    oled_write_cmd(0x8D);
-    oled_write_cmd(0x14);
-    oled_write_cmd(0x20);
-    oled_write_cmd(0x00);
-    oled_write_cmd(0xA1);
-    oled_write_cmd(0xC8);
-    oled_write_cmd(0xDA);
-    oled_write_cmd(0x12);
-    oled_write_cmd(0x81);
-    oled_write_cmd(0xCF);
-    oled_write_cmd(0xD9);
-    oled_write_cmd(0xF1);
-    oled_write_cmd(0xDB);
-    oled_write_cmd(0x40);
-    oled_write_cmd(0xA4);
-    oled_write_cmd(0xA6);
-    oled_write_cmd(0xAF);
+static int oled_init_sequence(void) {
+    const uint8_t commands[] = {0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40, 0x8D,
+                                0x14, 0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
+                                0xD9, 0xF1, 0xDB, 0x40, 0xA4, 0xA6, 0xAF};
+    for (size_t index = 0; index < sizeof(commands); ++index)
+        if (oled_write_cmd(commands[index]))
+            return -1;
+    return 0;
 }
 
 int oled_init(void) {
+    if (i2c_fd >= 0)
+        return 0;
     i2c_fd = open(OLED_I2C_DEV, O_RDWR | O_CLOEXEC);
     if (i2c_fd < 0)
         return -1;
@@ -243,26 +238,29 @@ int oled_init(void) {
         return -1;
     }
 
-    oled_init_sequence();
     oled_clear_buf();
     oled_draw_string(20, 26, "NO DATA", 2); // 保持不动
-    oled_flush();
+    if (oled_init_sequence() || oled_flush()) {
+        const int saved_errno = errno;
+        oled_close();
+        errno = saved_errno;
+        return -1;
+    }
     return 0;
 }
 
-void oled_clear(void) {
+int oled_clear(void) {
     oled_clear_buf();
-    oled_flush();
+    return oled_flush();
 }
 
 // ==================== 主显示函数（右下对齐，底部基线对齐，小字体，km 自动转换） ====================
-void oled_show_nav(const NavData *nav, int has_signal) {
+int oled_show_nav(const NavData *nav, int has_signal) {
     oled_clear_buf();
 
     if (!has_signal || nav == NULL) {
         oled_draw_string(20, 26, "NO DATA", 2);
-        oled_flush();
-        return;
+        return oled_flush();
     }
 
     const int RIGHT_EDGE = 97; // 向左移动 25 像素
@@ -340,7 +338,7 @@ void oled_show_nav(const NavData *nav, int has_signal) {
         oled_draw_string(label_x, text_y, "DIST", LABEL_SCALE);
     }
 
-    oled_flush();
+    return oled_flush();
 }
 
 void oled_close(void) {
