@@ -304,7 +304,7 @@ static int radar_telemetry_init(void) {
 }
 
 static void json_write_float_or_null(FILE *fp, float value) {
-    if (isfinite(value) && value >= 0.0f)
+    if (std::isfinite(value) && value >= 0.0f)
         fprintf(fp, "%.3f", value);
     else
         fputs("null", fp);

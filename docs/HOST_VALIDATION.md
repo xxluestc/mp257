@@ -9,6 +9,7 @@
 | C/C++ 格式 | clang-format 18.1.8，50 个自有源码文件通过；检查末尾换行。厂商 STAI 头文件和上游 cJSON 不参与统一格式。 |
 | AArch64 Linux 编译 | 使用 Zig 0.13.0 所带 Clang，20 个 `src` 源文件与 5 个 HUD 源文件编译为目标对象；C11/C++17，`-Wall -Wextra -Wpedantic -Werror`，SDK 头文件作为系统头文件。 |
 | HUD | `main.c`、`udp.c`、`imu_message.c`、`cJSON.c` 完成 AArch64 Linux 编译与链接。OLED 由主应用使用，其源码另行通过严格目标编译。 |
+| OLED 错误路径 | Linux CI 连接生产 OLED 代码，检查打开/设备配置失败、I2C 短写、传输错误、`EINTR` 重试，以及初始化失败和重复关闭时的句柄回收。 |
 | 帧与并发行为 | Windows 原生 C++ 检查通过：帧引用回收、池对象生命周期、队列满载策略、关闭与取消、并发传递、ring 时间范围快照、事件窗口上限、延迟触发和视觉状态新鲜度。 |
 | C++ 资源与边界 | 线程组部分启动失败时的回收、fd 移动与释放、重复启停保护、退出清空帧引用、配置校验先于大内存分配、路径边界、RPMsg 字段及超长行处理、按类别 NMS 均通过检查。生命周期测试连接生产 `VideoPipeline`，设备工作函数由测试替身提供。 |
 | JSON 与 IMU 转发 | 检查转义字符、Unicode、非法输入与嵌套上限；生产 `imu_message_to_json` 保留 GPS、短信等原字段并更新来源与时间。上游 cJSON 文件与记录的 SHA-256 一致。 |
