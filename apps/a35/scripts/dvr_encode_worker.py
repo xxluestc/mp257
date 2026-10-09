@@ -144,10 +144,16 @@ def process(stream: BinaryIO, output: Path, mount: Path, backend: str) -> int:
     encoder_log = Path(f"{output}.encoder.log")
     probe_log = Path(f"{output}.probe.log")
     decode_log = Path(f"{output}.decode.log")
+    owns_part = False
     try:
         require_storage(mount, output)
-        if output.exists() or part.exists():
+        if output.exists() or output.is_symlink():
             raise RuntimeError("DVR output already exists")
+        # Reserve the temporary path exclusively. A rejected invocation must
+        # never unlink another encoder's existing .part file.
+        with part.open("xb"):
+            pass
+        owns_part = True
         if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
             raise RuntimeError("ffmpeg/ffprobe validation dependency unavailable")
         Gst = hardware_gst() if backend != "ffmpeg" else None
@@ -162,24 +168,37 @@ def process(stream: BinaryIO, output: Path, mount: Path, backend: str) -> int:
             raise RuntimeError("MP4 validation failed")
         require_storage(mount, output)
         os.replace(part, output)
+        owns_part = False
         directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
-        prune_old_videos(output.parent, output)
-        for log in (encoder_log, probe_log, decode_log):
-            log.unlink(missing_ok=True)
+        # Retention maintenance cannot turn an already committed clip into an
+        # encoding failure; its errors have a separate diagnostic.
+        try:
+            prune_old_videos(output.parent, output)
+            for log in (encoder_log, probe_log, decode_log):
+                log.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"[DVR-WORKER] maintenance failed: {exc}", flush=True)
         print(f"[DVR-WORKER] VALIDATED {output}", flush=True)
         return 0
     except Exception as exc:
         print(f"[DVR-WORKER] FAILED: {exc}", flush=True)
-        part.unlink(missing_ok=True)
-        # Bound diagnostics as well as successful video retention.
-        logs = sorted(output.parent.glob("emergency_*.mp4.*.log"),
-                      key=lambda item: item.stat().st_mtime)
-        for old in logs[:-36]:
-            old.unlink(missing_ok=True)
+        if owns_part:
+            try:
+                part.unlink(missing_ok=True)
+            except OSError as cleanup:
+                print(f"[DVR-WORKER] partial cleanup failed: {cleanup}", flush=True)
+        # Cleanup is best effort even when the TF disappears during encoding.
+        try:
+            logs = sorted(output.parent.glob("emergency_*.mp4.*.log"),
+                          key=lambda item: item.stat().st_mtime)
+            for old in logs[:-36]:
+                old.unlink(missing_ok=True)
+        except OSError as cleanup:
+            print(f"[DVR-WORKER] diagnostic cleanup failed: {cleanup}", flush=True)
         return 2
 
 

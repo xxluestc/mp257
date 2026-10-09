@@ -40,7 +40,7 @@ def has_mp4_boxes(path: Path) -> bool:
                     return False
                 found.add(box_type)
                 offset += box_size
-        return {b"ftyp", b"mdat", b"moov"}.issubset(found)
+        return offset == size and {b"ftyp", b"mdat", b"moov"}.issubset(found)
     except OSError:
         return False
 
@@ -84,7 +84,8 @@ def prune_old_videos(directory: Path, current: Path) -> None:
     )
     videos.append(current)
     total = sum(item.stat().st_size for item in videos)
-    while len(videos) > MAX_DVR_FILES or total > MAX_DVR_BYTES:
+    # Never delete the clip whose successful commit is being reported.
+    while len(videos) > 1 and (len(videos) > MAX_DVR_FILES or total > MAX_DVR_BYTES):
         oldest = videos.pop(0)
         total -= oldest.stat().st_size
         oldest.unlink()

@@ -71,6 +71,64 @@ class StreamTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 worker.require_storage(root, root / "event.mp4")
 
+    def test_existing_partial_file_belongs_to_other_encoder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "event.mp4"
+            part = Path(f"{output}.part")
+            part.write_bytes(b"another encoder owns this")
+            with patch.object(worker, "require_storage"):
+                self.assertEqual(worker.process(io.BytesIO(), output, Path(directory), "ffmpeg"), 2)
+            self.assertEqual(part.read_bytes(), b"another encoder owns this")
+
+    def test_cleanup_failure_preserves_original_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "event.mp4"
+            with patch.object(worker, "require_storage"), \
+                 patch.object(worker.shutil, "which", return_value=None), \
+                 patch.object(Path, "unlink", side_effect=OSError("storage disappeared")):
+                self.assertEqual(worker.process(io.BytesIO(), output, Path(directory), "ffmpeg"), 2)
+
+    def test_committed_video_is_successful_when_rotation_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "event.mp4"
+
+            def encoded(stream, part, log):
+                part.write_bytes(b"validated video")
+
+            with patch.object(worker, "require_storage"), \
+                 patch.object(worker.shutil, "which", return_value="available"), \
+                 patch.object(worker, "encode_ffmpeg", side_effect=encoded), \
+                 patch.object(worker, "validate", return_value=True), \
+                 patch.object(worker.os, "open", return_value=123), \
+                 patch.object(worker.os, "O_DIRECTORY", 0, create=True), \
+                 patch.object(worker.os, "fsync"), patch.object(worker.os, "close"), \
+                 patch.object(worker, "prune_old_videos", side_effect=OSError("rotation failed")):
+                self.assertEqual(worker.process(io.BytesIO(), output, root, "ffmpeg"), 0)
+            self.assertEqual(output.read_bytes(), b"validated video")
+
+    def test_mp4_trailing_partial_box_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "event.mp4"
+            valid = (struct.pack(">I4s", 8, b"ftyp") + struct.pack(">I4s", 4080, b"mdat") +
+                     bytes(4072) + struct.pack(">I4s", 8, b"moov"))
+            output.write_bytes(valid)
+            self.assertTrue(dvr_validation.has_mp4_boxes(output))
+            output.write_bytes(valid + b"trailer")
+            self.assertFalse(dvr_validation.has_mp4_boxes(output))
+
+    def test_retention_keeps_current_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current = root / "emergency_current.mp4"
+            previous = root / "emergency_previous.mp4"
+            current.write_bytes(b"current")
+            previous.write_bytes(b"previous")
+            with patch.object(dvr_validation, "MAX_DVR_BYTES", 1):
+                dvr_validation.prune_old_videos(root, current)
+            self.assertTrue(current.exists())
+            self.assertFalse(previous.exists())
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "native FFmpeg is unavailable")
     def test_real_stream_encoder_and_full_decode(self):
         # Exercise the actual image2pipe command and subprocess lifecycle.

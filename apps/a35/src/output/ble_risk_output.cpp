@@ -69,7 +69,7 @@ static int ble_open(void) {
     if (now < g_ble_next_retry_ms)
         return -1;
 
-    g_ble_fd = open(g_ble_uart, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    g_ble_fd = open(g_ble_uart, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (g_ble_fd < 0) {
         fprintf(stderr, "[BLE-LED] Cannot open %s: %s; retrying\n", g_ble_uart, strerror(errno));
         g_ble_next_retry_ms = now + BLE_RETRY_MS;

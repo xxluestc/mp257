@@ -67,16 +67,41 @@ int main() {
     require(waiter.wait_for(std::chrono::seconds(1)) == std::future_status::ready && !waiter.get(),
             "close did not wake consumer");
 
+    FramePool cancelled_pool(2, 4);
+    BoundedQueue<FrameRef> cancelled(2);
+    cancelled.push(cancelled_pool.copy(original, 4, 1, 1, 1, 1));
+    cancelled.push(cancelled_pool.copy(original, 4, 2, 2, 1, 1));
+    cancelled.cancel();
+    require(cancelled.drained() && cancelled_pool.available() == 2,
+            "cancellation retained queued JPEG ownership");
+    cancelled.cancel();
+    require(!cancelled.push({}), "cancelled queue accepted work");
+
     EventWindow event(15, 60);
     event.trigger(100);
     require(!event.due(114) && event.due(115), "post window is incorrect");
     event.trigger(110);
     require(!event.due(120) && event.due(125), "repeat trigger did not extend");
+    event.trigger(105);
+    require(!event.due(120) && event.due(125), "delayed trigger shortened the event");
+    require(event.contains(90, 15) && !event.contains(84, 15) && !event.contains(126, 15),
+            "timestamp selection escaped the actual event window");
     event.trigger(159);
     require(event.due(160), "repeat trigger escaped duration cap");
     event.finish();
     event.trigger(200);
     require(event.due(215), "new event inherited previous deadline");
+    event.finish();
+    event.trigger(UINT64_MAX - 10);
+    require(event.end() == UINT64_MAX && !event.due(UINT64_MAX - 1),
+            "event deadline overflow wrapped into the past");
+
+    FrameRing delayed_ring(2, 150);
+    delayed_ring.append(second);   // 200, before event at 250.
+    delayed_ring.append(recycled); // 300, after event but before processing.
+    auto delayed = delayed_ring.snapshot_between(100, 310);
+    require(delayed.size() == 2 && delayed.back()->timestamp_us == 300,
+            "delayed event lost already buffered post-event frames");
 
     VisionGate vision;
     require(vision.alert(true, false, 1), "radar-only fallback lost alert");

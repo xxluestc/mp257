@@ -3,7 +3,7 @@
 #include "nav_tts.h"
 #include "radar/radar_worker.hpp"
 #include "runtime/fusion_state.hpp"
-#include "runtime/linux_resources.hpp"
+#include "runtime/worker_group.hpp"
 #include "runtime/video_pipeline.hpp"
 #include <cstdio>
 #include <cstring>
@@ -21,19 +21,16 @@ void request_stop(int) {
 
 class ApplicationResources {
   public:
+    ApplicationResources() = default;
+    ApplicationResources(const ApplicationResources &) = delete;
+    ApplicationResources &operator=(const ApplicationResources &) = delete;
+
     ~ApplicationResources() {
         ble_risk_shutdown();
         nav_tts_stop();
         gpio_deinit();
         radar_telemetry_close();
         sensor_telemetry_close();
-    }
-};
-
-class StopOnExit {
-  public:
-    ~StopOnExit() {
-        g_running = 0;
     }
 };
 
@@ -84,18 +81,12 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
 
     helmet::VideoPipeline video(std::move(config), on_video_event);
     helmet::BoundedQueue<RadarObservation> radar_results(8);
-    helmet::JoiningThread radar([&] { radar_receive_loop(radar_device, radar_results); });
-    // Construct the stop guard immediately after each group of thread owners:
-    // its destructor runs before joins even if later startup throws.
-    StopOnExit radar_stop;
-    helmet::JoiningThread led([] { led_thread(nullptr); });
-    StopOnExit led_stop;
-    helmet::JoiningThread rpmsg([] { rpmsg_thread(nullptr); });
-    StopOnExit rpmsg_stop;
-    helmet::JoiningThread test_fall([] { test_fall_thread(nullptr); });
-    StopOnExit fall_stop;
-    helmet::JoiningThread test_v2x([] { test_v2x_thread(nullptr); });
-    StopOnExit v2x_stop;
+    helmet::WorkerGroup workers(g_running);
+    workers.start([&] { radar_receive_loop(radar_device, radar_results); });
+    workers.start([] { led_thread(nullptr); });
+    workers.start([] { rpmsg_thread(nullptr); });
+    workers.start([] { test_fall_thread(nullptr); });
+    workers.start([] { test_v2x_thread(nullptr); });
     video.start();
     startup_mark("fusion_risk_core_ready");
     startup_mark("radar_fusion_runtime_ready");
@@ -106,7 +97,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
     bool previous_alert = false;
     uint64_t next_heartbeat = 0, next_storage_check = 0, next_trigger = 0;
     while (!stop_requested) {
-        const uint64_t now = helmet::monotonic_us();
+        uint64_t now = helmet::monotonic_us();
         if (now >= next_storage_check) {
             storage_try_initialize();
             next_storage_check = now + 2000000;
@@ -126,6 +117,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
             radar_state = report;
             updated = true;
         }
+        now = helmet::monotonic_us();
         bool radar_fresh = radar_state.timestamp_us && now >= radar_state.timestamp_us &&
                            now - radar_state.timestamp_us <= 3000000;
         const auto &result = radar_state.result;
@@ -168,11 +160,7 @@ int run(helmet::VideoConfig config, const std::string &radar_device) {
     }
     g_running = 0;
     video.stop();
-    radar.join();
-    led.join();
-    rpmsg.join();
-    test_fall.join();
-    test_v2x.join();
+    workers.stop();
     g_led_alert = 0;
     return 0;
 }

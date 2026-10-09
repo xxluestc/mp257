@@ -98,7 +98,7 @@ Linux systemd
 
 | 功能 | 板端文件 | 仓库源码 | 启动和管理 |
 |---|---|---|---|
-| 主业务 | `/xxl/camera_detect/radar_fusion` | [`radar_fusion.cpp`](../src/app/main.cpp) | `dvr.service` |
+| 主业务 | `/xxl/camera_detect/radar_fusion` | [`main.cpp`](../src/app/main.cpp) | `dvr.service` |
 | 摄像头采集 | 编译进`radar_fusion` | [`camera.c`](../src/camera/camera.c)、[`camera.h`](../include/camera/camera.h) | 随主业务运行 |
 | NPU推理 | 编译进`radar_fusion` | [`npu_detect.cpp`](../src/vision/npu_detect.cpp)、[`npu_detect.h`](../include/vision/npu_detect.h) | 随主业务运行 |
 | 导航和语音 | 编译进`radar_fusion` | [`nav_tts.c`](../src/navigation/nav_tts.c)、[`nav_tts.h`](../include/navigation/nav_tts.h) | 随主业务运行 |
@@ -130,18 +130,18 @@ Linux systemd
 
 HUD当前负责：
 
-- 接收手机导航消息；
-- 接收主业务发送的IMU和风险信息；
-- 驱动OLED/HUD显示；
-- 通过UDP广播部分状态；
-- 记录IMU消息投递情况。
+- 接收主业务通过 loopback UDP 8890 发送的 IMU 信息；
+- 保留 GPS、事件标识等字段并通过 UDP 8889 转发手机；
+- 记录 IMU 消息投递情况。
+
+手机导航接收、OLED 显示和语音由 `radar_fusion` 中的导航模块统一负责。
 
 当前涉及的UDP端口：
 
 | 端口 | 方向和用途 |
 |---|---|
-| UDP 8888 | 手机导航/危险消息输入，HUD和导航模块使用 |
-| UDP 8890 | `radar_fusion`向HUD发送本地IMU消息 |
+| UDP 8888 | 手机导航/危险消息输入，由主应用导航模块独占 |
+| UDP 8890 | `radar_fusion`向 HUD 的 loopback 接口发送本地 IMU 消息 |
 | UDP 8889 | HUD向手机广播状态 |
 
 ### 3.3 Dashboard
@@ -268,7 +268,7 @@ HTTP接口，手机端不属于本手册中的板端可执行程序。
 | TCP 8080 | Dashboard | 状态和控制面板 |
 | TCP 8090 | OTA服务 | 版本、上传、安装和状态查询 |
 | UDP 67 | dnsmasq | DHCP |
-| UDP 8888 | HUD/导航模块 | 导航和危险消息输入 |
+| UDP 8888 | 主应用导航模块 | 导航和危险消息输入 |
 | UDP 8889 | HUD | 向手机广播状态 |
 | UDP 8890 | HUD | 本地IMU消息输入 |
 

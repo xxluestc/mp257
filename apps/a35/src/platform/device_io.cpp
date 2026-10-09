@@ -90,13 +90,8 @@ void *led_thread(void *arg) {
     return NULL;
 }
 
-/* ======================== 设备冲突清理 ======================== */
-
 /**
- * @brief 强制结束占用指定设备的进程
- * @param device 设备节点路径
- *
- * 使用 fuser 终止持有该设备的进程，避免摄像头/串口被占用导致打开失败。
+ * @brief 配置串口为原始模式及指定波特率
  */
 int set_uart(int fd, int baudrate) {
     struct termios tty;

@@ -38,7 +38,7 @@ GStreamer 后端使用 appsrc 和采集 PTS；硬件插件不齐时选择固定 
 
 RPMsg 读取 IMU_ALERT / V2X_ALERT。摔倒提示保持 5 秒，事件时间通过原子邮箱交给 Fusion；IMU 文本转换为 JSON，经 localhost:8890 送 HUD，再由 HUD 转发手机。手机短信仍没有端到端 ACK，发送日志只表示本端投递结果。
 
-导航接收线程监听 UDP 8888，处理 navi、navi_tts、danger_tts、alert。OLED 状态与看门狗共享锁；音频任务进入容量 8 的串行队列，告警优先，退出时回收任务并 join。danger_tts preload 只记录，trigger 提交最终文案；默认离线 TTS 策略保留。
+`radar_fusion` 中的导航线程独占 UDP 8888 与 OLED，处理 navi、navi_tts、danger_tts、alert。独立 HUD 程序仅监听 `127.0.0.1:8890`，转发 IMU JSON 至手机 UDP 8889；序列化保留 GPS 等原始字段并正确转义文本。OLED 状态与看门狗共享锁；音频任务进入容量 8 的串行队列，告警优先，退出时回收任务并 join。danger_tts preload 只记录，trigger 提交最终文案；默认离线 TTS 策略保留。
 
 BLE 输出沿用 UART → CH9140 → WBA54 协议，CLEAR / LEFT / CENTER / RIGHT 对应现有方向灯状态。串口写出和 drain 不等于远端执行 ACK。本次没有更改无线协议或固件收发语义。
 
@@ -46,10 +46,10 @@ BLE 输出沿用 UART → CH9140 → WBA54 协议，CLEAR / LEFT / CENTER / RIGH
 
 | 链路 | 文件 |
 |---|---|
-| 配置与启动 | [app_config.cpp](../src/app/app_config.cpp)、[main.cpp](../src/app/main.cpp) |
+| 配置与启动 | [app_config.cpp](../src/app/app_config.cpp)、[video_config.cpp](../src/runtime/video_config.cpp)、[main.cpp](../src/app/main.cpp)、[worker_group.hpp](../include/runtime/worker_group.hpp) |
 | 采集与缓冲所有权 | [camera.c](../src/camera/camera.c)、[camera_worker.cpp](../src/runtime/camera_worker.cpp) |
 | 帧池、ring 与队列 | [frame_pipeline.hpp](../include/runtime/frame_pipeline.hpp) |
-| 推理 | [inference_worker.cpp](../src/runtime/inference_worker.cpp)、[npu_detect.cpp](../src/vision/npu_detect.cpp) |
+| 推理 | [inference_worker.cpp](../src/runtime/inference_worker.cpp)、[npu_detect.cpp](../src/vision/npu_detect.cpp)、[ssd_postprocess.cpp](../src/vision/ssd_postprocess.cpp) |
 | 雷达 | [radar_worker.cpp](../src/radar/radar_worker.cpp)、[radar_protocol.cpp](../src/radar/radar_protocol.cpp) |
 | 视觉确认与时效 | [fusion_state.hpp](../include/runtime/fusion_state.hpp) |
 | 录像状态与传输 | [dvr_worker.cpp](../src/runtime/dvr_worker.cpp)、[encoder_worker.cpp](../src/runtime/encoder_worker.cpp) |

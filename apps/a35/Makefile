@@ -25,13 +25,14 @@ STAI_MPU_INC = $(STAI_MPU_DIR)/include
 STAI_MPU_LIB = $(STAI_MPU_DIR)
 HUD_DIR      = ./hud
 
-CPPFLAGS = -Iinclude -Iinclude/camera -Iinclude/vision -Iinclude/output \
+CPPFLAGS = -DCJSON_NESTING_LIMIT=32 -Iinclude -Iinclude/camera -Iinclude/vision -Iinclude/output \
            -Iinclude/navigation -isystem $(STAI_MPU_INC) -I$(HUD_DIR)
 CFLAGS   = -Wall -Wextra -Wpedantic -O2 -std=c11 -D_DEFAULT_SOURCE -MMD -MP
 CXXFLAGS = -Wall -Wextra -Wpedantic -O2 -std=c++17 -MMD -MP
 LDFLAGS  = -L$(STAI_MPU_LIB) -Wl,-rpath,'$$ORIGIN/stai_mpu'
 LDLIBS   = -lstai_mpu -ljpeg -lm -lpthread -ldl
 HOST_CXX ?= c++
+HOST_CC ?= cc
 C_SOURCES := $(wildcard src/*/*.c) $(HUD_DIR)/cJSON.c $(HUD_DIR)/oled.c
 CXX_SOURCES := $(wildcard src/*/*.cpp)
 OBJECTS := $(addprefix build/,$(C_SOURCES:.c=.o) $(CXX_SOURCES:.cpp=.o))
@@ -105,12 +106,39 @@ build/%.o: %.cpp
 
 -include $(OBJECTS:.o=.d)
 
-.PHONY: core-check encoder-check
+.PHONY: core-check runtime-check lifecycle-check json-check encoder-check object-check
 core-check:
 	@mkdir -p build/tests
 	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pthread -Iinclude \
 		tests/test_frame_pipeline.cpp -o build/tests/test_frame_pipeline
 	./build/tests/test_frame_pipeline
+
+runtime-check:
+	@mkdir -p build/tests
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pthread -Iinclude \
+		tests/test_runtime.cpp src/runtime/video_config.cpp src/vision/ssd_postprocess.cpp \
+		-o build/tests/test_runtime
+	./build/tests/test_runtime
+
+lifecycle-check:
+	@mkdir -p build/tests
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pthread -Iinclude \
+		tests/test_video_lifecycle.cpp src/runtime/video_pipeline.cpp src/runtime/video_config.cpp \
+		-o build/tests/test_video_lifecycle
+	./build/tests/test_video_lifecycle
+
+json-check:
+	@mkdir -p build/tests
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -DCJSON_NESTING_LIMIT=32 -Ihud \
+		-c hud/cJSON.c -o build/tests/cJSON.o
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -Ihud \
+		-c hud/imu_message.c -o build/tests/imu_message.o
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -Ihud tests/test_json.cpp \
+		build/tests/cJSON.o build/tests/imu_message.o -o build/tests/test_json
+	./build/tests/test_json
+
+# Compile all source objects without linking the architecture-specific STAI runtime.
+object-check: $(OBJECTS)
 
 encoder-check:
 	python3 -m unittest discover -s tests -p 'test_*.py'
@@ -159,5 +187,7 @@ run-radar:
 	ssh -t root@$(BOARD_IP) 'cd $(BOARD_DIR) && LD_LIBRARY_PATH=/usr/lib:/vendor/lib:$(BOARD_DIR)/stai_mpu ./$(TARGET)'
 
 clean:
-	rm -f $(TARGET) $(OBJECTS) $(OBJECTS:.o=.d) build/tests/test_frame_pipeline
+	rm -f $(TARGET) $(OBJECTS) $(OBJECTS:.o=.d) build/tests/test_frame_pipeline build/tests/test_runtime \
+		build/tests/test_json build/tests/cJSON.o build/tests/imu_message.o
+	rm -f build/tests/test_video_lifecycle
 	$(MAKE) -C $(HUD_DIR) clean

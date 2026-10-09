@@ -14,4 +14,5 @@
 /firmware/**/.gitignore text eol=lf
 /apps/a35/stai_mpu/** -text
 /apps/a35/hud/cJSON.c -text
-/apps/a35/hud/cJSON.h -text
+/apps/a35/hud/cJSON.h -text whitespace=-blank-at-eol
+/apps/a35/hud/LICENSE.cJSON -text whitespace=-blank-at-eof

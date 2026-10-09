@@ -2,13 +2,16 @@
 #include <cstdio>
 
 namespace helmet {
-VideoPipeline::VideoPipeline(VideoConfig config, VideoEvent event)
-    : config_(std::move(config)), event_(std::move(event)),
-      pool_(config_.pool_slots, config_.max_jpeg_bytes) {
-    if (!config_.inference_stride || config_.pre_frames > 1500 ||
-        config_.pool_slots < config_.pre_frames * 2 + 128)
-        throw std::invalid_argument("video pool requires space for ring, encoder and workers");
+namespace {
+VideoConfig checked_config(VideoConfig config) {
+    validate_video_config(config);
+    return config;
 }
+} // namespace
+
+VideoPipeline::VideoPipeline(VideoConfig config, VideoEvent event)
+    : config_(checked_config(std::move(config))), event_(std::move(event)),
+      pool_(config_.pool_slots, config_.max_jpeg_bytes) {}
 
 VideoPipeline::~VideoPipeline() {
     stop();
@@ -16,13 +19,17 @@ VideoPipeline::~VideoPipeline() {
 
 void VideoPipeline::report(const char *event, const std::string &details) noexcept {
     try {
-        event_(event, details);
+        if (event_)
+            event_(event, details);
     } catch (...) {
         fprintf(stderr, "[VIDEO] Event sink failed: %s\n", event);
     }
 }
 
 void VideoPipeline::start() {
+    if (started_ || stopping_)
+        throw std::logic_error("video pipeline is single-use");
+    started_ = true;
     try {
         encoder_thread_ = std::thread(&VideoPipeline::encoder_loop, this);
         dvr_thread_ = std::thread(&VideoPipeline::dvr_loop, this);
@@ -36,23 +43,24 @@ void VideoPipeline::start() {
 
 void VideoPipeline::stop() {
     stopping_ = true;
-    npu_frames_.close();
-    dvr_frames_.close();
-    triggers_.close();
+    npu_frames_.cancel();
+    dvr_frames_.cancel();
+    triggers_.cancel();
     if (camera_thread_.joinable())
         camera_thread_.join();
     if (npu_thread_.joinable())
         npu_thread_.join();
     if (dvr_thread_.joinable())
         dvr_thread_.join();
-    sessions_.close();
+    sessions_.cancel();
     if (encoder_thread_.joinable())
         encoder_thread_.join();
-    observations_.close();
+    observations_.cancel();
+    encoder_busy_ = false;
 }
 
 bool VideoPipeline::trigger(uint64_t timestamp) {
-    return triggers_.push(timestamp);
+    return started_ && !stopping_ && timestamp && triggers_.push(timestamp);
 }
 
 bool VideoPipeline::observation(NpuObservation &value) {

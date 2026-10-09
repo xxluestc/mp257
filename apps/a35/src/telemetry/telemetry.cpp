@@ -1,4 +1,6 @@
 #include "app/services.hpp"
+#include "runtime/video_config.hpp"
+#include "runtime/linux_resources.hpp"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -7,11 +9,12 @@
 #include <ctime>
 #include <cmath>
 #include <limits.h>
-#include <pthread.h>
+#include <mutex>
+#include <fcntl.h>
 
 static FILE *g_radar_csv = NULL;
 static FILE *g_sensor_csv = NULL;
-static pthread_mutex_t g_sensor_csv_mutex = PTHREAD_MUTEX_INITIALIZER;
+static std::mutex g_sensor_csv_mutex;
 static char g_radar_csv_path[PATH_MAX];
 static char g_sensor_csv_path[PATH_MAX];
 static char g_radar_state_path[PATH_MAX];
@@ -86,10 +89,20 @@ static int rotate_numbered_file(const char *path, int backups) {
     return 0;
 }
 
+static FILE *open_file(const char *path, const char *mode, int flags) {
+    helmet::UniqueFd descriptor(open(path, flags | O_CLOEXEC, 0644));
+    if (descriptor.get() < 0)
+        return nullptr;
+    FILE *file = fdopen(descriptor.get(), mode);
+    if (file)
+        descriptor.release(); // FILE owns the fd from here through fclose().
+    return file;
+}
+
 static FILE *open_csv_append(const char *path, const char *header) {
     struct stat st;
     int needs_header = (stat(path, &st) != 0 || st.st_size == 0);
-    FILE *fp = fopen(path, "a");
+    FILE *fp = open_file(path, "a", O_WRONLY | O_CREAT | O_APPEND);
     if (fp == NULL)
         return NULL;
     setvbuf(fp, NULL, _IOLBF, BUFSIZ);
@@ -165,6 +178,7 @@ static void sensor_csv_maybe_rotate_locked(void) {
 }
 
 static int sensor_telemetry_init(void) {
+    std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
     if (g_sensor_csv != NULL)
         return 0;
     if (mkdir_recursive(g_radar_log_dir) != 0)
@@ -177,15 +191,9 @@ static int sensor_telemetry_init(void) {
     if (stat(g_sensor_csv_path, &st) == 0 && st.st_size >= (off_t)TELEMETRY_LOG_MAX_BYTES)
         rotate_numbered_file(g_sensor_csv_path, TELEMETRY_LOG_BACKUPS);
 
-    pthread_mutex_lock(&g_sensor_csv_mutex);
-    if (g_sensor_csv != NULL) {
-        pthread_mutex_unlock(&g_sensor_csv_mutex);
-        return 0;
-    }
     g_sensor_csv = open_csv_append(g_sensor_csv_path, SENSOR_CSV_HEADER);
     if (g_sensor_csv == NULL) {
         fprintf(stderr, "[SENSOR_DATA] Cannot open %s: %s\n", g_sensor_csv_path, strerror(errno));
-        pthread_mutex_unlock(&g_sensor_csv_mutex);
         return -1;
     }
     g_sensor_csv_write_count = 0;
@@ -196,7 +204,6 @@ static int sensor_telemetry_init(void) {
     }
     g_sensor_pending_head = 0;
     g_sensor_pending_count = 0;
-    pthread_mutex_unlock(&g_sensor_csv_mutex);
     printf("[系统] [SENSOR_DATA] CSV: %s (20 MiB x current+4)\n", g_sensor_csv_path);
     if (buffered > 0 || g_sensor_pending_dropped > 0) {
         printf("[系统] [SENSOR_DATA] Flushed %u boot events from RAM"
@@ -238,7 +245,7 @@ void sensor_event_log(const char *source, const char *event_type, const char *st
              (unsigned long long)timestamp_ms, safe_source, safe_type, safe_status, safe_id,
              safe_label, score_text, count_text, seq_text, safe_reason, safe_details);
 
-    pthread_mutex_lock(&g_sensor_csv_mutex);
+    std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
     if (g_sensor_csv == NULL) {
         if (g_sensor_pending_count == SENSOR_PENDING_MAX) {
             g_sensor_pending_head = (g_sensor_pending_head + 1) % SENSOR_PENDING_MAX;
@@ -248,21 +255,23 @@ void sensor_event_log(const char *source, const char *event_type, const char *st
         unsigned int index = (g_sensor_pending_head + g_sensor_pending_count) % SENSOR_PENDING_MAX;
         snprintf(g_sensor_pending[index], SENSOR_PENDING_LINE_MAX, "%s", line);
         g_sensor_pending_count++;
-        pthread_mutex_unlock(&g_sensor_csv_mutex);
         return;
     }
     fputs(line, g_sensor_csv);
     sensor_csv_maybe_rotate_locked();
-    pthread_mutex_unlock(&g_sensor_csv_mutex);
 }
 
 void sensor_telemetry_close(void) {
-    pthread_mutex_lock(&g_sensor_csv_mutex);
+    std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
     if (g_sensor_csv != NULL) {
         fclose(g_sensor_csv);
         g_sensor_csv = NULL;
     }
-    pthread_mutex_unlock(&g_sensor_csv_mutex);
+}
+
+static bool sensor_telemetry_available() {
+    std::lock_guard<std::mutex> lock(g_sensor_csv_mutex);
+    return g_sensor_csv != NULL;
 }
 
 static int radar_telemetry_init(void) {
@@ -350,7 +359,7 @@ void radar_telemetry_publish(const radar_result_t *radar, int fusion_alert, bool
     if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", g_radar_state_path) >= (int)sizeof(tmp_path))
         return;
 
-    FILE *fp = fopen(tmp_path, "w");
+    FILE *fp = open_file(tmp_path, "w", O_WRONLY | O_CREAT | O_TRUNC);
     if (fp == NULL)
         return;
 
@@ -467,10 +476,7 @@ int finalize_dvr_storage_paths(void) {
     while (base_len > 1 && g_dvr_base_dir[base_len - 1] == '/')
         g_dvr_base_dir[--base_len] = '\0';
 
-    if (g_dvr_mount_dir[0] != '/' || g_dvr_base_dir[0] != '/' ||
-        strstr(g_dvr_mount_dir, "/../") != NULL || strstr(g_dvr_base_dir, "/../") != NULL ||
-        strncmp(g_dvr_base_dir, g_dvr_mount_dir, mount_len) != 0 ||
-        g_dvr_base_dir[mount_len] != '/') {
+    if (!helmet::valid_storage_paths(g_dvr_mount_dir, g_dvr_base_dir)) {
         fprintf(stderr, "[DVR] dvr-dir must be an absolute child of dvr-mount-dir\n");
         return -1;
     }
@@ -498,14 +504,14 @@ void storage_try_initialize(void) {
     }
 
     int telemetry_ready = !path_requires_dvr_mount(g_radar_log_dir) || storage_ready;
-    if (telemetry_ready && g_sensor_csv == NULL)
+    if (telemetry_ready)
         sensor_telemetry_init();
     if (telemetry_ready && g_radar_csv == NULL) {
         if (radar_telemetry_init() == 0)
             radar_telemetry_publish_empty();
     }
 
-    if (!g_storage_ready && dvr_storage_ok && g_sensor_csv != NULL && g_radar_csv != NULL) {
+    if (!g_storage_ready && dvr_storage_ok && sensor_telemetry_available() && g_radar_csv != NULL) {
         g_storage_ready = 1;
         startup_mark("business_storage_initialized");
     }

@@ -7,7 +7,7 @@
  *   get_input_width/height()   -> 供调用者 resize 图像到模型输入尺寸
  *
  * 调用位置:
- *   - radar_fusion.cpp (主程序道路用户检测与 DVR 触发)
+ *   - src/runtime/inference_worker.cpp（独立 NPU 线程）
  */
 #ifndef NPU_DETECT_H
 #define NPU_DETECT_H
@@ -15,21 +15,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include "vision/detection_types.hpp"
 #include "stai_mpu_network.h"
-
-/** 单个检测结果 */
-typedef struct {
-    int class_index; /* COCO 类别索引 */
-    float score;     /* 置信度 */
-    float x0, y0;    /* 左上角归一化坐标 */
-    float x1, y1;    /* 右下角归一化坐标 */
-} detect_result_t;
-
-/** 单帧推理结果集合 */
-typedef struct {
-    std::vector<detect_result_t> objects;
-    float inference_time_ms;
-} frame_results_t;
 
 class NpuNetwork;
 
@@ -66,10 +53,6 @@ class NpuDetector {
     std::vector<int> filter_by_score(float *predictions, int rows, int cols, float threshold);
     std::vector<float> bb_decoding(const std::vector<float> &encoded,
                                    const std::vector<float> &anchors);
-    float iou(const detect_result_t &a, const detect_result_t &b);
-    std::vector<detect_result_t> nms(const std::vector<float> &boxes,
-                                     const std::vector<int> &class_indices,
-                                     const std::vector<float> &scores, float iou_threshold);
     void recover_score_info(const std::vector<float> &scores, int nboxes, int nclasses,
                             std::vector<float> &hi_scores, std::vector<int> &class_indices);
 

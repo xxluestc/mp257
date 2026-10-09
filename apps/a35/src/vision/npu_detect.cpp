@@ -6,9 +6,11 @@
  *   detect(rgb_buf)  -> 预处理 (归一化/量化) -> NPU 推理 -> 后处理 (NMS) -> 返回检测框
  *   get_input_width/height() -> 供调用者 resize 图像到模型输入尺寸
  *
- * 调用位置: radar_fusion.cpp 主循环, 每 10 帧摄像头图像调用一次
+ * 调用位置: src/runtime/inference_worker.cpp，独立线程消费采样帧
  */
 #include "npu_detect.h"
+#include "vision/ssd_postprocess.hpp"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -108,6 +110,8 @@ const std::string &NpuDetector::get_label(int class_index) const {
  *       SSD MobileNet V2 后处理（分数过滤、框解码、NMS）。
  */
 frame_results_t NpuDetector::detect(const uint8_t *rgb_data) {
+    if (!rgb_data)
+        throw std::invalid_argument("empty NPU input");
     frame_results_t results;
     results.inference_time_ms = 0.0f;
 
@@ -135,10 +139,13 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data) {
 
     /* --- SSD MobileNet V2 post-processing --- */
     std::vector<stai_mpu_tensor> output_infos = model_->get_output_infos();
+    if (output_infos.size() != 3)
+        throw std::runtime_error("Expected three SSD output tensors");
     std::vector<int> output_shape_0 = output_infos[0].get_shape();
     auto boxes_shape = output_infos[1].get_shape();
     auto anchors_shape = output_infos[2].get_shape();
     if (output_shape_0.size() != 3 || boxes_shape.size() != 3 || anchors_shape.size() != 3 ||
+        output_shape_0[0] != 1 || boxes_shape[0] != 1 || anchors_shape[0] != 1 ||
         output_shape_0[1] <= 0 || output_shape_0[1] > 100000 || output_shape_0[2] <= 1 ||
         output_shape_0[2] > 1000 || boxes_shape[1] != output_shape_0[1] || boxes_shape[2] != 4 ||
         anchors_shape[1] != output_shape_0[1] || anchors_shape[2] != 4)
@@ -192,7 +199,7 @@ frame_results_t NpuDetector::detect(const uint8_t *rgb_data) {
     recover_score_info(filtered_scores, filtered_idx.size(), nclasses, hi_scores, class_indices);
 
     /* NMS */
-    results.objects = nms(decoded, class_indices, hi_scores, iou_thresh_);
+    results.objects = helmet::suppress_ssd_boxes(decoded, class_indices, hi_scores, iou_thresh_);
 
     return results;
 }
@@ -214,7 +221,7 @@ std::vector<int> NpuDetector::filter_by_score(float *predictions, int rows, int 
     std::vector<int> filtered;
     for (int i = 0; i < rows; i++) {
         for (int j = 1; j < cols; j++) {
-            if (predictions[i * cols + j] > threshold) {
+            if (std::isfinite(predictions[i * cols + j]) && predictions[i * cols + j] > threshold) {
                 filtered.push_back(i);
                 break;
             }
@@ -251,73 +258,6 @@ std::vector<float> NpuDetector::bb_decoding(const std::vector<float> &encoded,
 }
 
 /**
- * @brief 计算两个检测框的交并比（IoU）
- * @param a 检测框 A
- * @param b 检测框 B
- * @return IoU 值，范围 [0, 1]
- */
-float NpuDetector::iou(const detect_result_t &a, const detect_result_t &b) {
-    float areaA = (a.x1 - a.x0) * (a.y1 - a.y0);
-    float areaB = (b.x1 - b.x0) * (b.y1 - b.y0);
-    if (areaA <= 0 || areaB <= 0)
-        return 0;
-
-    float ix = std::max(a.x0, b.x0);
-    float iy = std::max(a.y0, b.y0);
-    float ix2 = std::min(a.x1, b.x1);
-    float iy2 = std::min(a.y1, b.y1);
-    float iarea = std::max(0.0f, ix2 - ix) * std::max(0.0f, iy2 - iy);
-    return iarea / (areaA + areaB - iarea);
-}
-
-/**
- * @brief 非极大值抑制（NMS）
- * @param boxes         解码后的检测框坐标，每个框 4 个浮点数
- * @param class_indices 每个框对应的类别索引
- * @param scores        每个框对应的最佳类别分数
- * @param iou_threshold 抑制阈值，IoU 超过该值的低分框将被过滤
- * @return 抑制后的检测框列表
- */
-std::vector<detect_result_t> NpuDetector::nms(const std::vector<float> &boxes,
-                                              const std::vector<int> &class_indices,
-                                              const std::vector<float> &scores,
-                                              float iou_threshold) {
-    size_t n = boxes.size() / 4;
-    std::vector<detect_result_t> enriched(n);
-    for (size_t i = 0; i < n; i++) {
-        enriched[i].x0 = boxes[i * 4];
-        enriched[i].y0 = boxes[i * 4 + 1];
-        enriched[i].x1 = boxes[i * 4 + 2];
-        enriched[i].y1 = boxes[i * 4 + 3];
-        enriched[i].score = scores[i];
-        enriched[i].class_index = class_indices[i];
-    }
-
-    std::vector<int> indices(n);
-    for (size_t i = 0; i < n; i++)
-        indices[i] = i;
-    std::sort(indices.begin(), indices.end(),
-              [&](int a, int b) { return enriched[a].score > enriched[b].score; });
-
-    std::vector<bool> suppressed(n, false);
-    std::vector<detect_result_t> result;
-
-    for (size_t i = 0; i < n; i++) {
-        if (suppressed[indices[i]])
-            continue;
-        int idx = indices[i];
-        result.push_back(enriched[idx]);
-        for (size_t j = i + 1; j < n; j++) {
-            if (!suppressed[indices[j]] &&
-                iou(enriched[idx], enriched[indices[j]]) > iou_threshold) {
-                suppressed[indices[j]] = true;
-            }
-        }
-    }
-    return result;
-}
-
-/**
  * @brief 从类别分数矩阵中恢复每个框的最高分及其类别索引
  * @param scores        类别分数矩阵，形状 [nboxes, nclasses]
  * @param nboxes        框数量
@@ -332,9 +272,16 @@ void NpuDetector::recover_score_info(const std::vector<float> &scores, int nboxe
                                      std::vector<int> &class_indices) {
     for (int box = 0; box < nboxes; box++) {
         int start = box * nclasses;
-        auto max_it =
-            std::max_element(scores.begin() + start + 1, scores.begin() + start + nclasses);
-        hi_scores.push_back(*max_it);
-        class_indices.push_back(std::distance(scores.begin() + start, max_it));
+        float best = 0;
+        int index = 0;
+        for (int column = 1; column < nclasses; ++column) {
+            const float score = scores[start + column];
+            if (std::isfinite(score) && score > best) {
+                best = score;
+                index = column;
+            }
+        }
+        hi_scores.push_back(best);
+        class_indices.push_back(index);
     }
 }

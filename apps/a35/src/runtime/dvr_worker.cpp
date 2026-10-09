@@ -33,14 +33,55 @@ void VideoPipeline::dvr_loop() {
     try {
         FrameRing ring(config_.pre_frames, config_.pre_us);
         EventWindow window(config_.post_us, config_.max_span_us);
+        auto finish_session = [&] {
+            if (current)
+                current->frames.close();
+            current.reset();
+            window.finish();
+        };
+        auto append_to_session = [&](const FrameRef &item) {
+            if (!current || current->abort || item->sequence <= current->last_sequence ||
+                !window.contains(item->timestamp_us, config_.pre_us))
+                return;
+            current->last_sequence = item->sequence;
+            if (!current->frames.push(item)) {
+                current->abort = true;
+                report("recording_overflow", current->output);
+            }
+        };
         FrameRef frame;
         while (!stopping_) {
+            // Drain one bounded batch before triggers, so a queued frame from
+            // just before the event participates in its pre-event snapshot.
+            for (unsigned count = 0; count < 32; ++count) {
+                if (!dvr_frames_.pop(frame, std::chrono::milliseconds(count ? 0 : 20)))
+                    break;
+                ring.append(frame);
+                append_to_session(frame);
+                frame.reset();
+            }
             uint64_t now = monotonic_us();
             ring.expire(now);
+            if (current && current->abort)
+                finish_session();
             uint64_t trigger_time = 0;
             while (triggers_.pop(trigger_time, std::chrono::milliseconds(0))) {
+                now = monotonic_us();
+                if (trigger_time > now || !trigger_time || now - trigger_time >= config_.post_us) {
+                    report("recording_rejected", "stale_or_future_trigger");
+                    continue;
+                }
+                // A trigger after the old deadline starts a separate event;
+                // it cannot revive an already ended or duration-capped clip.
+                if (window.active() && trigger_time >= window.end())
+                    finish_session();
                 if (window.active()) {
-                    window.trigger(now);
+                    window.trigger(trigger_time);
+                    // Restore frames that preceded processing of an extension
+                    // but fell just beyond the previous end timestamp.
+                    for (const auto &item :
+                         ring.snapshot_between(window.begin(config_.pre_us), window.end()))
+                        append_to_session(item);
                     continue;
                 }
                 if (encoder_busy_ || !mounted(config_.mount_directory)) {
@@ -50,33 +91,27 @@ void VideoPipeline::dvr_loop() {
                 }
                 current = std::make_shared<EncoderSession>(
                     config_.pre_frames + 64, output_name(config_.output_directory, trigger_time));
-                auto before = ring.snapshot(now);
-                for (auto &item : before) {
-                    current->last_sequence = item->sequence;
-                    current->frames.push(item);
+                window.trigger(trigger_time);
+                auto buffered = ring.snapshot_between(window.begin(config_.pre_us), window.end());
+                size_t pre_frames = 0;
+                for (const auto &item : buffered) {
+                    if (item->timestamp_us <= trigger_time)
+                        ++pre_frames;
+                    append_to_session(item);
                 }
                 encoder_busy_ = true;
-                sessions_.push(current);
-                window.trigger(now);
-                report("recording_started",
-                       "pre_frames=" + std::to_string(before.size()) + " path=" + current->output);
-            }
-            if (window.due(now) || (current && current->abort)) {
-                current->frames.close();
-                current.reset();
-                window.finish();
-            }
-            if (!dvr_frames_.pop(frame, std::chrono::milliseconds(20)))
-                continue;
-            ring.append(frame);
-            if (window.active() && frame->sequence > current->last_sequence) {
-                current->last_sequence = frame->sequence;
-                if (!current->frames.push(frame)) {
+                if (!sessions_.push(current)) {
                     current->abort = true;
-                    report("recording_overflow", current->output);
+                    finish_session();
+                    encoder_busy_ = false;
+                    report("recording_rejected", "encoder_queue_closed");
+                    continue;
                 }
+                report("recording_started",
+                       "pre_frames=" + std::to_string(pre_frames) + " path=" + current->output);
             }
-            frame.reset();
+            if (window.due(now) || (current && current->abort))
+                finish_session();
         }
         if (current) {
             current->abort = true;

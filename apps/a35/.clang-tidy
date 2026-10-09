@@ -7,5 +7,5 @@ Checks: >-
   bugprone-incorrect-roundings,
   performance-move-const-arg
 WarningsAsErrors: ''
-HeaderFilterRegex: '(^|/)(camera|npu_detect|ble_risk_output|nav_tts)\.h$|/hud/(common|oled|udp)\.h$'
+HeaderFilterRegex: '(^|/)(include/|hud/(common|oled|udp)\.h$)'
 FormatStyle: file

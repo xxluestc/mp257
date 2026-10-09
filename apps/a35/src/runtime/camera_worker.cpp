@@ -1,6 +1,7 @@
 #include "runtime/video_pipeline.hpp"
 #include "camera.h"
 #include <cstdio>
+#include <utility>
 
 namespace helmet {
 namespace {
@@ -10,6 +11,7 @@ class CameraDevice {
 
     CameraDevice() {
         camera.fd = -1;
+        camera.acquired_index = -1;
     }
 
     ~CameraDevice() {
@@ -26,12 +28,16 @@ class CameraLease {
   public:
     explicit CameraLease(camera_t *camera) : camera_(camera) {}
 
+    CameraLease(const CameraLease &) = delete;
+    CameraLease &operator=(const CameraLease &) = delete;
+
     ~CameraLease() {
-        camera_release(camera_);
+        if (camera_)
+            camera_release(camera_);
     }
 
     int release() {
-        return camera_release(camera_);
+        return camera_ ? camera_release(std::exchange(camera_, nullptr)) : 0;
     }
 };
 
@@ -93,6 +99,7 @@ void VideoPipeline::capture_loop() {
             last_capture_ = 0;
             report("camera_detached", config_.camera_device);
         } catch (const std::exception &error) {
+            last_capture_ = 0;
             report("camera_failed", error.what());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

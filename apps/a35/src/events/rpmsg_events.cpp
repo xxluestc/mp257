@@ -1,6 +1,7 @@
 #include "app/services.hpp"
 #include "runtime/frame_pipeline.hpp"
 #include "runtime/linux_resources.hpp"
+#include "events/message_fields.hpp"
 #include "nav_tts.h"
 #include <cstdio>
 #include <cstdlib>
@@ -68,8 +69,6 @@ static void play_v2x_alert(const char *direction) {
         return;
     }
 
-    struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
     uint64_t now_us = helmet::monotonic_us();
     uint64_t previous = g_last_v2x_audio_us.load();
     if (previous != 0 && now_us - previous < V2X_AUDIO_COOLDOWN_US) {
@@ -120,7 +119,8 @@ static int udp_send_to_hud(const char *json) {
     if (json == NULL || json[0] == '\0')
         return -1;
 
-    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    helmet::UniqueFd descriptor(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    int sock = descriptor.get();
     if (sock < 0) {
         fprintf(stderr, "[IMU_FWD] socket failed: %s\n", strerror(errno));
         return -1;
@@ -132,7 +132,6 @@ static int udp_send_to_hud(const char *json) {
     addr.sin_port = htons(HUD_INPUT_PORT);
     if (inet_pton(AF_INET, HUD_INPUT_IP, &addr.sin_addr) <= 0) {
         fprintf(stderr, "[IMU_FWD] inet_pton failed: %s\n", strerror(errno));
-        close(sock);
         return -1;
     }
 
@@ -143,7 +142,6 @@ static int udp_send_to_hud(const char *json) {
         printf("[系统] [IMU_FWD] Forwarded %zd bytes to %s:%d\n", sent, HUD_INPUT_IP,
                HUD_INPUT_PORT);
     }
-    close(sock);
     return sent >= 0 ? (int)sent : -1;
 }
 
@@ -153,17 +151,7 @@ static int udp_send_to_hud(const char *json) {
 static int parse_kv_int(const char *line, const char *key) {
     if (line == NULL || key == NULL)
         return 0;
-    char pattern[64];
-    snprintf(pattern, sizeof(pattern), "%s=", key);
-    const char *start = strstr(line, pattern);
-    if (start == NULL)
-        return 0;
-    start += strlen(pattern);
-    char *end = NULL;
-    long val = strtol(start, &end, 10);
-    if (end == start)
-        return 0;
-    return (int)val;
+    return helmet::message_integer(line, key);
 }
 
 /**
@@ -177,23 +165,20 @@ static void forward_imu_alert(const char *line) {
     if (line == NULL || strstr(line, "IMU_ALERT") == NULL)
         return;
 
-    const char *type_start = strstr(line, "type=");
-    if (type_start == NULL)
-        return;
-    type_start += strlen("type=");
+    const auto type = helmet::message_field(line, "type");
 
     const char *app_type = NULL;
     const char *message = NULL;
     char m33_type[32] = {0};
-    if (strncmp(type_start, "fall", 4) == 0) {
+    if (type == "fall") {
         app_type = "fall_down";
         message = "多用户在此摔倒，请减速慢行";
         snprintf(m33_type, sizeof(m33_type), "fall");
-    } else if (strncmp(type_start, "hard_brake", 10) == 0) {
+    } else if (type == "hard_brake") {
         app_type = "emergency_brake";
         message = "多用户急刹，请注意减速";
         snprintf(m33_type, sizeof(m33_type), "hard_brake");
-    } else if (strncmp(type_start, "road_bump", 9) == 0) {
+    } else if (type == "road_bump") {
         app_type = "road_hazard";
         message = "前方路面颠簸，请注意避让";
         snprintf(m33_type, sizeof(m33_type), "road_bump");
@@ -226,16 +211,11 @@ static void forward_imu_alert(const char *line) {
     gettimeofday(&tv_now, NULL);
     uint64_t timestamp_ms = (uint64_t)tv_now.tv_sec * 1000ULL + (uint64_t)tv_now.tv_usec / 1000ULL;
 
-    const char *reason = strstr(line, "reason=");
+    const auto reason = helmet::message_field(line, "reason");
     char reason_buf[64] = "unknown";
-    if (reason != NULL) {
-        reason += strlen("reason=");
-        const char *reason_end = strchr(reason, ' ');
-        int len = (reason_end != NULL) ? (int)(reason_end - reason) : (int)strlen(reason);
-        if (len > 0 && len < (int)sizeof(reason_buf)) {
-            memcpy(reason_buf, reason, len);
-            reason_buf[len] = '\0';
-        }
+    if (!reason.empty() && reason.size() < sizeof(reason_buf)) {
+        memcpy(reason_buf, reason.data(), reason.size());
+        reason_buf[reason.size()] = '\0';
     }
 
     char event_id[96];
@@ -250,6 +230,7 @@ static void forward_imu_alert(const char *line) {
                      details);
 
     char json[1536];
+    const auto escaped_reason = helmet::escape_json(reason_buf);
     snprintf(json, sizeof(json),
              "{\"type\":\"%s\",\"message\":\"%s\",\"source\":\"M33_A35\","
              "\"m33_type\":\"%s\",\"reason\":\"%s\",\"seq\":%d,"
@@ -260,7 +241,7 @@ static void forward_imu_alert(const char *line) {
              "\"gz\":%d,\"roll\":%d,\"pitch\":%d,\"yaw\":%d,"
              "\"gps_valid\":%d,\"lat_1e7\":%d,\"lon_1e7\":%d,"
              "\"speed_cms\":%d,\"heading_cdeg\":%d}",
-             app_type, message, m33_type, reason_buf, seq, event_id,
+             app_type, message, m33_type, escaped_reason.c_str(), seq, event_id,
              (unsigned long long)timestamp_ms, strcmp(m33_type, "fall") == 0 ? "true" : "false",
              tick, acc_norm, horiz_acc, z_delta, brake_y_delta, ax, ay, az, gx, gy, gz, roll, pitch,
              yaw, gps_valid, lat_1e7, lon_1e7, speed_cms, heading_cdeg);
@@ -295,8 +276,6 @@ void *test_fall_thread(void *arg) {
         if (!g_running)
             break;
 
-        struct timeval tv_now;
-        gettimeofday(&tv_now, NULL);
         uint64_t ts_us = helmet::monotonic_us();
         printf("[TEST] Injecting simulated FALL event %d/%d\n", event_index + 1, g_test_fall_count);
         handle_fall_trigger(ts_us);
@@ -331,14 +310,12 @@ void *test_v2x_thread(void *arg) {
 }
 
 /* ======================== RPMsg 接收线程 (M33 alerts) ======================== */
-void *rpmsg_thread(void *arg) {
-    (void)arg;
-
+static void rpmsg_receive_once() {
     helmet::UniqueFd descriptor(open(RPMSG_DEVICE, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC));
     int fd = descriptor.get();
     if (fd < 0) {
         fprintf(stderr, "[IMU] Cannot open %s: %s\n", RPMSG_DEVICE, strerror(errno));
-        return NULL;
+        return;
     }
     startup_mark("rpmsg_device_opened");
 
@@ -356,7 +333,7 @@ void *rpmsg_thread(void *arg) {
     tty.c_cc[VTIME] = 1;
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
         fprintf(stderr, "[IMU] tcsetattr failed: %s\n", strerror(errno));
-        return NULL;
+        return;
     }
     tcflush(fd, TCIOFLUSH);
 
@@ -378,71 +355,75 @@ void *rpmsg_thread(void *arg) {
     if (!audio_ready)
         fprintf(stderr, "[IMU] Audio output not ready after 5s; "
                         "sending RPMsg ready with degraded audio\n");
-    if (write(fd, RPMSG_READY_MSG, strlen(RPMSG_READY_MSG)) < 0) {
+    if (!g_running)
+        return;
+    if (write(fd, RPMSG_READY_MSG, strlen(RPMSG_READY_MSG)) != (ssize_t)strlen(RPMSG_READY_MSG)) {
         fprintf(stderr, "[IMU] Failed to send ready message: %s\n", strerror(errno));
+        return;
     } else {
         tcdrain(fd);
         printf("[系统] [IMU] RPMsg ready message sent to M33\n");
         startup_mark("rpmsg_ready_sent");
     }
 
-    char line[512];
-    int idx = 0;
+    helmet::MessageLine<512> lines;
     while (g_running) {
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
         struct timeval tv = {0, 50000}; /* 50ms timeout */
         int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0 && errno != EINTR)
+            break;
 
         if (ret > 0 && FD_ISSET(fd, &rfds)) {
             char c;
-            int n = read(fd, &c, 1);
+            ssize_t n = read(fd, &c, 1);
+            if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN))
+                break;
             if (n > 0) {
-                if (c == '\n' || c == '\r') {
-                    if (idx > 0) {
-                        line[idx] = '\0';
+                if (const char *line = lines.append(c)) {
 
-                        /* 解析 IMU 异常告警: IMU_ALERT ... type=... */
-                        if (strstr(line, "IMU_ALERT") != NULL) {
-                            struct timeval tv_now;
-                            gettimeofday(&tv_now, NULL);
-                            uint64_t ts_us = helmet::monotonic_us();
+                    /* 解析 IMU 异常告警: IMU_ALERT ... type=... */
+                    if (strstr(line, "IMU_ALERT") != NULL) {
+                        uint64_t ts_us = helmet::monotonic_us();
 
-                            /* 摔倒事件额外触发音频 + DVR 保存 */
-                            if (strstr(line, "type=fall") != NULL) {
-                                handle_fall_trigger(ts_us);
-                            }
-
-                            /* 所有 IMU 异常统一通过 UDP 转发到 HUD/App */
-                            forward_imu_alert(line);
-                        }
-                        /* V2X 告警: 解析 direction 并播放定向语音 */
-                        else if (strstr(line, "V2X_ALERT") != NULL) {
-                            char direction[32] = "nearby";
-                            const char *dir_start = strstr(line, "direction=");
-                            if (dir_start != NULL) {
-                                dir_start += strlen("direction=");
-                                const char *dir_end = strchr(dir_start, ' ');
-                                int len = (dir_end != NULL) ? (int)(dir_end - dir_start)
-                                                            : (int)strlen(dir_start);
-                                if (len > 0 && len < (int)sizeof(direction)) {
-                                    memcpy(direction, dir_start, len);
-                                    direction[len] = '\0';
-                                }
-                            }
-                            handle_v2x_alert(direction);
+                        /* 摔倒事件额外触发音频 + DVR 保存 */
+                        if (helmet::message_field(line, "type") == "fall") {
+                            handle_fall_trigger(ts_us);
                         }
 
-                        idx = 0;
+                        /* 所有 IMU 异常统一通过 UDP 转发到 HUD/App */
+                        forward_imu_alert(line);
                     }
-                } else if (idx < (int)sizeof(line) - 1) {
-                    line[idx++] = c;
+                    /* V2X 告警: 解析 direction 并播放定向语音 */
+                    else if (strstr(line, "V2X_ALERT") != NULL) {
+                        char direction[32] = "nearby";
+                        const auto field = helmet::message_field(line, "direction");
+                        if (!field.empty() && field.size() < sizeof(direction)) {
+                            memcpy(direction, field.data(), field.size());
+                            direction[field.size()] = '\0';
+                        }
+                        handle_v2x_alert(direction);
+                    }
                 }
             }
         }
     }
 
-    printf("[系统] [IMU] RPMsg thread stopped\n");
+    printf("[系统] [IMU] RPMsg endpoint closed\n");
+}
+
+void *rpmsg_thread(void *arg) {
+    (void)arg;
+    try {
+        while (g_running) {
+            rpmsg_receive_once();
+            for (int attempt = 0; attempt < 20 && g_running; ++attempt)
+                usleep(100000);
+        }
+    } catch (const std::exception &error) {
+        fprintf(stderr, "[IMU] Receiver failed: %s\n", error.what());
+    }
     return NULL;
 }

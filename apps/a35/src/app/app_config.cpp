@@ -176,8 +176,10 @@ int parse_arguments(int argc, char **argv, helmet::VideoConfig &video, std::stri
     video.mount_directory = g_dvr_mount_dir;
     video.max_jpeg_bytes = static_cast<size_t>(jpeg_kib) * 1024;
     video.pool_slots = static_cast<size_t>(pool_mib) * 1024 * 1024 / video.max_jpeg_bytes;
-    if (video.pool_slots < video.pre_frames * 2 + 128) {
-        fprintf(stderr, "RAM budget too small: need at least 878 JPEG slots\n");
+    try {
+        helmet::validate_video_config(video);
+    } catch (const std::invalid_argument &error) {
+        fprintf(stderr, "Invalid video configuration: %s\n", error.what());
         return 2;
     }
     radar_device = uart_dev;

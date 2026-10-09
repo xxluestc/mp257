@@ -23,7 +23,7 @@ python3 tools/check_format.py        # 检查，不修改
 python3 tools/check_format.py --fix  # 应用格式
 ```
 
-也可通过 `--clang-format /path/to/clang-format` 指定工具。Windows 使用可用的 `python` 命令。CI 执行同一格式检查、现有 Shell/Python 检查和 Dashboard 主机测试。
+也可通过 `--clang-format /path/to/clang-format` 指定工具。Windows 使用可用的 `python` 命令。CI 执行同一格式检查、Shell/Python 检查、Dashboard 测试、C++ 资源与生命周期检查、JSON/DVR 测试，以及 Linux 对象编译和 HUD 构建。
 
 `.clang-tidy` 提供一组面向缺陷的检查规则，需在匹配目标工具链、sysroot 和编译数据库的 Linux 构建环境执行；当前 CI 不将其标记为已运行。处理检查结果后再逐步扩大规则范围，不对第三方源码统一开启 `-Werror`。
 
@@ -35,6 +35,13 @@ python3 tools/check_format.py --fix  # 应用格式
 - 长度、索引、图像尺寸和容量在使用前检查，乘法和加法先检查溢出。
 - C/C++ 共用接口使用 `extern "C"` 保护；C 头文件可单独包含。
 - 配置在加载时完成类型、范围与组合校验。日志记录失败原因及错误码，不用“调用已发出”表示操作已经完成。
+
+## C++ 组织方式
+
+- 优先组合职责明确的类型。`UniqueFd` 管理句柄，`WorkerGroup` 管理线程组，`CameraLease` 管理借用的摄像头缓冲区；析构负责释放，显式方法负责需要检查结果的操作。
+- 管线采用生产者/消费者方式，使用帧池和有界队列传递帧引用。事件窗口封装录像的时间边界，编码任务封装一次录像的数据与结果。
+- 纯配置校验、消息解析和检测后处理与设备 I/O 分开，便于独立检查。保持现有 C/C++ 接口，不为套用设计模式增加无实际调用需求的基类或工厂。
+- 线程启停由创建它的控制线程执行。管线实例只启动一次，重复启动明确报错，重复停止安全。
 
 ## 并发与退出
 

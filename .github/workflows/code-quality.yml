@@ -32,8 +32,8 @@ jobs:
       - name: Run Dashboard host tests
         run: make dashboard-check
       - name: Run frame ownership and encoder protocol tests
-        run: make core-check encoder-check
+        run: make core-check runtime-check lifecycle-check json-check encoder-check
       - name: Compile Linux application objects
         run: |
-          make $(find src -name '*.cpp' -o -name '*.c' | sed -E 's@^@build/@; s@\.(cpp|c)$@.o@') build/hud/oled.o build/hud/cJSON.o CC=gcc CXX=g++
+          make object-check CC=gcc CXX=g++ CFLAGS='-Wall -Wextra -Wpedantic -Werror -O2 -std=c11 -D_DEFAULT_SOURCE -MMD -MP' CXXFLAGS='-Wall -Wextra -Wpedantic -Werror -O2 -std=c++17 -MMD -MP'
           make -C hud CC=gcc

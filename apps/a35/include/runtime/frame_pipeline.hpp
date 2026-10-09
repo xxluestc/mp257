@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <utility>
@@ -135,6 +136,14 @@ template <typename T> class BoundedQueue {
         ready_.notify_all();
     }
 
+    // Shutdown cancellation differs from close(): release queued ownership now.
+    void cancel() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        closed_ = true;
+        values_.clear();
+        ready_.notify_all();
+    }
+
     bool drained() {
         std::lock_guard<std::mutex> lock(mutex_);
         return closed_ && values_.empty();
@@ -171,9 +180,13 @@ class FrameRing {
     }
 
     std::vector<FrameRef> snapshot(uint64_t trigger) const {
+        return snapshot_between(trigger > window_us_ ? trigger - window_us_ : 0, trigger);
+    }
+
+    std::vector<FrameRef> snapshot_between(uint64_t begin, uint64_t end) const {
         std::vector<FrameRef> result;
         for (const auto &frame : frames_)
-            if (frame->timestamp_us <= trigger && trigger - frame->timestamp_us <= window_us_)
+            if (frame->timestamp_us >= begin && frame->timestamp_us <= end)
                 result.push_back(frame);
         return result;
     }
@@ -197,7 +210,20 @@ class EventWindow {
             first_ = now;
             active_ = true;
         }
-        end_ = std::min(first_ + max_span_, now + post_);
+        // Delayed or out-of-order notifications must not shorten an event.
+        end_ = std::max(end_, std::min(add(first_, max_span_), add(now, post_)));
+    }
+
+    uint64_t begin(uint64_t pre) const {
+        return first_ > pre ? first_ - pre : 0;
+    }
+
+    uint64_t end() const {
+        return end_;
+    }
+
+    bool contains(uint64_t timestamp, uint64_t pre) const {
+        return active_ && timestamp >= begin(pre) && timestamp <= end_;
     }
 
     bool active() const {
@@ -210,6 +236,14 @@ class EventWindow {
 
     void finish() {
         active_ = false;
+        first_ = end_ = 0;
+    }
+
+  private:
+    static uint64_t add(uint64_t value, uint64_t delta) {
+        return value > std::numeric_limits<uint64_t>::max() - delta
+                   ? std::numeric_limits<uint64_t>::max()
+                   : value + delta;
     }
 };
 } // namespace helmet

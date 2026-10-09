@@ -233,7 +233,7 @@ static void oled_init_sequence(void) {
 }
 
 int oled_init(void) {
-    i2c_fd = open(OLED_I2C_DEV, O_RDWR);
+    i2c_fd = open(OLED_I2C_DEV, O_RDWR | O_CLOEXEC);
     if (i2c_fd < 0)
         return -1;
 

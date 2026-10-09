@@ -8,18 +8,16 @@
 #include <errno.h>
 #include "udp.h"
 
-int udp_init(int port) {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+static int udp_init_address(int port, uint32_t address) {
+    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (sock < 0) {
         perror("socket");
         return -1;
     }
-    int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = htonl(address);
     addr.sin_port = htons(port);
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("bind");
@@ -29,7 +27,19 @@ int udp_init(int port) {
     return sock;
 }
 
+int udp_init(int port) {
+    return udp_init_address(port, INADDR_ANY);
+}
+
+int udp_init_local(int port) {
+    return udp_init_address(port, INADDR_LOOPBACK);
+}
+
 int udp_receive(int sock, char *buffer, int buf_size, int timeout_ms) {
+    if (!buffer || buf_size < 2 || timeout_ms < 0) {
+        errno = EINVAL;
+        return -1;
+    }
     struct pollfd fds = {.fd = sock, .events = POLLIN};
     int ret = poll(&fds, 1, timeout_ms);
     if (ret < 0) {
@@ -42,9 +52,12 @@ int udp_receive(int sock, char *buffer, int buf_size, int timeout_ms) {
     if (ret == 0) {
         return -2; // 超时
     }
+    if (fds.revents & (POLLERR | POLLHUP | POLLNVAL))
+        return -1;
     struct sockaddr_in src_addr;
     socklen_t addr_len = sizeof(src_addr);
-    int n = recvfrom(sock, buffer, buf_size - 1, 0, (struct sockaddr *)&src_addr, &addr_len);
+    int n =
+        recvfrom(sock, buffer, buf_size - 1, MSG_TRUNC, (struct sockaddr *)&src_addr, &addr_len);
     if (n < 0) {
         if (errno == EINTR) {
             return -2;
@@ -52,6 +65,8 @@ int udp_receive(int sock, char *buffer, int buf_size, int timeout_ms) {
         perror("recvfrom");
         return -1;
     }
+    if (n >= buf_size)
+        return -2; // Reject a whole oversized datagram rather than partial JSON.
     buffer[n] = '\0';
     return n;
 }

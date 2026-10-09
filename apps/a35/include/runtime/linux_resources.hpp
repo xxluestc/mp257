@@ -1,6 +1,5 @@
 #pragma once
 
-#include <thread>
 #include <utility>
 #include <unistd.h>
 
@@ -9,7 +8,7 @@ class UniqueFd {
     int fd_ = -1;
 
   public:
-    explicit UniqueFd(int fd = -1) : fd_(fd) {}
+    explicit UniqueFd(int fd = -1) noexcept : fd_(fd) {}
 
     ~UniqueFd() {
         reset();
@@ -18,36 +17,29 @@ class UniqueFd {
     UniqueFd(const UniqueFd &) = delete;
     UniqueFd &operator=(const UniqueFd &) = delete;
 
-    int get() const {
+    UniqueFd(UniqueFd &&other) noexcept : fd_(other.release()) {}
+
+    UniqueFd &operator=(UniqueFd &&other) noexcept {
+        if (this != &other)
+            reset(other.release());
+        return *this;
+    }
+
+    int release() noexcept {
+        return std::exchange(fd_, -1);
+    }
+
+    int get() const noexcept {
         return fd_;
     }
 
-    void reset(int fd = -1) {
+    void reset(int fd = -1) noexcept {
+        if (fd_ == fd)
+            return;
         if (fd_ >= 0)
             ::close(fd_);
         fd_ = fd;
     }
 };
 
-// The owner must request stop before destruction. Every successfully created
-// thread is joined, including partial startup and exception paths.
-class JoiningThread {
-    std::thread thread_;
-
-  public:
-    template <typename F>
-    explicit JoiningThread(F &&function) : thread_(std::forward<F>(function)) {}
-
-    ~JoiningThread() {
-        join();
-    }
-
-    JoiningThread(const JoiningThread &) = delete;
-    JoiningThread &operator=(const JoiningThread &) = delete;
-
-    void join() {
-        if (thread_.joinable())
-            thread_.join();
-    }
-};
 } // namespace helmet

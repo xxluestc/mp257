@@ -18,6 +18,9 @@ class ChildProcess {
   public:
     explicit ChildProcess(pid_t pid) : pid_(pid) {}
 
+    ChildProcess(const ChildProcess &) = delete;
+    ChildProcess &operator=(const ChildProcess &) = delete;
+
     ~ChildProcess() {
         if (pid_ > 0) {
             kill(-pid_, SIGKILL);
@@ -58,6 +61,9 @@ class SpawnActions {
             throw std::runtime_error("spawn actions init");
     }
 
+    SpawnActions(const SpawnActions &) = delete;
+    SpawnActions &operator=(const SpawnActions &) = delete;
+
     ~SpawnActions() {
         posix_spawn_file_actions_destroy(&value);
     }
@@ -76,6 +82,9 @@ class SpawnAttributes {
             throw std::runtime_error("spawn process group");
         }
     }
+
+    SpawnAttributes(const SpawnAttributes &) = delete;
+    SpawnAttributes &operator=(const SpawnAttributes &) = delete;
 
     ~SpawnAttributes() {
         posix_spawnattr_destroy(&value);

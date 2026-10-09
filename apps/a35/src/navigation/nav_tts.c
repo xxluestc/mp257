@@ -902,7 +902,7 @@ static void *nav_watchdog_thread(void *arg) {
  * @return 0 成功，-1 失败
  */
 static int parse_navi_json(const char *json_str, NavData *nav) {
-    cJSON *root = cJSON_Parse(json_str);
+    cJSON *root = cJSON_ParseWithOpts(json_str, NULL, 1);
     if (root == NULL) {
         return -1;
     }
@@ -932,7 +932,7 @@ static int parse_navi_json(const char *json_str, NavData *nav) {
  * @return 0 成功，-1 失败
  */
 static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text_size) {
-    cJSON *root = cJSON_Parse(json_str);
+    cJSON *root = cJSON_ParseWithOpts(json_str, NULL, 1);
     if (root == NULL) {
         return -1;
     }
@@ -969,7 +969,7 @@ static int parse_navi_tts_json(const char *json_str, char *text_out, size_t text
 static int parse_danger_tts_json(const char *json_str, char *phase_out, size_t phase_size,
                                  char *alert_type_out, size_t alert_type_size, char *text_out,
                                  size_t text_size, int *distance_out) {
-    cJSON *root = cJSON_Parse(json_str);
+    cJSON *root = cJSON_ParseWithOpts(json_str, NULL, 1);
     if (root == NULL) {
         return -1;
     }
@@ -1024,7 +1024,7 @@ static int parse_danger_tts_json(const char *json_str, char *phase_out, size_t p
  * @return 0 成功，-1 失败
  */
 static int parse_alert_json(const char *json_str, char *alert_type, size_t type_size) {
-    cJSON *root = cJSON_Parse(json_str);
+    cJSON *root = cJSON_ParseWithOpts(json_str, NULL, 1);
     if (root == NULL) {
         return -1;
     }
@@ -1095,9 +1095,6 @@ static void *nav_recv_thread(void *arg) {
         perror("[系统] [NAV] socket");
         return NULL;
     }
-
-    int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -1177,7 +1174,7 @@ static void *nav_recv_thread(void *arg) {
  * @brief 启动导航 UDP 接收线程和 OLED 看门狗线程
  * @return 0 成功，-1 失败
  *
- * 同时初始化 OLED、设置 stdout 无缓冲，确保日志实时可见。
+ * 同时初始化 OLED 与有界音频队列。
  */
 int nav_tts_start(void) {
     if (g_nav_running) {
@@ -1190,9 +1187,6 @@ int nav_tts_start(void) {
         g_audio_closed = 1;
         return -1;
     }
-
-    /* 日志实时输出，避免重定向到文件时缓冲导致丢失/乱序 */
-    setbuf(stdout, NULL);
 
     if (oled_init() == 0) {
         g_oled_inited = 1;

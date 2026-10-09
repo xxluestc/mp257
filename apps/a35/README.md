@@ -21,7 +21,7 @@ apps/a35/
 │   ├── platform/            # GPIO、串口基础操作
 │   └── telemetry/           # CSV、状态与存储初始化
 ├── tests/                   # 资源、状态和编码流行为测试
-├── hud/                     # 独立 HUD 与共用 OLED/cJSON
+├── hud/                     # IMU 事件转发、共用 OLED 接口与固定版本 cJSON
 ├── dashboard/               # Web 状态服务
 ├── ota/                     # 包构建、安装与回滚
 ├── scripts/                 # 编码、启停与维护工具
@@ -39,11 +39,16 @@ Linux 主机需要 GNU AArch64 工具链、make、Python 3，可按 OpenSTLinux 
 ```bash
 cd apps/a35
 make CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
-make core-check encoder-check dashboard-check script-check ota-check
+make core-check runtime-check lifecycle-check json-check encoder-check dashboard-check script-check ota-check
+make object-check CC=gcc CXX=g++
 python3 tools/check_format.py
 ```
 
 make 构建主业务与 hud/hud，对象与依赖进入 build。C 使用 C11，C++ 使用 C++17，自有源码按 clang-format 18.1.8 检查。STAI、cJSON 与固件厂商代码独立保留。
+
+导航 UDP 8888 与 OLED 由 `radar_fusion` 中的导航模块独占；独立 `hud` 只监听 `127.0.0.1:8890` 并向手机转发 IMU JSON。`WorkerGroup` 统一管理主应用工作线程，`VideoPipeline` 的生命周期接口由 Main 调用且只启动一次。配置在帧池分配前完成校验；停机取消队列中尚未处理的数据并释放引用。
+
+NPU 后处理与 STAI 资源封装分别维护，类别内执行 NMS，异常分数/坐标在输出前过滤。cJSON 来源和校验值见 [第三方说明](hud/THIRD_PARTY.md)。
 
 板端录像需要 ffmpeg/ffprobe。硬件编码另需 Python GI、GStreamer 与 BSP H.264 插件，自动选择结果记入日志。默认 JPEG 池为 224 MiB，单帧上限 256 KiB；总内存还包含 NPU、RGB、V4L2 和编码器，见[流水线设计](../../docs/VIDEO_PIPELINE_DESIGN.md)。
 
